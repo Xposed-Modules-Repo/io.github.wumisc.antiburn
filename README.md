@@ -89,7 +89,9 @@ logcat -d -s Antiburn
 
 ## 许可证
 
-[MIT](LICENSE)
+[GPL-3.0](LICENSE)
+
+本模块以 GNU GPL v3 开源：允许自由使用、修改与分发，但**任何衍生作品必须同样以 GPL 许可开源**，不得将本模块或其衍生代码闭源商用牟利。
 
 ## 致谢
 
