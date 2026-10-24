@@ -32,8 +32,8 @@
 |---|---|
 | KernelSU / Magisk | 二选一，需 root |
 | ZygiskNext 或同类 Zygisk | KernelSU 不内置 Zygisk，需自行安装 |
-| LSPosed（IT 版） | 推荐支持 HyperOS 4 / Android 16 的版本（如 LSPosed IT 2.1.x） |
-| 系统 | 已在澎湃 HyperOS 4.0 / Android 16（K90 Ultra）实测 |
+| LSPosed（IT 版） | 推荐支持 HyperOS 4 / Android 17 的版本（如 LSPosed IT 2.1.x） |
+| 系统 | 已在澎湃 HyperOS 4.0.0.15 / Android 17（K90 Ultra）实测 |
 
 ## 安装
 
