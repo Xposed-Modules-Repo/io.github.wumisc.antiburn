@@ -1,2 +1,17 @@
 # -
-防烧屏 LSPosed 模块 周期性隐藏状态栏/导航栏，防 OLED 烧屏。K90 Ultra（澎湃 HyperOS 4.0 / Android 16）专用适配。  功能 周期隐藏：隐藏 N 秒 → 显示 M 秒循环（默认 30s / 10s，可调） 状态栏 + 导航栏独立开关：默认只隐藏状态栏，导航栏可开 App 白名单：前台命中白名单时不隐藏（打游戏/看视频/导航时防误伤） 灭屏自动暂停：熄屏时停循环，亮屏恢复 配置热改：改配置文件即生
+卸载
+LSPosed Manager 中停用 / 移除模块
+卸载 App
+删除配置文件：rm /data/local/tmp/antiburn.conf
+重启
+模块不修改系统文件、不打补丁，卸载后完全还原。
+
+兼容性说明
+状态栏图标容器通过多级候选 id（status_bar_contents / status_bar_icons / notification_icon_area）定位，适配不同 ROM 布局
+若你的机型下拉异常或导航栏不生效，请抓取 logcat -s Antiburn 日志反馈，作者会跟进适配
+许可证
+GPL-3.0
+
+致谢
+LSPosed / LSposed (IT) —— Xposed 框架
+ZygiskNext —— Zygisk 实现
