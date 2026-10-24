@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- 盾牌（防烧屏）单色图标，由系统按磁贴状态着色 -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12,2L20,6V12C20,16.5 16.6,20.2 12,22C7.4,20.2 4,16.5 4,12V6L12,2Z" />
+</vector>

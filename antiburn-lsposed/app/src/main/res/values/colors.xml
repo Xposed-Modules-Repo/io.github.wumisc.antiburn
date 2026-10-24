@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 主题色 -->
+    <color name="primary">#1A73E8</color>
+
+    <!-- 浅色模式 -->
+    <color name="bg">#F4F5F7</color>
+    <color name="card_bg">#FFFFFF</color>
+    <color name="card_stroke">#E6E8EC</color>
+    <color name="divider">#F0F1F3</color>
+    <color name="input_bg">#F1F3F5</color>
+
+    <color name="text_primary">#1A1A1A</color>
+    <color name="text_secondary">#333333</color>
+    <color name="text_body">#666666</color>
+    <color name="text_hint">#999999</color>
+    <color name="text_muted">#AAAAAA</color>
+    <color name="text_faint">#BBBBBB</color>
+</resources>

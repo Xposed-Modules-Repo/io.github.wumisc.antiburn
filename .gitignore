@@ -1,0 +1,22 @@
+# 豆包会话杂项（不发布）
+.tmp-tool-results/
+INSTALL.md
+
+# 构建产物 / APK / 压缩包
+*.apk
+*.zip
+antiburn_statusbar/
+
+# Android / Gradle
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+
+# 系统
+.DS_Store
+Thumbs.db

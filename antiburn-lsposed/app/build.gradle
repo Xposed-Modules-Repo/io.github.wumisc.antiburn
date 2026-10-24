@@ -1,0 +1,38 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'io.github.wumisc.antiburn'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "io.github.wumisc.antiburn"
+        minSdk 30
+        targetSdk 35
+        versionCode 6
+        versionName "1.5"
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+}
+
+dependencies {
+    // LSPosed API，仅编译期
+    compileOnly 'de.robv.android.xposed:api:82'
+    // Material 组件（卡片/开关/按钮）
+    implementation 'com.google.android.material:material:1.12.0'
+}
