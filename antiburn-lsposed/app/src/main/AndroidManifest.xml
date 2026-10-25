@@ -3,12 +3,26 @@
 
     <application
         android:label="防止烧屏"
+        android:icon="@drawable/ic_launcher"
         android:theme="@style/Theme.Antiburn">
 
-        <!-- 配置界面 -->
+        <!-- 配置界面：INFO 入口（无桌面图标），从 LSPosed Manager 打开 -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:theme="@style/Theme.Antiburn">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.INFO" />
+            </intent-filter>
+        </activity>
+
+        <!-- 桌面图标壳：默认禁用（隐藏图标），配置页开关可启用 -->
+        <activity
+            android:name=".IconActivity"
+            android:enabled="false"
+            android:exported="true"
+            android:label="防止烧屏"
             android:theme="@style/Theme.Antiburn">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -34,7 +48,7 @@
             android:value="true" />
         <meta-data
             android:name="xposeddescription"
-            android:value="周期性隐藏状态栏图标/导航栏防OLED烧屏，可在App内自定义隐藏时间与导航栏开关。隐藏图标不影响下拉通知与控制中心。" />
+            android:value="周期性隐藏状态栏图标/导航栏/抖音视频页右侧按钮列防OLED烧屏，可在App内自定义隐藏时间与开关。隐藏图标不影响下拉通知与控制中心。" />
         <meta-data
             android:name="xposedminversion"
             android:value="82" />

@@ -1,7 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- LSPosed 作用域：只 hook SystemUI -->
+    <!-- LSPosed 作用域：SystemUI（状态栏/导航栏）+ 抖音 + 红果短剧（国内/谷歌版） -->
     <string-array name="xposed_scope">
         <item>com.android.systemui</item>
+        <item>com.ss.android.ugc.aweme</item>
+        <item>com.phoenix.read</item>
+        <item>com.phoenix.read.oversea.gp</item>
     </string-array>
 </resources>

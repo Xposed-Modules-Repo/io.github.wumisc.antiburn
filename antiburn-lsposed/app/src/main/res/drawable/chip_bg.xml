@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 运行状态芯片背景：默认灰底（代码里按开关状态改色） -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#EEEEF0" />
+    <corners android:radius="14dp" />
+</shape>
