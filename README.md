@@ -155,6 +155,14 @@ logcat -d -s Antiburn AntiburnDy
 
 本模块以 GNU GPL v3 开源：允许自由使用、修改与分发，但**任何衍生作品必须同样以 GPL 许可开源**，不得将本模块或其衍生代码闭源商用牟利。
 
+## 支持捐赠
+
+如果觉得好用，请作者喝杯奶茶。微信扫一扫即可，作者：@酷安锦无名。
+
+<p align="center">
+  <img src="donate_qr.webp" alt="微信捐赠二维码" width="240" />
+</p>
+
 ## 致谢
 
 - [LSPosed](https://github.com/LSPosed/LSPosed) / [LSposed (IT)](https://github.com/JingMatrix/LSposed) —— Xposed 框架
