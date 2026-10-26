@@ -160,3 +160,4 @@ logcat -d -s Antiburn AntiburnDy
 - [LSPosed](https://github.com/LSPosed/LSPosed) / [LSposed (IT)](https://github.com/JingMatrix/LSposed) —— Xposed 框架
 - [ZygiskNext](https://github.com/Dr-TSNG/ZygiskNext) —— Zygisk 实现
 - [一言](https://hitokoto.cn/) —— 古诗/励志文案接口
+- **整个 Xposed / LSPosed 社区** —— 致敬每一位让安卓模块生态生生不息的开发者
