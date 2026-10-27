@@ -112,27 +112,19 @@ public class MainActivity extends ComponentActivity {
         // 初次进入先按当前控件状态刷新一次总览（加载完配置后还会再刷新）
         updateSummary();
 
-        // 底部导航栏：悬浮液态玻璃胶囊（HeyBox/QmDeve AGSL 全 GPU 渲染，玻璃滴可点击/滑动/拖拽吸附）
+        // 底部导航栏：iOS 悬浮胶囊
         final FrameLayout pageHome = findViewById(R.id.page_home);
         final FrameLayout pageSoftware = findViewById(R.id.page_software);
         final FrameLayout pageAbout = findViewById(R.id.page_about);
-        final FrameLayout contentContainer = findViewById(R.id.content_container);
         currentPage = pageHome;
 
-        final FrameLayout navContainer = findViewById(R.id.nav_container);
-        LiquidGlassNavBar.TabItem[] tabs = new LiquidGlassNavBar.TabItem[] {
-                new LiquidGlassNavBar.TabItem(R.drawable.ic_nav_home, "首页"),
-                new LiquidGlassNavBar.TabItem(R.drawable.ic_nav_apps, "软件区"),
-                new LiquidGlassNavBar.TabItem(R.drawable.ic_nav_info, "关于"),
-        };
-        LiquidGlassNavBar nav = new LiquidGlassNavBar(this, contentContainer, tabs, index -> {
-            pageHome.setVisibility(index == 0 ? View.VISIBLE : View.GONE);
-            pageSoftware.setVisibility(index == 1 ? View.VISIBLE : View.GONE);
-            pageAbout.setVisibility(index == 2 ? View.VISIBLE : View.GONE);
-            currentPage = index == 0 ? pageHome : (index == 1 ? pageSoftware : pageAbout);
-        });
-        navContainer.addView(nav, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, nav.getBarHeightPx()));
+        View tabHome = findViewById(R.id.tab_home);
+        View tabApps = findViewById(R.id.tab_apps);
+        View tabAbout = findViewById(R.id.tab_about);
+
+        tabHome.setOnClickListener(v -> switchTab(0, pageHome, pageSoftware, pageAbout, tabHome, tabApps, tabAbout));
+        tabApps.setOnClickListener(v -> switchTab(1, pageHome, pageSoftware, pageAbout, tabHome, tabApps, tabAbout));
+        tabAbout.setOnClickListener(v -> switchTab(2, pageHome, pageSoftware, pageAbout, tabHome, tabApps, tabAbout));
 
         // 桌面图标开关：切换即生效并持久化
         swIcon.setOnCheckedChangeListener((buttonView, isChecked) -> {
@@ -161,6 +153,26 @@ public class MainActivity extends ComponentActivity {
         tvAboutSubtitle.setText("防 OLED 烧屏 · LSPosed 模块 v" + BuildConfig.VERSION_NAME);
 
         loadConfig();
+    }
+
+    private void switchTab(int index, View pageHome, View pageSoftware, View pageAbout,
+                           View tabHome, View tabApps, View tabAbout) {
+        pageHome.setVisibility(index == 0 ? View.VISIBLE : View.GONE);
+        pageSoftware.setVisibility(index == 1 ? View.VISIBLE : View.GONE);
+        pageAbout.setVisibility(index == 2 ? View.VISIBLE : View.GONE);
+        currentPage = (FrameLayout) (index == 0 ? pageHome : (index == 1 ? pageSoftware : pageAbout));
+        // 更新 tab 样式
+        updateTabStyle(tabHome, index == 0);
+        updateTabStyle(tabApps, index == 1);
+        updateTabStyle(tabAbout, index == 2);
+    }
+
+    private void updateTabStyle(View tab, boolean active) {
+        android.widget.TextView tv = (android.widget.TextView) ((android.widget.LinearLayout) tab).getChildAt(1);
+        android.widget.ImageView iv = (android.widget.ImageView) ((android.widget.LinearLayout) tab).getChildAt(0);
+        int color = active ? getColor(R.color.primary) : getColor(R.color.text_hint);
+        tv.setTextColor(color);
+        iv.setColorFilter(color);
     }
 
     @Override
