@@ -64,7 +64,6 @@ public class MainActivity extends ComponentActivity {
     private TextView tvGroupArrow;
     private boolean loading = false;
     private FrameLayout currentPage;      // 当前显示的页
-
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -339,9 +338,9 @@ public class MainActivity extends ComponentActivity {
                             case "custom_poems": custom = v; break;
                             case "hide_duration": h = parseInt(v, 30); break;
                             case "show_duration": s = parseInt(v, 10); break;
-                            case "blacklist":
-                                // 兼容旧配置：旧 key 为 whitelist（v2.3 起语义转为黑名单：名单内前台时才隐藏）
-                            case "whitelist": wl = v; break;
+                            case "whitelist":
+                                // 兼容旧配置：旧 key 为 blacklist（v2.5 起语义转为白名单：名单内前台时不隐藏）
+                            case "blacklist": wl = v; break;
                             default: break;
                         }
                     }
@@ -409,7 +408,7 @@ public class MainActivity extends ComponentActivity {
                 + "enable_log=" + (swLog.isChecked() ? 1 : 0) + "\n"
                 + "hide_duration=" + hide + "\n"
                 + "show_duration=" + show + "\n"
-                + "blacklist=" + etBlacklist.getText().toString().trim() + "\n";
+                + "whitelist=" + etBlacklist.getText().toString().trim() + "\n";
 
         String b64 = Base64.encodeToString(conf.getBytes(), Base64.NO_WRAP);
         String cmd = "echo '" + b64 + "' | base64 -d > " + CONF

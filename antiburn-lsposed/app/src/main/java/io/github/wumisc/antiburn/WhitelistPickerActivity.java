@@ -29,8 +29,8 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * 图形化黑名单选择：搜索 + 勾选应用，新用户无需知道包名。
- * 黑名单语义：仅这些应用前台时，系统栏周期性隐藏（防烧屏生效）。
+ * 图形化白名单选择：搜索 + 勾选应用，新用户无需知道包名。
+ * 白名单语义：名单内的应用前台时，系统栏不执行周期性隐藏（防烧屏不生效）。
  * Android 11+ 包可见性：枚举已安装应用依赖 QUERY_ALL_PACKAGES 权限
  * （HyperOS 上表现为"获取应用列表"运行时授权）。此处主动申请并在授权后重载，
  * 避免授权了仍看不到应用列表。
@@ -66,7 +66,7 @@ public final class WhitelistPickerActivity extends Activity {
             selected.addAll(saved);
         }
         setContentView(R.layout.activity_whitelist_picker);
-        setTitle("选择黑名单应用");
+        setTitle("选择白名单应用");
 
         ListView lv = findViewById(R.id.wl_list);
         // 空列表提示：未获取到应用时引导检查权限
@@ -95,7 +95,7 @@ public final class WhitelistPickerActivity extends Activity {
 
         findViewById(R.id.wl_btn_save).setOnClickListener(v -> {
             getPrefs().edit().putStringSet(KEY, new HashSet<>(selected)).apply();
-            Toast.makeText(this, "已保存 " + selected.size() + " 个黑名单应用", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "已保存 " + selected.size() + " 个白名单应用", Toast.LENGTH_SHORT).show();
             finish();
         });
 

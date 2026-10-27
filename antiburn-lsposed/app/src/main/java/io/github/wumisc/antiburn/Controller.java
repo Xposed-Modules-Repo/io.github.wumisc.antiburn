@@ -28,7 +28,7 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
  * 核心控制器：
  *  - hook SystemUI 状态栏窗口/导航栏视图，拿到视图引用
  *  - 周期切换 隐藏/显示（时长走配置）
- *  - 灭屏或前台 App 未命中黑名单时暂停切换（黑名单语义：仅名单内应用前台时执行隐藏，防日常使用误伤）
+ *  - 灭屏或前台 App 在白名单时暂停切换（白名单语义：名单内应用前台时不隐藏系统栏）
  */
 public final class Controller {
 
@@ -338,19 +338,19 @@ public final class Controller {
 
         boolean screenOn = isScreenOn();
         String top = currentTopPackage();
-        boolean inBlacklist = Config.blacklist.contains(top);
+        boolean inWhitelist = Config.whitelist.contains(top);
 
-        // 黑名单诊断（5s 节流）：让用户从 diag 文件直接核对"前台包 vs 黑名单"是否命中
+        // 白名单诊断（5s 节流）：让用户从 diag 文件直接核对"前台包 vs 白名单"是否命中
         long nowWl = SystemClock.elapsedRealtime();
         if (nowWl - lastWlDiag >= 5000) {
             lastWlDiag = nowWl;
-            XposedInit.diag("SYS top=" + top + " blacklist=" + Config.blacklist
-                    + " inBlacklist=" + inBlacklist + " status=" + Config.enableStatus
+            XposedInit.diag("SYS top=" + top + " whitelist=" + Config.whitelist
+                    + " inWhitelist=" + inWhitelist + " status=" + Config.enableStatus
                     + " nav=" + Config.enableNav);
         }
 
-        // 暂停条件：灭屏 / 前台未命中黑名单（黑名单语义：仅名单内应用前台时才隐藏系统栏）/ 全部功能关闭
-        if (!screenOn || !inBlacklist || (!Config.enableStatus && !Config.enableNav)) {
+        // 暂停条件：灭屏 / 前台在白名单（白名单语义：名单内应用前台时不隐藏系统栏）/ 全部功能关闭
+        if (!screenOn || inWhitelist || (!Config.enableStatus && !Config.enableNav)) {
             if (hidden) {
                 applyShow();
                 hidden = false;

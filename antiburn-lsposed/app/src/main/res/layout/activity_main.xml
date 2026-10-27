@@ -1312,7 +1312,7 @@
                     </LinearLayout>
                 </com.google.android.material.card.MaterialCardView>
 
-                <!-- 卡片：黑名单 -->
+                <!-- 卡片：白名单 -->
                 <com.google.android.material.card.MaterialCardView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -1344,7 +1344,7 @@
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:layout_marginStart="10dp"
-                                android:text="黑名单（可选）"
+                                android:text="白名单（可选）"
                                 android:textColor="@color/text_primary"
                                 android:textSize="15sp"
                                 android:textStyle="bold" />
@@ -1354,7 +1354,7 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="12dp"
-                            android:text="仅这些 App 前台时隐藏系统栏（防烧屏生效）；不勾选则系统栏不隐藏。点击下方按钮直接选择应用，无需填写包名"
+                            android:text="这些 App 前台时不隐藏系统栏（防烧屏不生效）；不勾选则所有 App 都执行防烧屏。点击下方按钮直接选择应用，无需填写包名"
                             android:textColor="@color/text_hint"
                             android:textSize="12sp" />
 
@@ -1364,7 +1364,7 @@
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="10dp"
-                            android:text="选择黑名单应用"
+                            android:text="选择白名单应用"
                             android:textSize="14sp"
                             app:cornerRadius="12dp" />
 
