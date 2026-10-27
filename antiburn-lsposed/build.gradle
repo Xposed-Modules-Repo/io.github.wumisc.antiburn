@@ -4,6 +4,7 @@ buildscript {
         mavenCentral()
     }
     dependencies {
-        classpath 'com.android.tools.build:gradle:8.5.2'
+        // AGP 8.9.1：Miuix 0.8.8 传递依赖 Compose 1.10/navigationevent 要求 AGP >= 8.9.1
+        classpath 'com.android.tools.build:gradle:8.9.1'
     }
 }

@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- 枚举已安装应用（黑名单选择界面）：Android 11+ 包可见性需要此权限，
+         HyperOS 上表现为"获取应用列表"运行时授权弹窗 -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+
     <application
         android:label="防止烧屏"
         android:icon="@drawable/ic_launcher"
@@ -29,6 +33,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- 黑名单图形化选择：搜索+勾选应用，避免手动填包名。居中小窗，不占全屏 -->
+        <activity
+            android:name=".WhitelistPickerActivity"
+            android:exported="false"
+            android:theme="@style/Theme.Antiburn.Dialog" />
 
         <!-- 快捷开关磁贴 -->
         <service

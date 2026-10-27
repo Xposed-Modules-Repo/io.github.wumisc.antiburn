@@ -1,13 +1,15 @@
 package io.github.wumisc.antiburn;
 
-import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ComponentName;
+import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.util.Base64;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.CompoundButton;
 import android.widget.EditText;
@@ -16,7 +18,7 @@ import android.widget.ImageView;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import com.google.android.material.bottomnavigation.BottomNavigationView;
+import androidx.activity.ComponentActivity;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
@@ -24,7 +26,7 @@ import java.io.InputStreamReader;
 /**
  * 配置界面：读写 /data/local/tmp/antiburn.conf（root 写入，SystemUI 读取）
  */
-public class MainActivity extends Activity {
+public class MainActivity extends ComponentActivity {
 
     private static final String CONF = "/data/local/tmp/antiburn.conf";
 
@@ -48,7 +50,7 @@ public class MainActivity extends Activity {
     private EditText etCustom;
     private EditText etHide;
     private EditText etShow;
-    private EditText etWhitelist;
+    private EditText etBlacklist;
     private TextView tvStatus;
     private TextView tvCycleSummary;
     private TextView chipStatus;
@@ -61,6 +63,7 @@ public class MainActivity extends Activity {
     private View groupDyinBody;
     private TextView tvGroupArrow;
     private boolean loading = false;
+    private FrameLayout currentPage;      // 当前显示的页
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -87,7 +90,7 @@ public class MainActivity extends Activity {
         etCustom = findViewById(R.id.et_custom_poems);
         etHide = findViewById(R.id.et_hide);
         etShow = findViewById(R.id.et_show);
-        etWhitelist = findViewById(R.id.et_whitelist);
+        etBlacklist = findViewById(R.id.et_whitelist);
         tvStatus = findViewById(R.id.tv_status);
         tvCycleSummary = findViewById(R.id.tv_cycle_summary);
         chipStatus = findViewById(R.id.chip_status);
@@ -110,18 +113,27 @@ public class MainActivity extends Activity {
         // 初次进入先按当前控件状态刷新一次总览（加载完配置后还会再刷新）
         updateSummary();
 
-        // 底部导航栏：首页 / 软件区 / 关于 三页切换
-        BottomNavigationView bottomNav = findViewById(R.id.bottom_nav);
-        FrameLayout pageHome = findViewById(R.id.page_home);
-        FrameLayout pageSoftware = findViewById(R.id.page_software);
-        FrameLayout pageAbout = findViewById(R.id.page_about);
-        bottomNav.setOnItemSelectedListener(item -> {
-            int id = item.getItemId();
-            pageHome.setVisibility(id == R.id.nav_home ? View.VISIBLE : View.GONE);
-            pageSoftware.setVisibility(id == R.id.nav_software ? View.VISIBLE : View.GONE);
-            pageAbout.setVisibility(id == R.id.nav_about ? View.VISIBLE : View.GONE);
-            return true;
+        // 底部导航栏：悬浮液态玻璃胶囊（HeyBox/QmDeve AGSL 全 GPU 渲染，玻璃滴可点击/滑动/拖拽吸附）
+        final FrameLayout pageHome = findViewById(R.id.page_home);
+        final FrameLayout pageSoftware = findViewById(R.id.page_software);
+        final FrameLayout pageAbout = findViewById(R.id.page_about);
+        final FrameLayout contentContainer = findViewById(R.id.content_container);
+        currentPage = pageHome;
+
+        final FrameLayout navContainer = findViewById(R.id.nav_container);
+        LiquidGlassNavBar.TabItem[] tabs = new LiquidGlassNavBar.TabItem[] {
+                new LiquidGlassNavBar.TabItem(R.drawable.ic_nav_home, "首页"),
+                new LiquidGlassNavBar.TabItem(R.drawable.ic_nav_apps, "软件区"),
+                new LiquidGlassNavBar.TabItem(R.drawable.ic_nav_info, "关于"),
+        };
+        LiquidGlassNavBar nav = new LiquidGlassNavBar(this, contentContainer, tabs, index -> {
+            pageHome.setVisibility(index == 0 ? View.VISIBLE : View.GONE);
+            pageSoftware.setVisibility(index == 1 ? View.VISIBLE : View.GONE);
+            pageAbout.setVisibility(index == 2 ? View.VISIBLE : View.GONE);
+            currentPage = index == 0 ? pageHome : (index == 1 ? pageSoftware : pageAbout);
         });
+        navContainer.addView(nav, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, nav.getBarHeightPx()));
 
         // 桌面图标开关：切换即生效并持久化
         swIcon.setOnCheckedChangeListener((buttonView, isChecked) -> {
@@ -141,10 +153,58 @@ public class MainActivity extends Activity {
         Button btnDonate = findViewById(R.id.btn_donate);
         btnDonate.setOnClickListener(v -> showDonate());
 
-        TextView tvAboutTitle = findViewById(R.id.tv_about_title);
-        tvAboutTitle.setText("防 OLED 烧屏 · LSPosed 模块 v" + BuildConfig.VERSION_NAME);
+        // 图形化黑名单选择：点击打开应用选择界面（搜索+勾选，无需填包名）
+        Button btnPickBl = findViewById(R.id.btn_pick_whitelist);
+        btnPickBl.setOnClickListener(v -> startActivity(new Intent(this, WhitelistPickerActivity.class)));
+
+        // 版本号显示在"关于"页（首页已精简，顶部为状态栏留空间）
+        TextView tvAboutSubtitle = findViewById(R.id.tv_about_subtitle);
+        tvAboutSubtitle.setText("防 OLED 烧屏 · LSPosed 模块 v" + BuildConfig.VERSION_NAME);
 
         loadConfig();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // 从黑名单选择界面返回后，把已选应用回填到输入框（无需手动填包名）
+        syncBlacklistFromPrefs();
+    }
+
+    private static final String BL_PREFS = "antiburn_prefs";
+    private static final String BL_KEY = "blacklist_apps";
+
+    /** 把选择界面记忆的包名集合回填到 et_blacklist（仅输入框为空时，不覆盖手动输入） */
+    private void syncBlacklistFromPrefs() {
+        if (!etBlacklist.getText().toString().trim().isEmpty()) {
+            return; // 用户已有内容，不覆盖
+        }
+        SharedPreferences sp = getSharedPreferences(BL_PREFS, MODE_PRIVATE);
+        java.util.Set<String> apps = sp.getStringSet(BL_KEY, null);
+        if (apps == null || apps.isEmpty()) {
+            return;
+        }
+        String text = "";
+        for (String p : apps) {
+            if (!text.isEmpty()) text += ",";
+            text += p;
+        }
+        etBlacklist.setText(text);
+    }
+
+    /** 把逗号分隔的黑名单文本解析为包名集合，记忆到选择界面 */
+    private void saveBlacklistToPrefs(String text) {
+        java.util.Set<String> apps = new java.util.HashSet<>();
+        if (text != null) {
+            for (String p : text.split(",")) {
+                p = p.trim();
+                if (!p.isEmpty()) {
+                    apps.add(p);
+                }
+            }
+        }
+        getSharedPreferences(BL_PREFS, MODE_PRIVATE)
+                .edit().putStringSet(BL_KEY, apps).apply();
     }
 
     /** 动态启用/禁用桌面图标组件（IconActivity） */
@@ -240,7 +300,7 @@ public class MainActivity extends Activity {
                         etCustom.setText("");
                         etHide.setText("30");
                         etShow.setText("10");
-                        etWhitelist.setText("");
+                        etBlacklist.setText("");
                         return;
                     }
                     boolean es = true, en = false, dtop = false, dbot = false, dlike = false, drt = false, dlt = false, ic = false, lg = false;
@@ -279,6 +339,8 @@ public class MainActivity extends Activity {
                             case "custom_poems": custom = v; break;
                             case "hide_duration": h = parseInt(v, 30); break;
                             case "show_duration": s = parseInt(v, 10); break;
+                            case "blacklist":
+                                // 兼容旧配置：旧 key 为 whitelist（v2.3 起语义转为黑名单：名单内前台时才隐藏）
                             case "whitelist": wl = v; break;
                             default: break;
                         }
@@ -303,7 +365,8 @@ public class MainActivity extends Activity {
                     etCustom.setText(custom);
                     etHide.setText(String.valueOf(h));
                     etShow.setText(String.valueOf(s));
-                    etWhitelist.setText(wl);
+                    saveBlacklistToPrefs(wl); // 现有配置的黑名单同步给选择界面记忆
+                    etBlacklist.setText(wl);
                     tvStatus.setText("已读取现有配置");
                     updateSummary();
                 } finally {
@@ -321,6 +384,9 @@ public class MainActivity extends Activity {
         if (show < 1) show = 1;
         final int fHide = hide;
         final int fShow = show;
+
+        // 把当前黑名单文本（选择界面回填或手输）记忆给选择界面，下次进入可看到勾选
+        saveBlacklistToPrefs(etBlacklist.getText().toString().trim());
 
         String conf = "# 防止烧屏模块配置（App 保存生成）\n"
                 + "enable_status=" + (swStatus.isChecked() ? 1 : 0) + "\n"
@@ -343,7 +409,7 @@ public class MainActivity extends Activity {
                 + "enable_log=" + (swLog.isChecked() ? 1 : 0) + "\n"
                 + "hide_duration=" + hide + "\n"
                 + "show_duration=" + show + "\n"
-                + "whitelist=" + etWhitelist.getText().toString().trim() + "\n";
+                + "blacklist=" + etBlacklist.getText().toString().trim() + "\n";
 
         String b64 = Base64.encodeToString(conf.getBytes(), Base64.NO_WRAP);
         String cmd = "echo '" + b64 + "' | base64 -d > " + CONF
@@ -357,14 +423,7 @@ public class MainActivity extends Activity {
                     tvStatus.setText("保存失败：" + out);
                     Toast.makeText(this, "保存失败，请确认 root 授权", Toast.LENGTH_LONG).show();
                 } else {
-                    tvStatus.setText("已保存：状态栏" + (swStatus.isChecked() ? "开" : "关")
-                            + " 导航栏" + (swNav.isChecked() ? "开" : "关")
-                            + " 抖音顶/底/赞/右/左" + (swDouyinTop.isChecked() ? "开" : "关")
-                            + "/" + (swDouyinBottom.isChecked() ? "开" : "关")
-                            + "/" + (swDouyinLike.isChecked() ? "开" : "关")
-                            + "/" + (swDouyinRt.isChecked() ? "开" : "关")
-                            + "/" + (swDouyinLt.isChecked() ? "开" : "关")
-                            + " 隐藏" + fHide + "s/显示" + fShow + "s");
+                    tvStatus.setText("已保存：隐藏" + fHide + "s/显示" + fShow + "s");
                     Toast.makeText(this, "配置已保存，下个周期自动生效", Toast.LENGTH_SHORT).show();
                     updateSummary();
                 }

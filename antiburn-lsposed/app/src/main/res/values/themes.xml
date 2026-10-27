@@ -7,4 +7,14 @@
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:navigationBarColor">@color/bg</item>
     </style>
+
+    <!-- 白名单选择：居中小窗（弹窗），不占全屏、顶部给状态栏留空间 -->
+    <style name="Theme.Antiburn.Dialog" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="android:windowBackground">@color/bg</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@color/bg</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowIsFloating">true</item>
+    </style>
 </resources>

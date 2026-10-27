@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 液态玻璃主界面背景：浅色渐变（白底浅灰），与浅色配色一致，为底部悬浮导航提供明亮可透出的层次感 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <gradient
+        android:angle="270"
+        android:startColor="#FFFFFF"
+        android:centerColor="#F4F5F7"
+        android:endColor="#E7E9EE" />
+</shape>

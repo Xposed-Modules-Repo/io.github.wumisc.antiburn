@@ -14,7 +14,7 @@ import java.util.Set;
  *   enable_navigation=0      # 隐藏导航栏 1=开 0=关
  *   hide_duration=30         # 隐藏持续秒数
  *   show_duration=10         # 显示持续秒数
- *   whitelist=com.miui.home,com.tencent.mm   # 前台在这些包时不隐藏(逗号分隔)
+ *   blacklist=com.ss.android.ugc.aweme,com.phoenix.read   # 黑名单：前台在这些包时才隐藏(逗号分隔)
  * 修改保存后最多一个周期内生效（周期循环里自动重读）
  */
 public final class Config {
@@ -46,7 +46,7 @@ public final class Config {
     public static boolean enableLog = false; // 默认关闭省电省存储；排查问题时再打开
     public static int hideSec = 30;
     public static int showSec = 10;
-    public static Set<String> whitelist = new HashSet<>();
+    public static Set<String> blacklist = new HashSet<>();
 
     private static long lastRead = 0;
 
@@ -153,6 +153,8 @@ public final class Config {
                     case "show_duration":
                         s = parseInt(v, 10);
                         break;
+                    case "blacklist":
+                        // 兼容旧配置：旧 key 为 whitelist（v2.3 起语义转为黑名单：名单内前台时才隐藏）
                     case "whitelist":
                         for (String p : v.split(",")) {
                             p = p.trim();
@@ -185,11 +187,11 @@ public final class Config {
             customPoems = custom;
             hideSec = h;
             showSec = s;
-            whitelist = wl;
+            blacklist = wl;
             Log.i(XposedInit.TAG, "config reloaded: status=" + es + " nav=" + en
                     + " dyTop=" + dtop + " dyBottom=" + dbot + " dyLike=" + dlike
                     + " dyRt=" + drt + " dyLt=" + dlt + " icon=" + ic
-                    + " hide=" + h + "s show=" + s + "s whitelist=" + wl);
+                    + " hide=" + h + "s show=" + s + "s blacklist=" + wl);
         } catch (Throwable t) {
             // 文件不存在或不可读：保持默认值即可，不视为错误
         }

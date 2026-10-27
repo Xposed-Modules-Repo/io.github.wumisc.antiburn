@@ -1,22 +1,30 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:background="@color/bg">
+    android:background="@drawable/bg_glass"
+    android:fitsSystemWindows="true">
+
+    <!-- 内容容器：液态玻璃实时折射的目标（不含底部导航，避免自递归） -->
+    <FrameLayout
+        android:id="@+id/content_container"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent">
 
     <!-- ===== 首页 ===== -->
     <FrameLayout
         android:id="@+id/page_home"
         android:layout_width="match_parent"
-        android:layout_height="0dp"
+        android:layout_height="match_parent"
         android:layout_weight="1">
 
         <ScrollView
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:fillViewport="true">
+            android:fillViewport="true"
+            android:clipToPadding="false"
+            android:paddingBottom="120dp">
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -24,32 +32,14 @@
                 android:orientation="vertical"
                 android:padding="16dp">
 
-                <!-- 头部 -->
+                <!-- 头部：紧凑，版本/原理已移入"关于"页 -->
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="防止烧屏"
                     android:textColor="@color/text_primary"
-                    android:textSize="27sp"
+                    android:textSize="20sp"
                     android:textStyle="bold" />
-
-                <TextView
-                    android:id="@+id/tv_about_title"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
-                    android:text="防 OLED 烧屏 · LSPosed 模块"
-                    android:textColor="@color/text_hint"
-                    android:textSize="13sp" />
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="10dp"
-                    android:lineSpacingExtra="3dp"
-                    android:text="周期性把固定 UI 透明化，不点亮像素即可防烧屏，同时保留触摸——状态栏图标隐藏后，任意 App 仍能正常下拉通知栏与控制中心。"
-                    android:textColor="@color/text_body"
-                    android:textSize="13sp" />
 
                 <!-- 卡片：运行状态总览 -->
                 <com.google.android.material.card.MaterialCardView
@@ -407,7 +397,7 @@
                                 android:layout_marginStart="12dp"
                                 android:layout_weight="1"
                                 android:gravity="end"
-                                android:text="收起 ▾"
+                                android:text="展开 ▸"
                                 android:textColor="@color/text_hint"
                                 android:textSize="13sp" />
                         </LinearLayout>
@@ -425,6 +415,7 @@
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:orientation="vertical"
+                            android:visibility="gone"
                             android:layout_marginTop="4dp">
 
                 <!-- 卡片：抖音隐藏 -->
@@ -1063,14 +1054,15 @@
     <FrameLayout
         android:id="@+id/page_software"
         android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1"
+        android:layout_height="match_parent"
         android:visibility="gone">
 
         <ScrollView
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:fillViewport="true">
+            android:fillViewport="true"
+            android:clipToPadding="false"
+            android:paddingBottom="120dp">
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -1320,7 +1312,7 @@
                     </LinearLayout>
                 </com.google.android.material.card.MaterialCardView>
 
-                <!-- 卡片：白名单 -->
+                <!-- 卡片：黑名单 -->
                 <com.google.android.material.card.MaterialCardView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -1352,7 +1344,7 @@
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:layout_marginStart="10dp"
-                                android:text="白名单（可选）"
+                                android:text="黑名单（可选）"
                                 android:textColor="@color/text_primary"
                                 android:textSize="15sp"
                                 android:textStyle="bold" />
@@ -1362,9 +1354,19 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="12dp"
-                            android:text="前台在这些 App 时不隐藏，包名用逗号分隔"
+                            android:text="仅这些 App 前台时隐藏系统栏（防烧屏生效）；不勾选则系统栏不隐藏。点击下方按钮直接选择应用，无需填写包名"
                             android:textColor="@color/text_hint"
                             android:textSize="12sp" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btn_pick_whitelist"
+                            style="@style/Widget.Material3.Button.TonalButton"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:text="选择黑名单应用"
+                            android:textSize="14sp"
+                            app:cornerRadius="12dp" />
 
                         <EditText
                             android:id="@+id/et_whitelist"
@@ -1372,7 +1374,7 @@
                             android:layout_height="wrap_content"
                             android:layout_marginTop="10dp"
                             android:background="@drawable/edit_bg"
-                            android:hint="例如：com.miui.home,com.tencent.mm"
+                            android:hint="已选应用将自动填入；也可手动补充包名（逗号分隔）"
                             android:inputType="text"
                             android:maxLines="3"
                             android:minHeight="44dp"
@@ -1427,14 +1429,15 @@
     <FrameLayout
         android:id="@+id/page_about"
         android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1"
+        android:layout_height="match_parent"
         android:visibility="gone">
 
         <ScrollView
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:fillViewport="true">
+            android:fillViewport="true"
+            android:clipToPadding="false"
+            android:paddingBottom="120dp">
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -1449,6 +1452,25 @@
                     android:textColor="@color/text_primary"
                     android:textSize="27sp"
                     android:textStyle="bold" />
+
+                <!-- 模块信息：版本号（由代码填充）与原理 -->
+                <TextView
+                    android:id="@+id/tv_about_subtitle"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="防 OLED 烧屏 · LSPosed 模块"
+                    android:textColor="@color/text_hint"
+                    android:textSize="13sp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:lineSpacingExtra="3dp"
+                    android:text="周期性把固定 UI 透明化，不点亮像素即可防烧屏，同时保留触摸——状态栏图标隐藏后，任意 App 仍能正常下拉通知栏与控制中心。"
+                    android:textColor="@color/text_body"
+                    android:textSize="13sp" />
 
                 <!-- 使用说明 -->
                 <com.google.android.material.card.MaterialCardView
@@ -1546,14 +1568,16 @@
         </ScrollView>
     </FrameLayout>
 
-    <!-- ===== 底部导航栏 ===== -->
-    <com.google.android.material.bottomnavigation.BottomNavigationView
-        android:id="@+id/bottom_nav"
+    </FrameLayout><!-- /content_container -->
+
+    <!-- ===== 底部导航栏：悬浮液态玻璃胶囊（HeyBox/QmDeve AGSL 全 GPU 渲染） ===== -->
+    <FrameLayout
+        android:id="@+id/nav_container"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:background="@color/card_bg"
-        app:itemIconTint="@color/nav_tint"
-        app:itemTextColor="@color/nav_tint"
-        app:labelVisibilityMode="labeled"
-        app:menu="@menu/bottom_nav_menu" />
-</LinearLayout>
+        android:layout_gravity="bottom"
+        android:paddingStart="18dp"
+        android:paddingEnd="18dp"
+        android:paddingBottom="14dp" />
+</FrameLayout>
+

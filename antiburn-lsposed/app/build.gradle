@@ -4,14 +4,14 @@ plugins {
 
 android {
     namespace 'io.github.wumisc.antiburn'
-    compileSdk 35
+    compileSdk 36
 
     defaultConfig {
         applicationId "io.github.wumisc.antiburn"
         minSdk 30
         targetSdk 35
-        versionCode 45
-        versionName "2.0"
+        versionCode 48
+        versionName "2.3"
     }
 
     compileOptions {
@@ -35,4 +35,6 @@ dependencies {
     compileOnly 'de.robv.android.xposed:api:82'
     // Material 组件（卡片/开关/按钮）
     implementation 'com.google.android.material:material:1.12.0'
+    // 注：底部导航为自研液态玻璃（vendored QmDeve RenderNode/AGSL 渲染器），
+    // Compose / Miuix / BlurView / native 高斯截图方案均已移除，不再依赖
 }

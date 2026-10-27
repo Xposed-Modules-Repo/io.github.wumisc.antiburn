@@ -9,6 +9,7 @@ import android.graphics.Paint;
 import android.graphics.PixelFormat;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
@@ -27,7 +28,7 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
  * 核心控制器：
  *  - hook SystemUI 状态栏窗口/导航栏视图，拿到视图引用
  *  - 周期切换 隐藏/显示（时长走配置）
- *  - 灭屏或前台 App 命中白名单时暂停切换（防误伤）
+ *  - 灭屏或前台 App 未命中黑名单时暂停切换（黑名单语义：仅名单内应用前台时执行隐藏，防日常使用误伤）
  */
 public final class Controller {
 
@@ -41,6 +42,7 @@ public final class Controller {
     private static final Handler handler = new Handler(Looper.getMainLooper());
     private static boolean hidden = false;
     private static boolean started = false;
+    private static long lastWlDiag = 0; // 白名单诊断日志节流
 
     private Controller() {
     }
@@ -336,10 +338,19 @@ public final class Controller {
 
         boolean screenOn = isScreenOn();
         String top = currentTopPackage();
-        boolean inWhitelist = Config.whitelist.contains(top);
+        boolean inBlacklist = Config.blacklist.contains(top);
 
-        // 暂停条件：灭屏 / 前台命中白名单 / 全部功能关闭
-        if (!screenOn || inWhitelist || (!Config.enableStatus && !Config.enableNav)) {
+        // 黑名单诊断（5s 节流）：让用户从 diag 文件直接核对"前台包 vs 黑名单"是否命中
+        long nowWl = SystemClock.elapsedRealtime();
+        if (nowWl - lastWlDiag >= 5000) {
+            lastWlDiag = nowWl;
+            XposedInit.diag("SYS top=" + top + " blacklist=" + Config.blacklist
+                    + " inBlacklist=" + inBlacklist + " status=" + Config.enableStatus
+                    + " nav=" + Config.enableNav);
+        }
+
+        // 暂停条件：灭屏 / 前台未命中黑名单（黑名单语义：仅名单内应用前台时才隐藏系统栏）/ 全部功能关闭
+        if (!screenOn || !inBlacklist || (!Config.enableStatus && !Config.enableNav)) {
             if (hidden) {
                 applyShow();
                 hidden = false;
@@ -349,17 +360,31 @@ public final class Controller {
             return;
         }
 
-        if (hidden) {
-            applyShow();
-            hidden = false;
-            updatePoem();
-            handler.postDelayed(cycleRunnable, Math.max(1, Config.showSec) * 1000L);
+        // 统一周期相位：与抖音/红果（DouyinHook）共用「系统单调时钟对周期取模」判断此刻该隐藏还是显示，
+        // 并在同一相位边界切换——状态栏/导航栏/抖音/红果四者完全同步，不再"这个隐藏完了那个才显示"。
+        long now = SystemClock.elapsedRealtime();
+        long hideMs = Math.max(1, Config.hideSec) * 1000L;
+        long showMs = Math.max(1, Config.showSec) * 1000L;
+        long pos = now % (hideMs + showMs);
+        boolean shouldHide = pos < hideMs;
+
+        if (shouldHide) {
+            if (!hidden) {
+                applyHide();
+                hidden = true;
+            }
         } else {
-            applyHide();
-            hidden = true;
-            updatePoem();
-            handler.postDelayed(cycleRunnable, Math.max(1, Config.hideSec) * 1000L);
+            if (hidden) {
+                applyShow();
+                hidden = false;
+            }
         }
+        // 古诗弹幕与隐藏期严格同步（只在隐藏窗口显示，显示窗口移除）
+        updatePoem();
+
+        // 调度到下一个相位边界，保持四者同时切换
+        long remain = shouldHide ? (hideMs - pos) : (hideMs + showMs - pos);
+        handler.postDelayed(cycleRunnable, Math.max(100, remain));
     }
 
     // ---------- 隐藏期间滚动励志古诗 ----------
@@ -462,7 +487,7 @@ public final class Controller {
      *  随机顺序播放（播完一轮重新洗牌），背景反色自适应（浅背景→深字，深背景→浅字）。 */
     static class PoemScrollView extends View {
         private static final long FRAME_MS = 40;    // 25fps（与弹幕版滚动一致，流畅省电）
-        private static final float SPEED_PX = 75f;  // 每秒滚动像素
+        private static final float SPEED_PX = 120f; // 每秒滚动像素（弹幕横向滚动，120px/s 明快）
 
         private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Handler h = new Handler(Looper.getMainLooper());
@@ -471,6 +496,7 @@ public final class Controller {
         private String text = "";
         private float textW = 0f;
         private float scrollX = 0f;   // 已累计滚动距离 px
+        private float startLeft = 0f; // 文字左缘起点：屏幕右端外（从右侧滚入），布局未就绪时兜底
         private int fgColor = 0xFFFFFFFF;
         private long lastColor = 0;
         private long lastTick = 0;
@@ -487,7 +513,7 @@ public final class Controller {
                 float dt = Math.min((now - lastTick) / 1000f, 0.25f);
                 lastTick = now;
                 scrollX += SPEED_PX * dt;
-                if (textW > 0 && scrollX > getWidth() + textW + dp(getContext(), 16)) {
+                if (textW > 0 && scrollX > startLeft + textW + dp(getContext(), 16)) {
                     nextPoem();
                 }
                 invalidate();
@@ -528,7 +554,8 @@ public final class Controller {
             }
             textPaint.setColor(fgColor);
             float cy = (getHeight() - (textPaint.ascent() + textPaint.descent())) / 2f;
-            canvas.drawText(text, dp(getContext(), 12) - scrollX, cy, textPaint);
+            // 文字从右侧屏外左移进入，整句完整滚过屏幕（startLeft = 屏幕右端）
+            canvas.drawText(text, startLeft - scrollX, cy, textPaint);
         }
 
         private void nextPoem() {
@@ -548,6 +575,8 @@ public final class Controller {
             }
             text = t.trim();
             textW = textPaint.measureText(text);
+            // 文字左缘起点=屏幕右端（从右侧屏外滚入）；布局未就绪时用 360dp 兜底
+            startLeft = getWidth() > 0 ? getWidth() : dp(getContext(), 360);
             scrollX = 0f;
             lastTick = System.currentTimeMillis();
             invalidate();
@@ -601,6 +630,15 @@ public final class Controller {
 
     /** 隐藏状态栏静态元素（时钟/信号/电池等），但保留通知图标区，通知照常可见 */
     private static void hideStatusKeepNotify() {
+        // 开启古诗弹幕：隐藏期整条状态栏全透明（含通知区），古诗作为替代显示，
+        // 不遮挡任何状态栏内容（否则古诗文字会盖住保留的通知图标，影响状态栏显示）
+        if (Config.enablePoem) {
+            if (statusView.getVisibility() != View.GONE && statusView.getAlpha() != 0f) {
+                statusView.setAlpha(0f);
+                Log.i(TAG, "status transparent (poem replaces)");
+            }
+            return;
+        }
         if (!(statusView instanceof android.view.ViewGroup) || notifyArea == null) {
             // 未识别出通知区：维持整窗透明（原行为）
             if (statusView.getVisibility() != View.GONE && statusView.getAlpha() != 0f) {
@@ -674,34 +712,120 @@ public final class Controller {
         }
     }
 
-    /** 获取前台应用包名（SystemUI 为系统进程，可查全局任务） */
+    /**
+     * 获取前台应用包名（SystemUI 为系统进程，可查全局任务）。
+     * 多层兜底：不同 ROM（HyperOS3/4、原生、其他定制）反射路径可能失败，逐级降级，
+     * 任一成功即返回，避免黑名单因取不到前台包而失效。
+     */
     private static String currentTopPackage() {
+        // 候选0：getFocusedRootTaskInfo() → 当前聚焦任务（API31+，Android12+/HyperOS 最可靠）
+        try {
+            Object atms = XposedHelpers.callStaticMethod(
+                    Class.forName("android.app.ActivityTaskManager"), "getService");
+            Object info = XposedHelpers.callMethod(atms, "getFocusedRootTaskInfo");
+            if (info != null) {
+                String top = topActivityOf(info);
+                if (top != null) {
+                    return top;
+                }
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "getFocusedRootTaskInfo failed: " + t);
+        }
+        // 候选1：ActivityTaskManager.getService().getTasks(1, false) → topActivity（Android 10+ 主流）
         try {
             Object atms = XposedHelpers.callStaticMethod(
                     Class.forName("android.app.ActivityTaskManager"), "getService");
             Object tasks = XposedHelpers.callMethod(atms, "getTasks", 1, false);
-            if (tasks instanceof List) {
-                List<?> list = (List<?>) tasks;
-                if (!list.isEmpty()) {
-                    Object task = list.get(0);
-                    // 优先取 topActivity：当前最顶部的 Activity 所在包，才是真正的"前台 App"。
-                    // 旧实现取 baseIntent（task 根 Activity）在部分机型上拿不到前台包，白名单会失效。
-                    try {
-                        ComponentName top = (ComponentName) XposedHelpers.getObjectField(task, "topActivity");
-                        if (top != null && top.getPackageName() != null) {
-                            return top.getPackageName();
-                        }
-                    } catch (Throwable ignored) {
-                    }
-                    Intent base = (Intent) XposedHelpers.getObjectField(task, "baseIntent");
-                    if (base != null && base.getComponent() != null) {
-                        return base.getComponent().getPackageName();
-                    }
+            if (tasks instanceof List && !((List<?>) tasks).isEmpty()) {
+                Object task = ((List<?>) tasks).get(0);
+                String top = topActivityOf(task);
+                if (top != null) {
+                    return top;
                 }
             }
         } catch (Throwable t) {
-            Log.w(TAG, "getTopPackage error: " + t);
+            Log.w(TAG, "ATMS.getTasks(1,false) failed: " + t);
+        }
+        // 候选2：getTasks(1, true)（withResolvedActivity 为 true 时字段更完整）
+        try {
+            Object atms = XposedHelpers.callStaticMethod(
+                    Class.forName("android.app.ActivityTaskManager"), "getService");
+            Object tasks = XposedHelpers.callMethod(atms, "getTasks", 1, true);
+            if (tasks instanceof List && !((List<?>) tasks).isEmpty()) {
+                Object task = ((List<?>) tasks).get(0);
+                String top = topActivityOf(task);
+                if (top != null) {
+                    return top;
+                }
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "ATMS.getTasks(1,true) failed: " + t);
+        }
+        // 候选3：ActivityManager.getRunningTasks(1)（老 API，部分 ROM 仍可用）
+        try {
+            Object am = XposedHelpers.callStaticMethod(
+                    Class.forName("android.app.ActivityManager"), "getService");
+            Object tasks = XposedHelpers.callMethod(am, "getRunningTasks", 1);
+            if (tasks instanceof List && !((List<?>) tasks).isEmpty()) {
+                Object task = ((List<?>) tasks).get(0);
+                String top = topActivityOf(task);
+                if (top != null) {
+                    return top;
+                }
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "AM.getRunningTasks failed: " + t);
         }
         return "";
+    }
+
+    /**
+     * 从 RunningTaskInfo / RootTaskInfo 取前台 Activity 包名。
+     * 优先 topActivity 字段；再反射扫描全部字段（兼容 HyperOS 等 ROM 字段改名），
+     * 任一 ComponentName/Intent 即取其包名；最后兜底 baseIntent。
+     */
+    private static String topActivityOf(Object task) {
+        if (task == null) {
+            return null;
+        }
+        // 快速：topActivity
+        try {
+            ComponentName top = (ComponentName) XposedHelpers.getObjectField(task, "topActivity");
+            if (top != null && top.getPackageName() != null && !top.getPackageName().isEmpty()) {
+                return top.getPackageName();
+            }
+        } catch (Throwable ignored) {
+        }
+        // 反射扫描全部字段，兼容不同 ROM 的字段命名
+        try {
+            for (java.lang.reflect.Field f : task.getClass().getDeclaredFields()) {
+                f.setAccessible(true);
+                Object val = f.get(task);
+                if (val instanceof ComponentName) {
+                    String p = ((ComponentName) val).getPackageName();
+                    if (p != null && !p.isEmpty()) {
+                        return p;
+                    }
+                } else if (val instanceof Intent) {
+                    ComponentName c = ((Intent) val).getComponent();
+                    if (c != null && c.getPackageName() != null && !c.getPackageName().isEmpty()) {
+                        return c.getPackageName();
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        // 兜底：baseIntent
+        try {
+            Intent base = (Intent) XposedHelpers.getObjectField(task, "baseIntent");
+            if (base != null && base.getComponent() != null
+                    && base.getComponent().getPackageName() != null
+                    && !base.getComponent().getPackageName().isEmpty()) {
+                return base.getComponent().getPackageName();
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
     }
 }

@@ -24,10 +24,11 @@ public class AntiburnTile extends TileService {
     @Override
     public void onClick() {
         boolean on = readEnabled();
-        writeEnabled(!on);
+        boolean ok = writeEnabled(!on);
         refresh();
         Toast.makeText(this,
-                on ? "防止烧屏已关闭，下个周期生效" : "防止烧屏已开启，下个周期生效",
+                ok ? (on ? "防止烧屏已关闭，下个周期生效" : "防止烧屏已开启，下个周期生效")
+                   : "写入失败，请检查 root 授权",
                 Toast.LENGTH_SHORT).show();
     }
 
@@ -58,7 +59,9 @@ public class AntiburnTile extends TileService {
         return true;
     }
 
-    private void writeEnabled(boolean on) {
+    /** 改写 enable_status 为 on。返回是否写入成功（su 执行 + 读回校验都通过）。
+     *  概率性不生效的根因多是 su 偶发失败/未授权/超时，这里校验并明确反馈。 */
+    private boolean writeEnabled(boolean on) {
         try {
             StringBuilder sb = new StringBuilder();
             boolean replaced = false;
@@ -78,19 +81,28 @@ public class AntiburnTile extends TileService {
             }
             String b64 = Base64.encodeToString(
                     sb.toString().getBytes(), Base64.NO_WRAP);
-            execSu("echo '" + b64 + "' | base64 -d > " + Config.CONF
+            boolean ok = execSu("echo '" + b64 + "' | base64 -d > " + Config.CONF
                     + " && chmod 644 " + Config.CONF);
+            if (!ok) {
+                return false;
+            }
+            // 读回校验：确认文件确实已改成目标值，避免 su 成功但写错/被覆盖
+            return readEnabled() == on;
         } catch (Throwable t) {
-            // ignore
+            return false;
         }
     }
 
-    private static void execSu(String cmd) {
+    private static boolean execSu(String cmd) {
         try {
             Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", cmd});
-            p.waitFor();
+            if (!p.waitFor(4, java.util.concurrent.TimeUnit.SECONDS)) {
+                p.destroy(); // su 卡死（如授权弹窗未响应）→ 超时杀掉，避免阻塞磁贴
+                return false;
+            }
+            return p.exitValue() == 0;
         } catch (Throwable t) {
-            // ignore
+            return false;
         }
     }
 }
