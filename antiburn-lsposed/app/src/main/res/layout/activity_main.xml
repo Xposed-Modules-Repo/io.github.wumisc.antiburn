@@ -1464,6 +1464,15 @@
                     android:textSize="13sp" />
 
                 <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:text="我希望我们能够改变一下这个世界，哪怕只有一点点，诸君共勉"
+                    android:textColor="#D4AF37"
+                    android:textSize="12sp"
+                    android:textStyle="italic" />
+
+                <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="10dp"
