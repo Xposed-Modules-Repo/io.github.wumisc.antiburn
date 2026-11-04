@@ -51,4 +51,6 @@ App 内可调全部开关，保存后一个周期内自动生效。配置写入 
 
 [LSPosed](https://github.com/LSPosed/LSPosed) / [LSposed (IT)](https://github.com/JingMatrix/LSposed)、[ZygiskNext](https://github.com/Dr-TSNG/ZygiskNext)、[一言](https://hitokoto.cn/) 与整个 Xposed 社区。
 
+**界面致敬**：液态玻璃导航栏（`LiquidBottomTabs`）组件移植自 [Kyant0/AndroidLiquidGlass](https://github.com/Kyant0/AndroidLiquidGlass)（Apache-2.0，基于 backdrop-android）——向作者致敬。
+
 > 如果觉得好用，欢迎支持作者：<img src="donate_qr.webp" alt="微信捐赠二维码" width="120" />
