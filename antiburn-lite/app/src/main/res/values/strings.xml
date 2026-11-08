@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">防止烧屏</string>
+    <string name="tile_label">防止烧屏</string>
+</resources>

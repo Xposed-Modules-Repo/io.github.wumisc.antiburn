@@ -2,16 +2,18 @@
 
 防 OLED 烧屏的 LSPosed 模块：周期性透明化固定 UI（不点亮像素、保留触摸），支持状态栏 / 导航栏 / 抖音 / 红果分区防烧屏、励志古诗滚动、白名单、悬浮球与快捷磁贴。
 
-**当前版本** v1.6（精简磁贴版）｜包名 `io.github.wumisc.antiburn`｜作者 @酷安锦无名
+**当前版本** v2.0（磁贴功能页 + 保存链路重写）｜包名 `io.github.wumisc.antiburn`｜作者 @酷安锦无名
 
 ## 功能特性
 
 - **周期防烧屏**：状态栏图标、底部导航栏按周期透明化，透明化而非隐藏，下拉/触摸不受影响；通知图标区保留显示
-- **白名单**：前台命中白名单的应用不隐藏（游戏 / 视频 / 导航防误伤）；熄屏自动暂停
-- **抖音**：顶部 / 底部 / 右侧按钮 / 右上 / 左上，五区独立开关；直播间固定 UI 独立开关
-- **红果短剧**：同抖音五区独立开关
+- **磁贴式功能页**：分「通用 / 抖音 / 红果」三个子页，每个开关一张磁贴，点一下即切换，选中态高亮
+  - 抖音页：顶部导航、底部导航、右侧按钮列、右上角、左上角、直播间隐藏 —— 六张磁贴独立控制
+  - 红果页：顶部区域、右侧按钮、右上角、左上角 —— 独立磁贴；底部「完整观看 / 选集」入口为保证可点不参与隐藏（磁贴置灰说明）
+- **白名单**：前台命中白名单的应用不隐藏（游戏 / 视频 / 导航防误伤）；熄屏自动暂停；可用选择器勾选，也可直接填包名
 - **励志古诗滚动**：状态栏横向滚动，联网每 3 天换一批，内置库兜底，可自定义诗句
 - **悬浮球**：屏幕右侧小球，点击一键切换隐藏控件显示 / 消失，可拖动
+- **保存与生效**：底部保存条实时显示「✓ 所有改动已保存 / ● 有未保存的改动」、root 状态与保存结果；「保存设置」立即落盘、「重新读取」重新载入、「重启系统界面」一键让配置立刻生效
 - **界面**：Compose 液态玻璃导航栏（首页 / 功能 / 关于 3 Tab），深色模式自适应；下拉快捷磁贴一键启停
 
 ## 环境要求
@@ -20,20 +22,62 @@
 |---|---|
 | KernelSU / Magisk | 二选一，需 root |
 | LSPosed（IT 版） | 推荐支持 HyperOS 4 / Android 17 的版本 |
-| 系统 | 已在澎湃 HyperOS 4 / Android 17（Redmi K90 Ultra）实测 |
+| 系统 | 已在澎湃 HyperOS 4 / Android 17（Redmi K90 Ultra）实测；本版 minSdk 33 / targetSdk 37 |
 
 ## 安装
 
-1. 下载 [antiburn-v1.6.apk](https://github.com/Xposed-Modules-Repo/io.github.wumisc.antiburn/releases/download/v1.6/antiburn-v1.6.apk) 并安装（若装有旧包 `com.antiburn.lite`，先在 LSPosed 取消勾选避免冲突）
+1. 下载 [antiburn-v2.0.apk](https://github.com/Xposed-Modules-Repo/io.github.wumisc.antiburn/releases/download/2.0/antiburn-v2.0.apk) 并安装（若装有旧包 `com.antiburn.lite`，先在 LSPosed 取消勾选避免冲突）
 2. LSPosed Manager → 模块 → 启用「防止烧屏」
 3. 勾选作用域：**SystemUI**（必勾）、**抖音** `com.ss.android.ugc.aweme`、**红果短剧** `com.phoenix.read`
-4. 重启手机（或重启 SystemUI）
+4. 重启手机，或装好后在 App 内点「重启系统界面」
 
-## 配置
+## 使用要点
 
-App 内可调全部开关，保存后一个周期内自动生效。配置写入 `/data/local/tmp/antiburn.conf`（需 root）。
+- **改完就保存**：所有开关改动会自动保存（700ms 防抖），也可以按「保存设置」立即写入；保存条会明确告诉你写入成功、只写进了应用内配置，还是失败。
+- **配置何时生效**：模块侧每 2 秒内轮询一次配置，正常情况下改完最多 2 秒生效；想立刻看到效果就点「重启系统界面」，SystemUI 会被拉起并重新注入。
+- **磁贴页**：功能页顶部切换「通用 / 抖音 / 红果」，切走再切回会停留在原来的子页；红果「底部入口」磁贴是置灰的，那里是「完整观看 / 选集」按钮，隐藏会导致无法追剧，所以固定常驻。
+
+## 配置存储
+
+- **应用内镜像** `files/antiburn.conf`：UI 与 Hook 侧都以它为权威来源，不需要 root，卸载前一直存在；
+- **系统配置** `/data/local/tmp/antiburn.conf`：root 可用时按「写临时文件 → 原子替换 → 读回校验」同步一份，写入失败不影响应用内保存；
+- **Hook 侧读取**：`content://io.github.wumisc.antiburn.config`（ContentProvider）。`/data/local/tmp` 属于 SELinux `shell_data_file`，SystemUI / 抖音进程直读会失败，这是旧版「保存了却不生效」的根因。
+
+## 构建
+
+```bash
+# 需求：JDK 21 + Gradle 9.6+ + Android SDK Platform 37
+cd antiburn-lite
+gradle assembleDebug        # 产物 app/build/outputs/apk/debug/app-debug.apk
+```
+
+工程为 AGP 9.4.1（内置 Kotlin）+ Compose 编译器插件 2.4.21，版本号写在 `antiburn-lite/app/build.gradle`。
+
+## 目录结构
+
+```
+antiburn-lite/
+├── app/src/main/java/io/github/wumisc/antiburn/   # 模块主体
+│   ├── XposedInit.java          # 入口，按进程分发
+│   ├── Controller.java          # SystemUI 侧：状态栏/导航栏周期透明 + 古诗滚动
+│   ├── DouyinHook.java          # 抖音 / 红果侧：五区隐藏 + 悬浮球 + 直播间
+│   ├── ConfStore.java           # 配置读写：应用内镜像 + root 原子写 + 重启 SystemUI
+│   ├── Config.java              # Hook 侧配置解析与预取
+│   ├── ConfigProvider.java      # 导出配置给被 Hook 进程
+│   ├── MainActivity.kt          # Compose 界面（磁贴功能页 / 保存条）
+│   └── AntiburnTile.java        # 下拉快捷磁贴
+├── app/src/main/java/com/kyant/backdrop/          # 液态玻璃导航组件（移植自 Kyant0）
+└── classes.jar                                    # 组件依赖
+```
 
 ## 更新日志
+
+**v2.0（2026-11-08）**
+- 功能页改为磁贴式开关，拆成「通用 / 抖音 / 红果」三个子页；红果五区由「一个总开关管全部」改为逐项独立控制
+- 新增「保存设置」「重新读取」「重启系统界面」按钮，保存条显示未保存改动、root 状态与三种保存结果
+- 配置链路重写：应用内镜像 + root 原子替换 + ContentProvider，修复「保存失败 / 保存了却不生效」
+- 修复：并发写互相覆盖导致配置丢失、连点磁贴丢改动、白名单页取消返回清空主页改动、快捷磁贴读改写竞态、旧版升级不回填配置、诗句缓存写不进导致反复联网、只开「直播间隐藏」时功能失效、日志开关仍把白名单写进 logcat 等
+- 版本号 2.0 / versionCode 10；移除旧版 `antiburn-lsposed/` 源码（可在 git 历史中查看）
 
 **v1.6（2026-11-04）**
 - 包名统一为 `io.github.wumisc.antiburn`

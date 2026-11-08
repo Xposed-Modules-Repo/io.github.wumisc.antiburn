@@ -1,0 +1,61 @@
+plugins {
+    id 'com.android.application'
+    // 版本统一由根工程 plugins{} 管理，避免两处版本不一致
+    id 'org.jetbrains.kotlin.plugin.compose'
+}
+
+android {
+    namespace 'io.github.wumisc.antiburn'
+    compileSdk 37
+
+    defaultConfig {
+        applicationId "io.github.wumisc.antiburn"
+        minSdk 33
+        targetSdk 37
+        versionCode 10
+        versionName "2.0"
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_21
+        targetCompatibility JavaVersion.VERSION_21
+    }
+
+    buildFeatures {
+        buildConfig true
+        compose true
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+}
+
+// AGP 9 内置 Kotlin：jvmTarget 默认取 compileOptions.targetCompatibility（此处为 21）。
+// 旧版额外的顶层 kotlin{} 块在 AGP 9 内置 Kotlin 下可能找不到扩展，导致配置阶段直接失败，故移除。
+
+dependencies {
+    // Compose
+    implementation 'androidx.activity:activity-compose:1.9.3'
+    def composeBom = platform('androidx.compose:compose-bom:2024.12.01')
+    implementation composeBom
+    implementation 'androidx.compose.ui:ui'
+    implementation 'androidx.compose.foundation:foundation'
+    implementation 'androidx.compose.material3:material3'
+    implementation 'androidx.compose.runtime:runtime'
+
+    // Miuix 液态玻璃（原生 drawBackdrop + blur + lens + vibrancy，0.9.4 锁定）
+    implementation 'top.yukonga.miuix.kmp:miuix-blur:0.9.4'
+    implementation 'top.yukonga.miuix.kmp:miuix-ui:0.9.4'
+    implementation 'top.yukonga.miuix.kmp:miuix-squircle:0.9.4'
+
+    // Kyant0 AndroidLiquidGlass 底层库（成品 LiquidBottomTabs 液态玻璃导航栏依赖，Maven Central）
+    implementation "io.github.kyant0:backdrop-android:2.0.1"
+    implementation "io.github.kyant0:shapes:1.2.1"
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
+
+    // LSPosed/Xposed API（仅编译期）：SystemUI/抖音/红果 Hook 引擎
+    compileOnly 'de.robv.android.xposed:api:82'
+}

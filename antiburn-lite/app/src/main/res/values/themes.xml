@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 简洁磁贴版主题：无 ActionBar，透明状态栏，交给 Compose MiuixTheme 渲染 -->
+    <style name="Theme.AntiburnLite" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <!-- windowBackground 用浅色而非纯黑：避免根布局在 Compose 接管前闪黑 / 背景变黑 -->
+        <item name="android:windowBackground">#F2F3F5</item>
+    </style>
+
+    <!-- 白名单选择页：居中小窗（宽度 90% 屏宽、高度贴合内容） -->
+    <style name="Theme.AntiburnLite.Dialog" parent="android:Theme.Material.Light.Dialog">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+    </style>
+</resources>

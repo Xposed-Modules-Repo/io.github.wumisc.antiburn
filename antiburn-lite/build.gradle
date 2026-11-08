@@ -1,0 +1,8 @@
+// AGP 9.x 自带 Kotlin 编译支持，不要再显式应用 org.jetbrains.kotlin.android；
+// Compose 编译器插件仍需要，并且要与 Kotlin 版本一致。
+// 旧版这里用 buildscript 又单独塞了一份 kotlin-gradle-plugin，同时子模块用 plugins DSL
+// 声明 compose 插件，容易造成「Kotlin Gradle Plugin 被加载两次」的配置错误。
+plugins {
+    id 'com.android.application' version '9.4.1' apply false
+    id 'org.jetbrains.kotlin.plugin.compose' version '2.4.21' apply false
+}
