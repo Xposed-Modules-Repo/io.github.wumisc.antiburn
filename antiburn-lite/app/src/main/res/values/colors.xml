@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="ic_launcher_background">#0A0E1A</color>
+    <!-- 与启动图标插画底色一致，保证 adaptive icon 遮罩边缘无缝 -->
+    <color name="ic_launcher_background">#162233</color>
     <color name="bg">#F2F3F5</color>
 </resources>

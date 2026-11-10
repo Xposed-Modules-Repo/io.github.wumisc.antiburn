@@ -10,7 +10,9 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -32,6 +34,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -50,6 +54,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -65,12 +70,13 @@ import androidx.compose.ui.unit.dp
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import com.kyant.backdrop.catalog.components.LiquidBottomTab
 import com.kyant.backdrop.catalog.components.LiquidBottomTabs
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
@@ -87,9 +93,28 @@ import kotlinx.coroutines.withContext
  *  - custom_poems 多行文本编码为单行，不再把 conf 切成非法行；新增可编辑输入框；
  *  - 白名单支持直接填包名（选择页失败时仍可保存），切换 Tab 不再丢弃未保存的改动。
  */
+/** 界面适配可选方案：五大厂商 + 原生（id 与 conf 里的 ui_style 一一对应） */
+private val UI_STYLE_LABELS = listOf(
+    "hyperos" to "小米 HyperOS",
+    "magicos" to "荣耀 MagicOS",
+    "coloros" to "OPPO ColorOS",
+    "originos" to "vivo OriginOS",
+    "harmonyos" to "华为 HarmonyOS",
+    "aosp" to "原生 AOSP",
+)
+
 data class AbState(
     val enableStatus: Boolean = true,
     val enableNav: Boolean = false,
+    /** 像素偏移（AOSP BurnInProtection 同思路的温和模式，默认开） */
+    val enableShift: Boolean = true,
+    /** 状态栏图标单独开关（与 enable_status 分离，供只想隐藏图标不想隐藏整栏的用户用） */
+    val enableIcon: Boolean = false,
+    /**
+     * 目标 UI 适配方案：hyperos / magicos / coloros / originos / harmonyos / aosp。
+     * 决定 Hook 侧用哪套「胶囊保护区 + 导航栏结构」配置，见 profiles/ 与 Config.uiStyle。
+     */
+    val uiStyle: String = "aosp",
     val enablePoem: Boolean = false,
     val enableBall: Boolean = false,
     val enableLog: Boolean = false,
@@ -110,6 +135,9 @@ data class AbState(
     val whitelist: String = "",
 )
 
+/** 改动后延迟写盘：合并连续点击，短时间内退出由 MainActivity.onStop 强制补齐 */
+private const val SAVE_DEBOUNCE_MS = 700L
+
 /** 保存 UI 状态，避免旋转/深浅色切换时丢掉尚未落盘的改动。 */
 private val AbStateSaver = listSaver(
     save = { s: AbState ->
@@ -120,10 +148,11 @@ private val AbStateSaver = listSaver(
             s.enableDramaTop, s.enableDramaBottom, s.enableDramaLike,
             s.enableDramaRt, s.enableDramaLt,
             s.hideSec, s.showSec, s.customPoems, s.whitelist,
+            s.enableShift, s.enableIcon, s.uiStyle,
         )
     },
     restore = { l: List<Any> ->
-        if (l.size < 20) {
+        if (l.size < 23) {
             null
         } else {
             AbState(
@@ -147,6 +176,9 @@ private val AbStateSaver = listSaver(
                 showSec = l[17] as Int,
                 customPoems = l[18] as String,
                 whitelist = l[19] as String,
+                enableShift = l[20] as Boolean,
+                enableIcon = l[21] as Boolean,
+                uiStyle = l[22] as String,
             )
         }
     },
@@ -156,6 +188,15 @@ private val AbStateSaver = listSaver(
 object AbConf {
     private fun i(v: String?, def: Int): Int = v?.trim()?.toIntOrNull() ?: def
     private fun b(v: String?, def: Boolean = false): Boolean = if (v == null) def else v.trim() == "1"
+
+    /** 已知的 UI 适配方案 id（与 profiles 目录下的 json 一一对应） */
+    val UI_STYLE_IDS = listOf("hyperos", "magicos", "coloros", "originos", "harmonyos", "aosp")
+
+    /** 未知 / 空值一律归到 aosp，避免外部写入脏值让适配卡片显示成空白 */
+    fun normUiStyle(v: String?): String {
+        val s = v?.trim()?.lowercase(Locale.ROOT) ?: ""
+        return if (UI_STYLE_IDS.contains(s)) s else "aosp"
+    }
 
     fun load(): AbState {
         // conf 与镜像都读不到 → 用类默认值（enableStatus/enableLive 为 true），
@@ -172,6 +213,9 @@ object AbConf {
         return AbState(
             enableStatus = b(map["enable_status"], true),
             enableNav = b(map["enable_navigation"]),
+            enableShift = b(map["enable_shift"], true),
+            enableIcon = b(map["enable_icon"]),
+            uiStyle = normUiStyle(map["ui_style"]),
             enablePoem = b(map["enable_poem"]),
             enableBall = b(map["enable_ball"]),
             enableLog = b(map["enable_log"]),
@@ -217,6 +261,9 @@ object AbConf {
             }
         }
         lines["enable_status"] = if (s.enableStatus) "1" else "0"
+        lines["enable_shift"] = if (s.enableShift) "1" else "0"
+        lines["enable_icon"] = if (s.enableIcon) "1" else "0"
+        lines["ui_style"] = normUiStyle(s.uiStyle)
         lines["enable_navigation"] = if (s.enableNav) "1" else "0"
         lines["enable_poem"] = if (s.enablePoem) "1" else "0"
         lines["enable_ball"] = if (s.enableBall) "1" else "0"
@@ -244,15 +291,90 @@ object AbConf {
         for ((k, v) in lines) sb.append(k).append('=').append(v).append('\n')
         return ConfStore.writeEx(sb.toString())
     }
+
+    /**
+     * 只把「相对上次成功保存的状态真正变化」的字段写回磁盘。
+     *
+     * 旧版 save() 拿内存里的 AbState 整表重建 conf：只要 App 还停在后台没被回收，
+     * 用户从快捷磁贴改了 enable_status，再回 App 点任意一个开关保存，
+     * 就会用旧快照把磁贴刚写的值覆盖回去 —— 表现就是「这个开关保存不住」。
+     * 改成字段级 diff 后，没动过的键一律不碰，磁贴 / 其它入口的改动不会被回滚。
+     */
+    fun saveDiff(old: AbState, new: AbState): Int = applyDiff(diffOf(old, new))
+
+    /**
+     * 计算「相对上次成功保存真正变化」的字段。
+     *
+     * 抽出来是为了让保存与回读校验用同一份 key 集合：写完拿这份 m 去磁盘逐个核对，
+     * 才能真正证明「这几个键确实落盘了」，而不是只看写入函数有没有抛异常。
+     */
+    fun diffOf(old: AbState, new: AbState): LinkedHashMap<String, String> {
+        val m = LinkedHashMap<String, String>()
+        fun putB(key: String, a: Boolean, b: Boolean) {
+            if (a != b) m[key] = if (b) "1" else "0"
+        }
+        putB("enable_status", old.enableStatus, new.enableStatus)
+        putB("enable_shift", old.enableShift, new.enableShift)
+        putB("enable_icon", old.enableIcon, new.enableIcon)
+        if (old.uiStyle != new.uiStyle) m["ui_style"] = normUiStyle(new.uiStyle)
+        putB("enable_navigation", old.enableNav, new.enableNav)
+        putB("enable_poem", old.enablePoem, new.enablePoem)
+        putB("enable_ball", old.enableBall, new.enableBall)
+        putB("enable_log", old.enableLog, new.enableLog)
+        putB("enable_douyin_top", old.enableDouyinTop, new.enableDouyinTop)
+        putB("enable_douyin_bottom", old.enableDouyinBottom, new.enableDouyinBottom)
+        putB("enable_douyin_like", old.enableDouyinLike, new.enableDouyinLike)
+        putB("enable_douyin_right_top", old.enableDouyinRt, new.enableDouyinRt)
+        putB("enable_douyin_left_top", old.enableDouyinLt, new.enableDouyinLt)
+        putB("enable_live", old.enableLive, new.enableLive)
+        putB("enable_drama_top", old.enableDramaTop, new.enableDramaTop)
+        putB("enable_drama_bottom", old.enableDramaBottom, new.enableDramaBottom)
+        putB("enable_drama_like", old.enableDramaLike, new.enableDramaLike)
+        putB("enable_drama_right_top", old.enableDramaRt, new.enableDramaRt)
+        putB("enable_drama_left_top", old.enableDramaLt, new.enableDramaLt)
+        if (old.hideSec != new.hideSec) m["hide_duration"] = new.hideSec.coerceIn(5, 3600).toString()
+        if (old.showSec != new.showSec) m["show_duration"] = new.showSec.coerceIn(1, 3600).toString()
+        if (old.customPoems != new.customPoems) {
+            m["custom_poems"] = ConfStore.encodeValue(new.customPoems)
+        }
+        if (old.whitelist != new.whitelist) m["whitelist"] = new.whitelist.trim()
+        return m
+    }
+
+    /** 把 diff 落到磁盘；写白名单时一并清掉旧别名 blacklist，避免两套名单打架。 */
+    fun applyDiff(m: Map<String, String>): Int {
+        if (m.isEmpty()) return ConfStore.WRITE_OK
+        return if (m.containsKey("whitelist")) {
+            ConfStore.updateExRemoving(m, setOf("blacklist"))
+        } else {
+            ConfStore.updateEx(m)
+        }
+    }
 }
 
 class MainActivity : ComponentActivity() {
+    /** 由 Compose 侧注入：把 700ms 防抖窗口里还没写完的改动立刻落盘。 */
+    internal var flushPending: (() -> Unit)? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         ConfStore.init(this)
         setContent { BurnInProtectApp() }
     }
+
+    override fun onStop() {
+        // 点完开关立刻返回 / 切到桌面时，Compose 的防抖协程会被取消，
+        // 改动永远写不进磁盘 —— 这里在页面离开前强制补一次保存。
+        flushPending?.invoke()
+        super.onStop()
+    }
 }
+
+/**
+ * v2.2：这里原本有个进程级 SaveScope，用来把「700ms 防抖后的异步写」从
+ * composition 生命周期里救出来。现在保存是点击即同步落盘，异步窗口已经不存在，
+ * 作用域、互斥量、在途计数一并移除 —— 保留它们只会让下一次改动误以为还有异步路径。
+ */
 
 @Composable
 private fun BurnInProtectApp() {
@@ -270,56 +392,101 @@ private fun BurnInProtectApp() {
     var rootOk by remember { mutableStateOf(false) }
     var saving by remember { mutableStateOf(false) }
     var restarting by remember { mutableStateOf(false) }
-    // 写入序号：只有最后一次改动真正落盘，取代旧版「每个 onValueChange 都 fork 一个 su」
-    var saveSeq by remember { mutableIntStateOf(0) }
-    var loaded by rememberSaveable { mutableStateOf(false) }
-    val saveMutex = remember { Mutex() }
+    // 尚未落盘的最新状态；Activity onStop 时用它补一次
+    var pendingSave by remember { mutableStateOf<AbState?>(null) }
+    // loaded 不能用 rememberSaveable：进程被系统回收后重建时，saveable 会把 loaded 恢复成 true，
+    // 于是永远不再读盘，界面展示的是被杀之前的内存快照（可能根本没保存成功）。
+    var loaded by remember { mutableStateOf(false) }
 
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    fun reload() {
-        scope.launch {
-            val st = withContext(Dispatchers.IO) { AbConf.load() }
-            state = st
-            savedState = st
-            status = if (rootOk) "配置已读取 · root 已授权"
-            else "配置已读取 · 未检测到 root（仍可保存到应用内配置）"
+    fun clock(): String =
+        SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+
+    /**
+     * 保存：点击即同步落盘，写完立刻回读校验。
+     *
+     * 旧实现把写入推迟 700ms（防抖），而 HyperOS 在 onStop 后会很快冻结后台进程，
+     * 推迟的那次写入经常还没执行、进程就没了 —— 表现就是「提示已保存，重开又是关闭」。
+     * 配置只有 1~2KB，同步写 + fsync 约 1~3ms，这点开销换「点了就一定存住」。
+     *
+     * 写完用同一份 diff 回读比对：只有磁盘上确实是新值才提示成功，不再谎报。
+     */
+    fun commit(target: AbState) {
+        pendingSave = target
+        if (target == savedState) {
+            pendingSave = null
+            return
+        }
+        saving = true
+        val diff = AbConf.diffOf(savedState, target)
+        var result = ConfStore.WRITE_FAILED
+        var bad: Set<String> = diff.keys
+        try {
+            var attempt = 0
+            // 最多两次：目录刚被重建、存储瞬时不可用这类错误，重试一次通常就能过
+            while (attempt < 2) {
+                if (attempt > 0) android.os.SystemClock.sleep(80L)
+                result = AbConf.applyDiff(diff)
+                bad = if (result == ConfStore.WRITE_FAILED) diff.keys else ConfStore.verify(diff)
+                if (result != ConfStore.WRITE_FAILED && bad.isEmpty()) break
+                attempt++
+            }
+        } catch (t: Throwable) {
+            result = ConfStore.WRITE_FAILED
+            bad = diff.keys
+        } finally {
+            saving = false
+        }
+        if (result != ConfStore.WRITE_FAILED && bad.isEmpty()) {
+            // 关键：写完把整份配置重新读回来，让界面显示的就是磁盘上的真值。
+            // 这样即使有别的入口（磁贴 / 白名单页 / 旧进程）把值改回去，界面也立刻如实反映，
+            // 不会再出现「开关看着是开的、下次打开又变回关」这种没人说得清的状态。
+            val disk = try {
+                AbConf.load()
+            } catch (t: Throwable) {
+                null
+            }
+            if (disk != null && disk != target) {
+                val drift = AbConf.diffOf(disk, target).keys
+                state = disk
+                savedState = disk
+                pendingSave = null
+                status = "未完全生效：" + drift.take(3).joinToString("、") + " 已被其它入口改写"
+                Toast.makeText(context, status, Toast.LENGTH_LONG).show()
+                ConfStore.appendAudit(
+                    "SAVE-DRIFT want_status=" + target.enableStatus + " disk_status=" + disk.enableStatus
+                            + " keys=" + drift,
+                )
+                return
+            }
+            if (disk != null) {
+                state = disk
+                savedState = disk
+            } else {
+                savedState = target
+            }
+            if (pendingSave == target) pendingSave = null
+            status = "已保存 · " + clock()
+            ConfStore.appendAudit(
+                "SAVE ok status=" + target.enableStatus + " style=" + target.uiStyle + " keys=" + diff.keys,
+            )
+        } else {
+            status = "保存失败：" + bad.take(3).joinToString("、") + " 未能落盘，请检查 root 与存储"
+            Toast.makeText(context, status, Toast.LENGTH_LONG).show()
         }
     }
 
-    /** 防抖自动保存（force=true 时立即保存，对应「保存设置」按钮） */
-    fun commit(target: AbState, force: Boolean) {
-        val seq = ++saveSeq
-        scope.launch {
-            if (!force) delay(700)
-            // 期间又有新改动 → 放弃这次写入
-            if (seq != saveSeq) return@launch
-            saving = true
-            try {
-                // 串行化 read-modify-write：旧任务即使在最后一次写入之后完成，
-                // 也不会把旧内容覆盖回磁盘，更不会谎报「已保存」。
-                val result: Int? = saveMutex.withLock {
-                    if (seq != saveSeq) null
-                    else withContext(Dispatchers.IO) { AbConf.save(target) }
+    // 页面离开（onStop）时立刻补一次保存，不再依赖 700ms 防抖能等到
+    val hostActivity = context as? MainActivity
+    SideEffect {
+        if (hostActivity != null) {
+            hostActivity.flushPending = {
+                val pending = pendingSave
+                if (pending != null && pending != savedState) {
+                    commit(pending)
                 }
-                if (result == null || seq != saveSeq) return@launch
-                val msg = when (result) {
-                    ConfStore.WRITE_OK -> "已保存并写入系统配置 · 下个周期生效"
-                    ConfStore.WRITE_MIRROR_ONLY ->
-                        "已保存到应用内配置；root 写入失败，部分设备需重启或重新授权后才生效"
-                    else -> "保存失败：无法写入配置，请检查 root 授权或存储空间"
-                }
-                status = msg
-                if (result != ConfStore.WRITE_FAILED) {
-                    savedState = target
-                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                } else {
-                    Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
-                }
-            } finally {
-                // 保证「保存中…」不会卡死导致按钮永久禁用
-                if (seq == saveSeq) saving = false
             }
         }
     }
@@ -342,7 +509,7 @@ private fun BurnInProtectApp() {
     val onStateChange: ((AbState) -> AbState) -> Unit = { update ->
         val newState = update(state)
         state = newState
-        commit(newState, false)
+        commit(newState)
     }
 
     val wlLauncher = rememberLauncherForActivityResult(
@@ -362,10 +529,16 @@ private fun BurnInProtectApp() {
         wlLauncher.launch(Intent(context, WhitelistPickerActivity::class.java))
     }
 
-    // 只在本次会话首次进入时读盘；旋转重建后 loaded 仍为 true，保留未落盘改动
+    // 每次 Activity 重建都重新读盘（loaded 不再参与 saveable），
+    // 读之前先等进行中的保存任务归零，避免 onStop 补存还没写完就读到旧值。
     LaunchedEffect(Unit) {
         if (loaded) return@LaunchedEffect
-        val pair = withContext(Dispatchers.IO) { AbConf.load() to ConfStore.hasRoot() }
+        val pair = withContext(Dispatchers.IO) {
+            // 先把日志目录准备好：Android 11+ 只能在 su 下建 /sdcard/Android/ 子目录，
+            // 建好并放开权限后，SystemUI 才能把诊断日志直接写进用户能看到的路径。
+            ConfStore.prepareSharedDirs()
+            AbConf.load() to ConfStore.hasRoot()
+        }
         state = pair.first
         savedState = pair.first
         rootOk = pair.second
@@ -374,15 +547,25 @@ private fun BurnInProtectApp() {
         loaded = true
     }
 
+    /** 把兜底目录里的日志汇总到用户指定目录，便于直接用文件管理器 / 电脑取走 */
+    fun exportLogs() {
+        scope.launch {
+            val out = withContext(Dispatchers.IO) {
+                ConfStore.prepareSharedDirs()
+                ConfStore.exportLogs()
+            }
+            status = if (out.isNotBlank()) "日志已就绪 · " + clock()
+            else "还没有日志：请先打开「诊断日志」，让模块跑一个周期再导出"
+            Toast.makeText(context, status + "\n" + ConfStore.LOG_DIR, Toast.LENGTH_LONG).show()
+        }
+    }
+
     val saveBar: @Composable () -> Unit = {
         SaveBar(
             status = status,
-            dirty = state != savedState,
-            saving = saving,
             restarting = restarting,
-            onSave = { commit(state, true) },
-            onReload = { reload() },
             onRestart = { restartSystemUi() },
+            onExportLog = { exportLogs() },
         )
     }
 
@@ -416,8 +599,8 @@ private fun BurnInProtectApp() {
                     onHideSecChange = { sec -> onStateChange { s -> s.copy(hideSec = sec) } },
                     showSec = state.showSec,
                     whitelist = state.whitelist,
-                    navMicroSec = navMicroSec,
-                    onNavMicroChange = { navMicroSec = it },
+                    uiStyle = state.uiStyle,
+                    onUiStyleChange = { id -> onStateChange { s -> s.copy(uiStyle = id) } },
                     onOpenWhitelist = openWhitelist,
                     saveBar = saveBar,
                 )
@@ -479,49 +662,44 @@ private fun BurnInProtectApp() {
 @Composable
 private fun SaveBar(
     status: String,
-    dirty: Boolean,
-    saving: Boolean,
     restarting: Boolean,
-    onSave: () -> Unit,
-    onReload: () -> Unit,
     onRestart: () -> Unit,
+    onExportLog: () -> Unit,
 ) {
+    // 自动保存可靠之后，「保存设置」「重新读取」就是多余负担 —— 用户不该需要记得点保存。
     Card(
         Modifier.fillMaxWidth().padding(top = 12.dp),
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
         ),
     ) {
-        Column(Modifier.padding(14.dp)) {
-            Text(status, style = MaterialTheme.typography.bodySmall)
+        Row(
+            Modifier.fillMaxWidth()
+                .padding(start = 14.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Text(
-                if (dirty) "● 有未保存的改动" else "✓ 所有改动已保存",
+                text = status,
                 style = MaterialTheme.typography.labelMedium,
-                color = if (dirty) MaterialTheme.colorScheme.error
-                else MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(top = 4.dp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                modifier = Modifier.weight(1f),
             )
-            Spacer(Modifier.height(10.dp))
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Button(
-                    onClick = onSave,
-                    enabled = !saving,
-                    modifier = Modifier.weight(1f),
-                ) { Text(if (saving) "保存中…" else "保存设置") }
-                Spacer(Modifier.width(8.dp))
-                TextButton(onClick = onReload) { Text("重新读取") }
-            }
-            Spacer(Modifier.height(6.dp))
-            OutlinedButton(
+            TextButton(
+                onClick = onExportLog,
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp),
+            ) { Text("日志", style = MaterialTheme.typography.labelMedium) }
+            FilledTonalButton(
                 onClick = onRestart,
                 enabled = !restarting,
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text(if (restarting) "正在重启系统界面…" else "重启系统界面（让配置立即生效）") }
-            Text("重启后状态栏会短暂重绘，属正常现象；需要 root 权限",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.outline,
-                modifier = Modifier.padding(top = 4.dp))
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp),
+            ) {
+                Text(
+                    if (restarting) "重启中…" else "重启界面",
+                    style = MaterialTheme.typography.labelMedium,
+                )
+            }
         }
     }
 }
@@ -535,8 +713,8 @@ private fun HomeTilePage(
     onHideSecChange: (Int) -> Unit,
     showSec: Int,
     whitelist: String,
-    navMicroSec: Int,
-    onNavMicroChange: (Int) -> Unit,
+    uiStyle: String,
+    onUiStyleChange: (String) -> Unit,
     onOpenWhitelist: () -> Unit,
     saveBar: @Composable () -> Unit,
 ) {
@@ -614,22 +792,29 @@ private fun HomeTilePage(
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
         ) {
             Column(Modifier.padding(16.dp)) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("导航栏微移间隔", style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                    Text("每 $navMicroSec 秒", style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary)
-                }
-                Text("底部液态玻璃导航栏周期性上下微移 1dp，防止固定像素烧印。",
+                // 第一行：标题 + 一句注明（不放控件，避免和下面的选择行挤在一起）
+                Text("界面适配", style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold)
+                Text("选择你手机的系统界面，模块按它的胶囊 / 导航栏结构避让，不会误隐藏灵动岛、原子岛。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 4.dp))
-                Spacer(Modifier.height(14.dp))
-                LiquidSlider(
-                    value = navMicroSec.toFloat(),
-                    onValueChange = { onNavMicroChange(it.roundToInt()) },
-                    valueRange = 30f..120f,
-                )
+                Spacer(Modifier.height(12.dp))
+                // 第二行：五大厂商 + 原生，单选。横向滚动保证窄屏也不换行、不挤压
+                Row(
+                    Modifier.fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(vertical = 2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    for ((id, label) in UI_STYLE_LABELS) {
+                        FilterChip(
+                            selected = uiStyle == id,
+                            onClick = { onUiStyleChange(id) },
+                            label = { Text(label, style = MaterialTheme.typography.bodySmall) },
+                        )
+                    }
+                }
             }
         }
 

@@ -14,7 +14,11 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * 配置存储（v1.7-fixed）。
@@ -46,6 +50,16 @@ public final class ConfStore {
      */
     public static final String EXTERNAL_MIRROR = "/sdcard/Download/.antiburn.conf";
 
+    /**
+     * 日志目录：公共存储下用户能直接看到的位置（文件管理器 / 数据线 / 电脑都能取）。
+     * Android 11+ 普通应用无权在 /sdcard/Android/ 下自建目录，只能由 App 侧用 su 预建，
+     * 之后 SystemUI(system uid) 才能写入 —— 具体见 XposedInit 的路径探测。
+     */
+    public static final String LOG_DIR = "/storage/emulated/0/Android/Prevent burn-in";
+    public static final String LOG_FILE = LOG_DIR + "/antiburn.log";
+    /** 兜底目录：/data/local/tmp 下自建子目录并放开权限，保证 system uid 总有地方写 */
+    public static final String LOG_DIR_FALLBACK = "/data/local/tmp/antiburn";
+
     /** root 写入成功且读回校验通过 */
     public static final int WRITE_OK = 0;
     /** root 不可用/写入失败，但应用内镜像已保存（Hook 侧通过 ConfigProvider 仍可生效） */
@@ -55,6 +69,33 @@ public final class ConfStore {
 
     private static volatile Context appCtx;
     private static final Object LOCK = new Object();
+
+    /**
+     * root / 外部镜像的同步队列。
+     *
+     * <p>旧实现把 3 次 su（写 conf、读回校验、写外部镜像）全部放在 save 的同步路径里，
+     * 每次 su 最多等 4s，最坏一次保存要阻塞 12s。而 su 在 KernelSU / Magisk 上
+     * 每次都要走授权通道，本就慢。用户点一下开关就卡住，于是「保存不住」的投诉里
+     * 有一半其实是「保存没完成就被杀了」。
+     *
+     * <p>关键事实：应用内镜像才是唯一权威来源（Hook 侧经 ConfigProvider 读它），
+     * root conf 与外部镜像只是给「外部工具/第三方进程」的兼容副本。
+     * 既然是副本，就不该阻塞用户操作。
+     *
+     * <p>因此改为：保存 = 写镜像（毫秒级，磁记录级同步），su 通道交给这里的
+     * 单线程 worker 合并执行 —— 连续点 10 个开关只产生 1 次 su，且永远只写最新内容。
+     */
+    private static final ExecutorService SYNC = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "antiburn-conf-sync");
+        t.setDaemon(true);
+        return t;
+    });
+    private static final AtomicReference<String> pendingSync = new AtomicReference<>();
+    private static final AtomicBoolean syncQueued = new AtomicBoolean(false);
+    /** root 通道最后一次同步结果，供界面显示真实状态（不再影响「保存成功」判定）。 */
+    private static volatile String lastSyncState = "未同步";
+    private static volatile long rootCheckedAt;
+    private static volatile boolean rootCached;
 
     private ConfStore() {
     }
@@ -82,11 +123,13 @@ public final class ConfStore {
     public static String defaultContent() {
         StringBuilder sb = new StringBuilder();
         sb.append("enable_status=1\n");
+        sb.append("enable_shift=1\n");
         sb.append("enable_navigation=0\n");
         sb.append("enable_poem=0\n");
         sb.append("enable_ball=0\n");
         sb.append("enable_log=0\n");
         sb.append("enable_icon=0\n");
+        sb.append("ui_style=aosp\n");
         sb.append("enable_douyin_top=0\n");
         sb.append("enable_douyin_bottom=0\n");
         sb.append("enable_douyin_like=0\n");
@@ -179,37 +222,194 @@ public final class ConfStore {
     }
 
     /**
-     * 原子写入配置全文。返回 WRITE_OK / WRITE_MIRROR_ONLY / WRITE_FAILED。
-     * 先写镜像（永远可用），再经 root 写 tmp + mv 原子替换，最后读回校验。
+     * 原子写入配置全文。返回 WRITE_OK / WRITE_FAILED。
+     *
+     * <p>语义变更（v2.1）：返回 WRITE_OK 表示「已保存且下个周期必然生效」，
+     * 不再要求 root 写入成功 —— 因为生效链路走的是应用内镜像 + ConfigProvider，
+     * 与 /data/local/tmp 无关。root 副本由后台线程同步，失败只影响外部工具读取，
+     * 不影响模块自身功能，因此不再让用户为此看到一条吓人的失败提示。
+     *
+     * <p>性能：写入路径只有一次本地文件写 + fsync，没有 su、没有 IPC、没有回读校验
+     * （回读校验原本是为了确认 su 写成功，现在镜像写完即成功，无需校验）。
      */
     public static int writeEx(String content) {
         if (content == null) {
             return WRITE_FAILED;
         }
+        // 每次写入都盖一个单调递增的版本号：Hook 侧（SystemUI）用它判断
+        // 「手上这份配置是不是比我已经生效的那份更旧」，彻底堵死「重启后先读到旧副本」
+        // 导致总开关自己变回关闭的问题。
+        final String stamped = stampRev(content);
         synchronized (LOCK) {
-            boolean mirror = writeMirror(content);
-            String b64 = Base64.encodeToString(
-                    content.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
-            // 注意：先写 .tmp 再 mv，绝不直接 > 目标文件；任一环节失败原 conf 保持完整。
-            String cmd = "{ echo '" + b64 + "' | base64 -d > " + CONF_TMP
-                    + " && chmod 644 " + CONF_TMP
-                    + " && mv -f " + CONF_TMP + " " + CONF
-                    + " && chmod 644 " + CONF + "; } 2>/dev/null";
-            boolean rootOk = execSu(cmd);
-            boolean verified = false;
-            if (rootOk) {
-                String back = execSuCapture("cat " + CONF + " 2>/dev/null");
-                verified = back != null && back.trim().equals(content.trim());
+            if (writeMirror(stamped)) {
+                // 镜像已落盘 = 保存成功。副本同步异步进行，绝不阻塞调用线程。
+                scheduleSync(stamped);
+                appendAudit("WRITE ok rev=" + revOf(stamped)
+                        + " status=" + valueOf(stamped, "enable_status")
+                        + " by=" + caller());
+                return WRITE_OK;
             }
-            // 无论 root conf 是否写成功，都尽力把「同一份内容」写到公共存储镜像。
-            // 第三方 App（抖音/红果）可能因 Android 11+ 包可见性解析不到 ContentProvider，
-            // 这条文件通道是它们的主要兜底；不能只在 WRITE_OK 时才同步。
-            String extCmd = "{ echo '" + b64 + "' | base64 -d > " + EXTERNAL_MIRROR + ".tmp"
-                    + " && mv -f " + EXTERNAL_MIRROR + ".tmp " + EXTERNAL_MIRROR
-                    + " && chmod 644 " + EXTERNAL_MIRROR + "; } 2>/dev/null";
-            execSu(extCmd);
-            return verified ? WRITE_OK : (mirror ? WRITE_MIRROR_ONLY : WRITE_FAILED);
         }
+        // 私有目录写不进去（存储隔离 / 空间不足 / 目录被系统清理）：
+        // 交给后台 root 通道再救一次，但仍然如实返回失败 ——
+        // 界面必须提示「没存住」，而不是让用户下次打开才发现开关又回去了。
+        scheduleSync(stamped);
+        appendAudit("WRITE fail rev=" + revOf(stamped) + " by=" + caller());
+        return WRITE_FAILED;
+    }
+
+    /** 在首行写入 rev=<毫秒时间戳>，并去掉旧 rev 行（保持「一个 key 一行」的格式）。 */
+    private static String stampRev(String content) {
+        StringBuilder sb = new StringBuilder("rev=")
+                .append(System.currentTimeMillis())
+                .append('\n');
+        for (String line : content.split("\n", -1)) {
+            if (line.startsWith("rev=") || line.trim().isEmpty()) {
+                continue;
+            }
+            sb.append(line).append('\n');
+        }
+        return sb.toString();
+    }
+
+    /** 取配置文本里的 rev；老版本没有该键时返回 0（视作最旧）。 */
+    public static long revOf(String content) {
+        if (content == null) {
+            return 0L;
+        }
+        for (String line : content.split("\n")) {
+            String t = line.trim();
+            if (t.startsWith("rev=")) {
+                try {
+                    return Long.parseLong(t.substring(4).trim());
+                } catch (Throwable ignored) {
+                    return 0L;
+                }
+            }
+        }
+        return 0L;
+    }
+
+    /** 取某个 key 的值，取不到返回 "?"。仅用于审计日志。 */
+    private static String valueOf(String content, String key) {
+        for (String line : content.split("\n")) {
+            String t = line.trim();
+            if (t.startsWith(key + "=")) {
+                return t.substring(key.length() + 1).trim();
+            }
+        }
+        return "?";
+    }
+
+    /**
+     * 保存审计日志：每次写配置留下「谁写的 / 版本号 / 关键值」。
+     *
+     * <p>「开关记不住」这类问题靠猜没用 —— 必须能回答「19:31:02 那次 0 是谁写进去的」。
+     * 审计文件放在应用私有目录（无 SELinux 麻烦），导出日志时由 su 一并复制到
+     * /storage/emulated/0/Android/Prevent burn-in/ 下。</p>
+     */
+    public static void appendAudit(String s) {
+        File f = auditFile();
+        if (f == null) {
+            return;
+        }
+        try {
+            long now = System.currentTimeMillis();
+            if (f.length() > 64 * 1024L) {
+                File old = new File(f.getAbsolutePath() + ".1");
+                //noinspection ResultOfMethodCallIgnored
+                old.delete();
+                //noinspection ResultOfMethodCallIgnored
+                f.renameTo(old);
+            }
+            try (FileOutputStream fo = new FileOutputStream(f, true)) {
+                fo.write((now + " " + s + "\n").getBytes(StandardCharsets.UTF_8));
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static File auditFile() {
+        Context c = appCtx;
+        return c == null ? null : new File(c.getFilesDir(), "save-audit.log");
+    }
+
+    /** 找出第一个「非 ConfStore 自己」的调用方，用来区分 App / 磁贴 / 白名单页 / Provider。 */
+    private static String caller() {
+        try {
+            StackTraceElement[] st = new Throwable().getStackTrace();
+            for (StackTraceElement e : st) {
+                String cn = e.getClassName();
+                if (!cn.equals(ConfStore.class.getName()) && !cn.startsWith("java.")) {
+                    String simple = cn.substring(cn.lastIndexOf('.') + 1);
+                    return simple + "." + e.getMethodName() + ":" + e.getLineNumber();
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return "?";
+    }
+
+    /**
+     * 把内容投递给同步 worker。连续多次调用只保留最新一份，worker 会自动合并。
+     * 任何异常都被吞掉：副本同步失败不能影响「已保存」这个事实。
+     */
+    private static void scheduleSync(String content) {
+        pendingSync.set(content);
+        if (syncQueued.getAndSet(true)) {
+            return; // 已有 worker 在跑，它循环时会取到最新内容
+        }
+        try {
+            SYNC.execute(() -> {
+                try {
+                    while (true) {
+                        String c = pendingSync.getAndSet(null);
+                        if (c == null) {
+                            syncQueued.set(false);
+                            // 收尾竞态：清标记的瞬间可能又有人投递，抢回标记继续跑
+                            if (pendingSync.get() != null && syncQueued.compareAndSet(false, true)) {
+                                continue;
+                            }
+                            return;
+                        }
+                        syncToRoot(c);
+                    }
+                } catch (Throwable t) {
+                    syncQueued.set(false);
+                    lastSyncState = "同步异常: " + t.getClass().getSimpleName();
+                }
+            });
+        } catch (Throwable t) {
+            // 线程池拒绝（极罕见）：放弃副本同步，但保存本身已成功
+            syncQueued.set(false);
+            lastSyncState = "同步线程不可用";
+        }
+    }
+
+    /**
+     * 把同一份内容写到 root conf 与外部镜像。两条通道合并成「一次 su 调用」，
+     * 相比旧实现的 3 次 fork，进程创建开销降到 1/3。
+     */
+    private static void syncToRoot(String content) {
+        String b64 = Base64.encodeToString(
+                content.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
+        // 先写 .tmp 再 mv，任一环节失败原文件保持完整；两条通道互不影响，末尾 true 保证退出码为 0
+        String cmd = "{ echo '" + b64 + "' | base64 -d > " + CONF_TMP
+                + " && chmod 644 " + CONF_TMP
+                + " && mv -f " + CONF_TMP + " " + CONF
+                + " && chmod 644 " + CONF + "; } 2>/dev/null; "
+                + "{ echo '" + b64 + "' | base64 -d > " + EXTERNAL_MIRROR + ".tmp"
+                + " && mv -f " + EXTERNAL_MIRROR + ".tmp " + EXTERNAL_MIRROR
+                + " && chmod 644 " + EXTERNAL_MIRROR + "; } 2>/dev/null; true";
+        boolean ok = execSu(cmd);
+        rootCheckedAt = System.currentTimeMillis();
+        rootCached = ok;
+        lastSyncState = ok ? "已同步 root 副本" : "root 不可用，仅用应用内配置（功能正常）";
+    }
+
+    /** 最近一次 root 副本同步的结果描述，供界面展示；不影响功能判定。 */
+    public static String syncState() {
+        return lastSyncState;
     }
 
     /**
@@ -235,17 +435,22 @@ public final class ConfStore {
     public static String flipStatus() {
         synchronized (LOCK) {
             String conf = read();
-            boolean on = true;
+            // 旧实现：读不到配置时把 on 当成 true，于是「第一次点磁贴」写进去的是 0，
+            // 用户以为点开了、实际是关掉。改为读不到时按「关闭」处理，首次点击必然是开启。
+            boolean on = false;
+            boolean known = false;
             if (conf != null) {
                 for (String line : conf.split("\n")) {
                     String t = line.trim();
                     if (t.startsWith("enable_status=")) {
                         on = t.substring(t.indexOf('=') + 1).trim().equals("1");
+                        known = true;
                         break;
                     }
                 }
             }
             String next = on ? "0" : "1";
+            appendAudit("TILE flip from=" + (known ? (on ? "1" : "0") : "unknown") + " to=" + next);
             return update("enable_status", next) ? next : null;
         }
     }
@@ -260,7 +465,9 @@ public final class ConfStore {
             return WRITE_FAILED;
         }
         synchronized (LOCK) {
-            String content = read();
+            // 只读镜像，绝不在写入路径上触发 su：首次安装镜像不存在时直接基于默认配置生成，
+            // 旧版 conf 的迁移由 migrateIfNeededAsync() 在应用启动后异步完成。
+            String content = readMirror();
             if (content == null || content.trim().isEmpty()) {
                 content = defaultContent();
             }
@@ -298,11 +505,103 @@ public final class ConfStore {
         }
     }
 
+    /**
+     * 原子更新若干 key，并顺手删掉旧别名（如 blacklist）。
+     * 供 UI 侧「只写变化字段」使用：不再整表重建，避免把磁贴/其它页面刚写的值覆盖回去。
+     */
+    public static int updateExRemoving(Map<String, String> updates, Set<String> removeKeys) {
+        Map<String, String> m = new LinkedHashMap<>();
+        if (updates != null) {
+            m.putAll(updates);
+        }
+        if (removeKeys != null) {
+            for (String k : removeKeys) {
+                m.put(k, null); // value=null 在 updateEx 里表示删除该 key
+            }
+        }
+        return updateEx(m);
+    }
+
     /** 更新单个 key。 */
     public static boolean update(String key, String value) {
         Map<String, String> m = new LinkedHashMap<>();
         m.put(key, value);
         return updateEx(m) != WRITE_FAILED;
+    }
+
+    /**
+     * 回读校验：确认刚写入的键值真的落在镜像里。
+     *
+     * <p>这是「显示已保存、实际没保存」的最后一道防线。文件写失败、fsync 没落地、
+     * 被其它进程覆盖，都会在这里暴露，而不是等用户下次打开发现开关又变回去了。
+     * 返回空集合才允许界面提示保存成功。
+     */
+    public static Set<String> verify(Map<String, String> expect) {
+        Set<String> bad = new HashSet<>();
+        if (expect == null || expect.isEmpty()) {
+            return bad;
+        }
+        String content = readMirror();
+        if (content == null) {
+            bad.addAll(expect.keySet());
+            return bad;
+        }
+        Map<String, String> actual = new LinkedHashMap<>();
+        for (String line : content.split("\n")) {
+            String t = line.trim();
+            if (t.isEmpty() || t.startsWith("#")) {
+                continue;
+            }
+            int i = t.indexOf('=');
+            if (i < 0) {
+                continue;
+            }
+            actual.put(t.substring(0, i).trim(), t.substring(i + 1).trim());
+        }
+        for (Map.Entry<String, String> e : expect.entrySet()) {
+            String want = e.getValue();
+            String got = actual.get(e.getKey());
+            if (want == null) {
+                if (got != null) {
+                    bad.add(e.getKey());
+                }
+            } else if (!want.equals(got)) {
+                bad.add(e.getKey());
+            }
+        }
+        return bad;
+    }
+
+    /**
+     * 准备共享目录（需要 root）：日志要落在用户能直接看到的位置。
+     *
+     * <p>Android 11+ 普通应用无法在 /sdcard/Android/ 下建目录，只能借 su；
+     * 同时把兜底目录设成 0777，保证 SystemUI(system uid) 也有地方可写。</p>
+     */
+    public static boolean prepareSharedDirs() {
+        // 路径含空格，必须整体加引号，否则 shell 会当成两个参数
+        String cmd = "mkdir -p \"" + LOG_DIR + "\" \"" + LOG_DIR_FALLBACK + "\" 2>/dev/null; "
+                + "chmod 0777 \"" + LOG_DIR + "\" \"" + LOG_DIR_FALLBACK + "\" 2>/dev/null; true";
+        return execSu(cmd);
+    }
+
+    /**
+     * 把兜底目录里的日志汇总到用户指定目录，返回写入结果描述。
+     * 用于「SystemUI 没有 /sdcard 写权限、只能写 /data/local/tmp」的设备。
+     */
+    public static String exportLogs() {
+        // 保存审计日志在应用私有目录：root 才能读，一并复制到用户可见目录，
+        // 「谁把开关改回去」直接看这一段就够了
+        File audit = auditFile();
+        String auditCmd = audit == null ? ""
+                : "cat \"" + audit.getAbsolutePath() + "\" >> \"" + LOG_FILE + "\" 2>/dev/null; ";
+        String cmd = "mkdir -p \"" + LOG_DIR + "\" 2>/dev/null; " + auditCmd
+                + "for f in \"" + LOG_DIR_FALLBACK + "\"/*.log; do "
+                + "[ -f \"$f\" ] && cat \"$f\" >> \"" + LOG_FILE + "\" 2>/dev/null; done; "
+                + "chmod 0666 \"" + LOG_FILE + "\" 2>/dev/null; "
+                + "ls -l \"" + LOG_FILE + "\" 2>/dev/null; true";
+        String out = execSuCapture(cmd);
+        return out == null ? "" : out.trim();
     }
 
     /**
@@ -402,10 +701,20 @@ public final class ConfStore {
         return out.toString();
     }
 
-    /** 检测 root 是否可用（供界面显示状态）。会阻塞，务必在 IO 线程调用。 */
+    /**
+     * 检测 root 是否可用（供界面显示状态）。会阻塞，务必在 IO 线程调用。
+     * 结果缓存 60s：界面每次重组都 fork 一次 su 是纯浪费，且会拖慢首屏。
+     */
     public static boolean hasRoot() {
+        long now = System.currentTimeMillis();
+        if (rootCheckedAt != 0L && now - rootCheckedAt < 60_000L) {
+            return rootCached;
+        }
         String uid = execSuCapture("id -u 2>/dev/null");
-        return uid != null && uid.trim().startsWith("0");
+        boolean ok = uid != null && uid.trim().startsWith("0");
+        rootCheckedAt = now;
+        rootCached = ok;
+        return ok;
     }
 
     /**

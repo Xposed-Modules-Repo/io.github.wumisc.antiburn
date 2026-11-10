@@ -67,7 +67,7 @@
             android:value="true" />
         <meta-data
             android:name="xposeddescription"
-            android:value="周期性隐藏状态栏图标/导航栏/抖音视频页与直播间各区域防OLED烧屏；可自定义隐藏时间、白名单、励志古诗滚动，全部开关 App 内可调。隐藏图标不影响下拉通知与控制中心。" />
+            android:value="防 OLED 烧屏：像素微移 + 周期性隐藏状态栏/导航栏/抖音各区域，按小米 HyperOS、荣耀 MagicOS、OPPO ColorOS、vivo OriginOS、华为 HarmonyOS 与原生 AOSP 分别适配胶囊与导航栏结构。支持白名单、隐藏时长、励志古诗；所有开关在 App 内即时保存。" />
         <meta-data
             android:name="xposedminversion"
             android:value="82" />

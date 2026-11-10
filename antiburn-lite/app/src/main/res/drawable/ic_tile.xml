@@ -1,12 +1,44 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 快捷磁贴图标：盾牌镂空，白色单色（QS 磁贴要求单色矢量） -->
+<!-- 快捷磁贴图标：淋浴花洒 + 水珠，白色单色（QS 磁贴只接受单色矢量）
+     24dp 下不画人形——细节会糊成一团，只保留「花洒出水」这一最能识别的符号 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
     android:height="24dp"
     android:viewportWidth="24"
     android:viewportHeight="24"
     android:tint="#FFFFFFFF">
+
+    <!-- 墙管：横向 + 下折 -->
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.7"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:fillColor="@android:color/transparent"
+        android:pathData="M13,3.2 L19.6,3.2 L19.6,6.6" />
+
+    <!-- 花洒头：上窄下宽的圆角梯形 -->
     <path
         android:fillColor="#FFFFFFFF"
-        android:pathData="M12,1L3,5v6c0,5.55 3.84,10.74 9,12 5.16,-1.26 9,-6.45 9,-12L21,5 12,1zM12,11.9h3.63c-0.34,1.77 -1.35,3.31 -2.76,4.32L12,11.9z" />
+        android:pathData="M8.2,9.4 Q8.2,6.4 11.2,6.4 L16.6,6.4 Q19.6,6.4 19.6,9.4 Z" />
+
+    <!-- 水珠：三束，长短不一，模拟水流 -->
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:fillColor="@android:color/transparent"
+        android:pathData="M10.2,11.6 L10.2,14.2" />
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:fillColor="@android:color/transparent"
+        android:pathData="M13.9,11.6 L13.9,17.4" />
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:fillColor="@android:color/transparent"
+        android:pathData="M17.6,11.6 L17.6,15.0" />
 </vector>

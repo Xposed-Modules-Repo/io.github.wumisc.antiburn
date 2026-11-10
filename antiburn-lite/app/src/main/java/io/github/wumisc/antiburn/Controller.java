@@ -350,7 +350,9 @@ public final class Controller {
             lastWlDiag = nowWl;
             XposedInit.diag("SYS top=" + top + " whitelist=" + Config.whitelist
                     + " inWhitelist=" + inWhitelist + " status=" + Config.enableStatus
-                    + " nav=" + Config.enableNav);
+                    + " nav=" + Config.enableNav + " shift=" + Config.enableShift
+                    + " ui=" + Config.uiStyle + " src=" + Config.lastSource
+                    + " rev=" + Config.lastRev + " cache=" + (Config.cacheReady() ? "ok" : "none"));
         }
 
         // 暂停条件：灭屏 / 前台在白名单（白名单语义：名单内应用前台时不隐藏系统栏）/ 全部功能关闭
@@ -385,6 +387,27 @@ public final class Controller {
                 hidden = false;
             }
         }
+        // 像素偏移（与 AOSP BurnInProtectionController 同思路）：把状态栏 item 缓慢平移 1~2px，
+        // 视觉几乎无感，但轮廓边缘不再固定压在同一批像素上。与「隐藏」互补 ——
+        // 隐藏减少点亮时间，偏移分摊轮廓，两者叠加才接近厂商级防护。
+        // 用 FeatureGuard 隔离：偏移逻辑若在某个 ROM 上反复抛异常，只熔断这一项，
+        // 不影响隐藏/古诗等其它功能，更不会把 SystemUI 打崩。
+        if (Config.enableShift) {
+            FeatureGuard.guard("sys.shift", () -> {
+                if (!Config.uiStyle.equals(lastShiftStyle)) {
+                    lastShiftStyle = Config.uiStyle;
+                    PixelShift.setStyle(Config.uiStyle);
+                    XposedInit.diagForce("SHIFT style=" + Config.uiStyle
+                            + " guardCenter=" + PixelShift.isGuardCenter());
+                }
+                PixelShift.bind(statusView, navView);
+                PixelShift.tick();
+            });
+        } else if (PixelShift.isActive()) {
+            PixelShift.shutdown();
+            XposedInit.diag("SHIFT 已关闭，位移归零");
+        }
+
         // 古诗弹幕与隐藏期严格同步（只在隐藏窗口显示，显示窗口移除）
         updatePoem();
 
@@ -395,6 +418,9 @@ public final class Controller {
     }
 
     // ---------- 隐藏期间滚动励志古诗 ----------
+
+    /** 上一次应用到 PixelShift 的 UI 方案，变化时才重设并打日志 */
+    private static String lastShiftStyle = "";
 
     private static View poemScroll; // 隐藏窗口时状态栏位置的滚动古诗 Overlay
 

@@ -16,8 +16,6 @@ import android.view.ViewGroup;
 import android.view.ViewTreeObserver;
 import android.widget.TextView;
 
-import java.io.File;
-import java.io.FileOutputStream;
 import android.widget.ImageView;
 
 import java.util.ArrayList;
@@ -281,16 +279,12 @@ public final class DouyinHook {
     }
 
     private static void writeTreeFile(String text) {
-        String[] paths = {"/sdcard/Download/antiburn_tree.txt", "/sdcard/antiburn_tree.txt"};
-        for (String p : paths) {
-            try {
-                File f = new File(p);
-                FileOutputStream fo = new FileOutputStream(f, false);
-                fo.write(text.getBytes());
-                fo.close();
-                return;
-            } catch (Throwable ignored) {
-            }
+        // 抖音 / 红果是普通 app，没有任何 /sdcard 写权限（Android 10+ 分区存储），
+        // 旧版这里静默失败，dump 文件从来没生成过。改走统一的文件通道：
+        // 可写目录直写，否则经 root 落到 /data/local/tmp，至少能取到。
+        boolean ok = XposedInit.writeSharedFile("antiburn_tree.txt", text);
+        if (!ok) {
+            Log.w(TAG, "write tree file failed (no writable path)");
         }
     }
 
