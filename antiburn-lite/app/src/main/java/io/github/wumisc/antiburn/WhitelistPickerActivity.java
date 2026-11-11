@@ -50,6 +50,8 @@ public final class WhitelistPickerActivity extends Activity {
     }
 
     private final List<AppItem> all = new ArrayList<>();
+    /** v2.5：onCreate 已加载过就不在 onResume 重复跑（图标加载在主线程，会卡顿/ANR） */
+    private boolean appsLoaded;
     private final List<AppItem> shown = new ArrayList<>();
     private final Set<String> selected = new HashSet<>();
     private AppAdapter adapter;
@@ -135,14 +137,17 @@ public final class WhitelistPickerActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
-        // 权限授权后返回/重新进入都刷新，避免"授权了仍空白"
-        loadApps();
+        // v2.5：应用列表已加载就不再重复；只有权限变化会显式置 false 后重跑
+        if (!appsLoaded) {
+            loadApps();
+        }
     }
 
     @Override
     public void onRequestPermissionsResult(int code, String[] perms, int[] results) {
         super.onRequestPermissionsResult(code, perms, results);
         if (code == REQ_QUERY_ALL) {
+            appsLoaded = false;
             loadApps();
         }
     }
@@ -161,6 +166,10 @@ public final class WhitelistPickerActivity extends Activity {
     }
 
     private void loadApps() {
+        if (appsLoaded) {
+            return;
+        }
+        appsLoaded = true;
         all.clear();
         PackageManager pm = getPackageManager();
         boolean granted = checkSelfPermission(QUERY_PERM) == PackageManager.PERMISSION_GRANTED;

@@ -249,9 +249,9 @@ public final class DouyinHook {
         return !liveTopList.isEmpty() || !liveBottomList.isEmpty() || !liveRightList.isEmpty();
     }
 
-    private static void dumpNode(View v, StringBuilder sb, int depth, int count) {
+    private static int dumpNode(View v, StringBuilder sb, int depth, int count) {
         if (v == null || depth > 18 || count > 1000) {
-            return;
+            return count;
         }
         for (int i = 0; i < depth; i++) {
             sb.append("  ");
@@ -267,15 +267,17 @@ public final class DouyinHook {
                 .append(" vis=").append(v.getVisibility()).append(" alpha=").append(v.getAlpha())
                 .append(" ch=").append(v instanceof ViewGroup ? ((ViewGroup) v).getChildCount() : 0)
                 .append('\n');
+        count++; // v2.5：旧版递归传 count+1 实际等于 depth，1000 节点上限从未生效
         if (v instanceof ViewGroup) {
             ViewGroup g = (ViewGroup) v;
             if (v.getVisibility() == View.GONE) {
-                return; // GONE 容器子树不绘制，跳过省节点数（避免占位容器挤占 1000 上限）
+                return count; // GONE 容器子树不绘制，跳过省节点数
             }
             for (int i = 0; i < g.getChildCount(); i++) {
-                dumpNode(g.getChildAt(i), sb, depth + 1, count + 1);
+                count = dumpNode(g.getChildAt(i), sb, depth + 1, count);
             }
         }
+        return count;
     }
 
     private static void writeTreeFile(String text) {
@@ -373,18 +375,44 @@ public final class DouyinHook {
             sb.append(" | righttop=").append(rightTop != null ? desc(rightTop) : "NONE")
                     .append(" | lefttop=").append(leftTop != null ? desc(leftTop) : "NONE");
             XposedInit.diag(sb.toString());
-            // 直播间专用三区收集：顶栏/底部大区/右下角按钮组（独立于普通页五区）
-            liveTopList.clear();
-            liveBottomList.clear();
-            liveRightList.clear();
-            if (isLive()) {
-                collectLiveTopNode(root, liveTopList, 0);
-                collectLiveBottomNode(root, liveBottomList, 0);
-                collectLiveRightNode(root, liveRightList, 0);
-                if (!liveTopList.isEmpty() || !liveBottomList.isEmpty() || !liveRightList.isEmpty()) {
-                    XposedInit.diag("LIVE top=x" + liveTopList.size() + " bottom=x"
-                            + liveBottomList.size() + " right=x" + liveRightList.size());
+            // 直播间专用三区收集。
+            // v2.5 修复死锁：旧版先 clear 三个 live list 再调 isLive()，而 isLive()
+            // 的 liveViews 分支恰恰要求这三个 list 非空 —— 于是除 rightTop 命中
+            // RoundCornerFrameLayout 外，直播间永远判不出来，「直播间隐藏」形同虚设。
+            // 现在先收集到临时表，用本轮收集结果判定，通过才提交。
+            java.util.List<View> tTop = new java.util.ArrayList<>();
+            java.util.List<View> tBottom = new java.util.ArrayList<>();
+            java.util.List<View> tRight = new java.util.ArrayList<>();
+            collectLiveTopNode(root, tTop, 0);
+            collectLiveBottomNode(root, tBottom, 0);
+            collectLiveRightNode(root, tRight, 0);
+            boolean hasTab = false;
+            if (bottomList != null) {
+                for (View b : bottomList) {
+                    if ("MainBottomTabContainer".equals(b.getClass().getSimpleName())) {
+                        hasTab = true;
+                        break;
+                    }
                 }
+            }
+            boolean liveNode = !tTop.isEmpty() || !tBottom.isEmpty() || !tRight.isEmpty();
+            boolean live = !isDrama
+                    && ((rightTop != null
+                            && "RoundCornerFrameLayout".equals(rightTop.getClass().getSimpleName()))
+                        || (liveNode && bottomList != null && !bottomList.isEmpty() && !hasTab));
+            if (live) {
+                liveTopList.clear();
+                liveTopList.addAll(tTop);
+                liveBottomList.clear();
+                liveBottomList.addAll(tBottom);
+                liveRightList.clear();
+                liveRightList.addAll(tRight);
+                XposedInit.diag("LIVE top=x" + tTop.size() + " bottom=x"
+                        + tBottom.size() + " right=x" + tRight.size());
+            } else {
+                liveTopList.clear();
+                liveBottomList.clear();
+                liveRightList.clear();
             }
             maybeDumpLiveTree(root);
         } catch (Throwable ex) {
@@ -1052,11 +1080,13 @@ public final class DouyinHook {
         if (v == null) {
             return "null";
         }
-        ViewGroup g = (ViewGroup) v;
+        // v2.5：findByClassName 命中的可能是普通 View，旧版无条件强转 ViewGroup
+        // 会抛 ClassCastException 并被 rescan 外层吞掉，导致整轮扫描/隐藏失效。
+        int children = (v instanceof ViewGroup) ? ((ViewGroup) v).getChildCount() : 0;
         StringBuilder sb = new StringBuilder();
         sb.append(v.getClass().getSimpleName())
                 .append(" id=").append(v.getId())
-                .append(" children=").append(g.getChildCount());
+                .append(" children=").append(children);
         try {
             int[] loc = new int[2];
             v.getLocationOnScreen(loc);
@@ -1363,10 +1393,18 @@ public final class DouyinHook {
                     case MotionEvent.ACTION_DOWN:
                         down[0] = event.getRawX();
                         down[1] = event.getRawY();
-                        android.widget.FrameLayout.LayoutParams sp =
-                                (android.widget.FrameLayout.LayoutParams) v.getLayoutParams();
-                        start[0] = sp.leftMargin;
-                        start[1] = sp.topMargin;
+                        // v2.5：decor 不一定是 FrameLayout，旧版在 OnTouch 回调里
+                        // 直接强转会崩抖音（不在 ensureBall 的 try 内）。
+                        ViewGroup.LayoutParams lp = v.getLayoutParams();
+                        if (lp instanceof android.widget.FrameLayout.LayoutParams) {
+                            android.widget.FrameLayout.LayoutParams sp =
+                                    (android.widget.FrameLayout.LayoutParams) lp;
+                            start[0] = sp.leftMargin;
+                            start[1] = sp.topMargin;
+                        } else {
+                            start[0] = 0;
+                            start[1] = 0;
+                        }
                         dragged[0] = false;
                         return true;
                     case MotionEvent.ACTION_MOVE:

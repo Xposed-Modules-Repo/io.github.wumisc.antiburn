@@ -98,7 +98,12 @@ fun LiquidToggle(
                                 if ((target == 1f) != currentChecked) currentOnChange(target == 1f)
                             }
                         },
-                        onDragCancel = { scope.launch { press.animateTo(0f, spring()) } },
+                        onDragCancel = { scope.launch {
+                            press.animateTo(0f, spring())
+                            // v2.5：拖拽取消必须把进度复位到磁盘真值，否则界面停在
+                            // 拖到的位置而 conf 里还是旧值，看起来「开关又回去了」。
+                            fraction.animateTo(if (currentChecked) 1f else 0f, spring())
+                        } },
                         onHorizontalDrag = { change, drag ->
                             change.consume()
                             scope.launch { fraction.snapTo((fraction.value + drag / dragWidth).coerceIn(0f, 1f)) }
@@ -210,7 +215,10 @@ fun LiquidSlider(
                     detectHorizontalDragGestures(
                         onDragStart = { scope.launch { press.animateTo(1f, spring()) } },
                         onDragEnd = { scope.launch { press.animateTo(0f, spring()) } },
-                        onDragCancel = { scope.launch { press.animateTo(0f, spring()) } },
+                        onDragCancel = { scope.launch {
+                            press.animateTo(0f, spring())
+                            progress.animateTo(currentFrac, spring())
+                        } },
                         onHorizontalDrag = { change, drag ->
                             change.consume()
                             scope.launch {

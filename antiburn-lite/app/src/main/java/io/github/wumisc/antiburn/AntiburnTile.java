@@ -60,11 +60,17 @@ public class AntiburnTile extends TileService {
         t.updateTile();
     }
 
-    /** 经 ConfStore 读取当前 enable_status；读不到时默认视为开启。 */
+    /**
+     * 经 ConfStore 读取当前 enable_status；读不到时按「关闭」处理。
+     *
+     * <p>v2.5：旧版读不到返回 true（磁贴显示已开启），而 flipStatus() 读不到时
+     * 按关闭处理、首次点击必然写 1 —— 于是用户点一下磁贴仍是「已开启」，
+     * 看起来就是开关没反应。两边统一成 false。</p>
+     */
     private boolean readEnabled() {
         String conf = ConfStore.read();
         if (conf == null) {
-            return true;
+            return false;
         }
         for (String line : conf.split("\n")) {
             String t = line.trim();
@@ -72,7 +78,7 @@ public class AntiburnTile extends TileService {
                 return t.substring(t.indexOf('=') + 1).trim().equals("1");
             }
         }
-        return true;
+        return false;
     }
 
 }

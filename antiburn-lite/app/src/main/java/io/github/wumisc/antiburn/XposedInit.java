@@ -42,7 +42,9 @@ public class XposedInit implements IXposedHookLoadPackage {
             ConfStore.LOG_DIR + "/antiburn.log",
             "/sdcard/Android/Prevent burn-in/antiburn.log",
             ConfStore.LOG_DIR_FALLBACK + "/antiburn.log",
-            "/data/local/tmp/antiburn_diag.log",
+            // v2.5：旧版第 4 候选是 /data/local/tmp/antiburn_diag.log，
+            // 但 exportLogs() 只收 LOG_DIR_FALLBACK/*.log，这个文件永远导不出来。
+            ConfStore.LOG_DIR_FALLBACK + "/antiburn_diag.log",
     };
     /** 探测失败后的冷却时间：过了这段时间允许重探（App 可能刚把目录建好） */
     private static final long PROBE_RETRY_MS = 30_000L;
@@ -119,9 +121,10 @@ public class XposedInit implements IXposedHookLoadPackage {
             try {
                 File f = new File(path);
                 if (f.length() > MAX_LOG_BYTES) {
+                    // v2.5：不再先 delete 旧备份再 rename。多进程（SystemUI/抖音/红果）
+                    // 同时轮转时旧版会互相删掉对方刚生成的备份、丢失日志行。
+                    // rename 失败就继续 append，最多文件稍大，绝不丢行。
                     File old = new File(path + ".1");
-                    //noinspection ResultOfMethodCallIgnored
-                    old.delete();
                     //noinspection ResultOfMethodCallIgnored
                     f.renameTo(old);
                 }
@@ -136,7 +139,10 @@ public class XposedInit implements IXposedHookLoadPackage {
         Log.i(TAG, "DIAG " + s);
         // 抖音 / 红果是普通 app，写不了 /sdcard；用 root 通道低频补一条，
         // 保证「打开开关后仍然没有任何日志」这种事不再发生。
-        if (Process.myUid() != Process.SYSTEM_UID) {
+        // v2.5：不再依赖 myUid()==SYSTEM_UID 判断。国产 ROM 的 SystemUI 未必是
+        // uid 1000，旧判断会让这些设备「直写失败后连 su 兜底都不试」，等于没有日志。
+        // 只要直写路径没成功，任何进程都允许低频 su 兜底。
+        {
             long now = System.currentTimeMillis();
             if (now - lastSuWrite > SU_WRITE_INTERVAL_MS) {
                 lastSuWrite = now;
@@ -186,7 +192,8 @@ public class XposedInit implements IXposedHookLoadPackage {
                     if (parent == null || !parent.exists()) {
                         continue;
                     }
-                    byte[] probe = ("# antiburn probe " + System.currentTimeMillis() + "\n")
+                    // 时间戳放行首：exportLogs() 按行首数字排序，旧格式以 # 开头会被过滤掉
+                    byte[] probe = (System.currentTimeMillis() + " # antiburn probe\n")
                             .getBytes(StandardCharsets.UTF_8);
                     try (FileOutputStream fo = new FileOutputStream(f, true)) {
                         fo.write(probe);

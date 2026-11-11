@@ -352,14 +352,22 @@ public final class Controller {
                     + " inWhitelist=" + inWhitelist + " status=" + Config.enableStatus
                     + " nav=" + Config.enableNav + " shift=" + Config.enableShift
                     + " ui=" + Config.uiStyle + " src=" + Config.lastSource
-                    + " rev=" + Config.lastRev + " cache=" + (Config.cacheReady() ? "ok" : "none"));
+                    + " rev=" + Config.lastRev + " cache=" + (Config.cacheReady() ? "ok" : "none")
+                    + " fetch=" + Config.fetchState);
         }
 
-        // 暂停条件：灭屏 / 前台在白名单（白名单语义：名单内应用前台时不隐藏系统栏）/ 全部功能关闭
-        if (!screenOn || inWhitelist || (!Config.enableStatus && !Config.enableNav)) {
+        // 暂停条件：灭屏 / 前台在白名单 / 总开关关闭。
+        // v2.5：总开关（防烧屏保护）是总闸。旧版条件是 (!status && !nav)，
+        // 只要导航栏开关开着，总开关关了隐藏动作照跑；enableShift 更是完全不看总开关，
+        // 真机日志里 status=false 时 SHIFT 仍连续跑了 25 分钟。现在关掉即全部停止。
+        if (!screenOn || inWhitelist || !Config.enableStatus) {
             if (hidden) {
                 applyShow();
                 hidden = false;
+            }
+            if (PixelShift.isActive()) {
+                PixelShift.shutdown();
+                XposedInit.diag("SHIFT 总开关关闭，位移归零");
             }
             // 暂停期间古诗浮层同样必须移除（applyShow 只恢复系统栏，不清理 Overlay）
             removePoemScroll();
@@ -506,6 +514,11 @@ public final class Controller {
             return;
         }
         try {
+            // v2.5：wm.removeView 抛异常被吞后，View 仍 attach，onDetachedFromWindow
+            // 不触发，旧版 25fps 的 tickR 会永久泄漏并持有 View。先显式停循环。
+            if (poemScroll instanceof PoemScrollView) {
+                ((PoemScrollView) poemScroll).stop();
+            }
             WindowManager wm = (WindowManager) poemScroll.getContext()
                     .getSystemService(Context.WINDOW_SERVICE);
             wm.removeView(poemScroll);
@@ -535,10 +548,15 @@ public final class Controller {
         private int fgColor = 0xFFFFFFFF;
         private long lastColor = 0;
         private long lastTick = 0;
+        /** v2.5：显式停止重绘循环，避免 removeView 失败时 25fps 任务永久泄漏 */
+        private volatile boolean stopped;
 
         private final Runnable tickR = new Runnable() {
             @Override
             public void run() {
+                if (stopped) {
+                    return;
+                }
                 long now = System.currentTimeMillis();
                 if (now - lastColor > 5000) {
                     lastColor = now;
@@ -567,6 +585,7 @@ public final class Controller {
         @Override
         protected void onAttachedToWindow() {
             super.onAttachedToWindow();
+            stopped = false;
             lastColor = 0;
             Collections.shuffle(playList, new Random());
             idx = 0;
@@ -578,6 +597,11 @@ public final class Controller {
         @Override
         protected void onDetachedFromWindow() {
             super.onDetachedFromWindow();
+            stop();
+        }
+
+        void stop() {
+            stopped = true;
             h.removeCallbacks(tickR);
         }
 

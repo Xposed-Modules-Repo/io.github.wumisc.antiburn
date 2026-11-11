@@ -155,30 +155,35 @@ private val AbStateSaver = listSaver(
         if (l.size < 23) {
             null
         } else {
+            // v2.5：跨版本升级时 Bundle 里的元素类型可能变化，旧版无条件 as
+            // 会直接 ClassCastException 崩溃；逐项用 as? + 默认值兜底。
+            fun Bool(i: Int, def: Boolean = false) = l[i] as? Boolean ?: def
+            fun Intv(i: Int, def: Int) = l[i] as? Int ?: def
+            fun Str(i: Int, def: String = "") = l[i] as? String ?: def
             AbState(
-                enableStatus = l[0] as Boolean,
-                enableNav = l[1] as Boolean,
-                enablePoem = l[2] as Boolean,
-                enableBall = l[3] as Boolean,
-                enableLog = l[4] as Boolean,
-                enableDouyinTop = l[5] as Boolean,
-                enableDouyinBottom = l[6] as Boolean,
-                enableDouyinLike = l[7] as Boolean,
-                enableDouyinRt = l[8] as Boolean,
-                enableDouyinLt = l[9] as Boolean,
-                enableLive = l[10] as Boolean,
-                enableDramaTop = l[11] as Boolean,
-                enableDramaBottom = l[12] as Boolean,
-                enableDramaLike = l[13] as Boolean,
-                enableDramaRt = l[14] as Boolean,
-                enableDramaLt = l[15] as Boolean,
-                hideSec = l[16] as Int,
-                showSec = l[17] as Int,
-                customPoems = l[18] as String,
-                whitelist = l[19] as String,
-                enableShift = l[20] as Boolean,
-                enableIcon = l[21] as Boolean,
-                uiStyle = l[22] as String,
+                enableStatus = Bool(0, true),
+                enableNav = Bool(1),
+                enablePoem = Bool(2),
+                enableBall = Bool(3),
+                enableLog = Bool(4),
+                enableDouyinTop = Bool(5),
+                enableDouyinBottom = Bool(6),
+                enableDouyinLike = Bool(7),
+                enableDouyinRt = Bool(8),
+                enableDouyinLt = Bool(9),
+                enableLive = Bool(10, true),
+                enableDramaTop = Bool(11),
+                enableDramaBottom = Bool(12),
+                enableDramaLike = Bool(13),
+                enableDramaRt = Bool(14),
+                enableDramaLt = Bool(15),
+                hideSec = Intv(16, 30),
+                showSec = Intv(17, 10),
+                customPoems = Str(18),
+                whitelist = Str(19),
+                enableShift = Bool(20, true),
+                enableIcon = Bool(21),
+                uiStyle = Str(22, "aosp"),
             )
         }
     },
@@ -415,6 +420,10 @@ private fun BurnInProtectApp() {
      */
     fun commit(target: AbState) {
         pendingSave = target
+        // v2.5：配置加载协程（含 su）可能要几秒，期间 savedState 还是默认值。
+        // 旧版无守卫，用户此时点开关写入后会被 LaunchedEffect 的加载结果覆盖，
+        // 表现就是「点了没反应 / 开关回滚」。现在先存进 pendingSave，加载完补写。
+        if (!loaded) return
         if (target == savedState) {
             pendingSave = null
             return
@@ -496,12 +505,17 @@ private fun BurnInProtectApp() {
         if (restarting) return
         scope.launch {
             restarting = true
-            val ok = withContext(Dispatchers.IO) { ConfStore.restartSystemUi() }
-            restarting = false
-            val msg = if (ok) "已重启系统界面，状态栏会短暂重绘后按新配置生效"
-            else "重启失败：请确认已授予 root 权限，或手动切换一次开关等待下个周期"
-            status = msg
-            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+            try {
+                val ok = withContext(Dispatchers.IO) { ConfStore.restartSystemUi() }
+                val msg = if (ok) "已重启系统界面，状态栏会短暂重绘后按新配置生效"
+                else "重启失败：请确认已授予 root 权限，或手动切换一次开关等待下个周期"
+                status = msg
+                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+            } finally {
+                // v2.5：Activity 销毁 / 重组会取消协程，旧版只在正常返回时复位，
+                // 一旦被取消 restarting 永远是 true，「重启界面」按钮彻底失效。
+                restarting = false
+            }
         }
     }
 
@@ -545,6 +559,11 @@ private fun BurnInProtectApp() {
         status = if (pair.second) "配置已读取 · root 已授权"
         else "配置已读取 · 未检测到 root（仍可保存到应用内配置）"
         loaded = true
+        // 加载窗口内用户点过的开关，在这里补写一次，不再被丢弃
+        val pending = pendingSave
+        if (pending != null && pending != state) {
+            commit(pending)
+        }
     }
 
     /** 把兜底目录里的日志汇总到用户指定目录，便于直接用文件管理器 / 电脑取走 */
@@ -1135,6 +1154,70 @@ private fun GroupTitle(t: String) {
 }
 
 // ---- 关于 ----
+
+/**
+ * 捐赠名单：只记录头像文字与昵称，金额一律不入库、不展示。
+ * 以后加人只改这张表的一行，界面会自动多出一行，不用动排版代码。
+ */
+private data class Donor(val name: String, val badge: String)
+
+private val DONORS = listOf(
+    Donor("*辉", "辉"),
+)
+
+@Composable
+private fun DonorCard() {
+    Card(
+        Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("捐赠名单", style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                Text(DONORS.size.toString() + " 位",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary)
+            }
+            Text("感谢每一位支持模块的朋友。名单只展示头像与昵称，金额不予展示。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 6.dp))
+            Spacer(Modifier.height(14.dp))
+            DONORS.forEachIndexed { index, d ->
+                if (index > 0) {
+                    Spacer(Modifier.height(10.dp))
+                }
+                // 头像 + 名称同一行：不设副行，避免出现金额 / 备注这类信息
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        Modifier
+                            .size(38.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Brush.linearGradient(listOf(
+                                MaterialTheme.colorScheme.primary,
+                                MaterialTheme.colorScheme.tertiary))),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(d.badge, style = MaterialTheme.typography.bodyMedium,
+                            color = Color.White)
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Text(d.name, style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                }
+            }
+            Text("名单按加入顺序排列 · 谢谢你们",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.fillMaxWidth().padding(top = 14.dp),
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+        }
+    }
+}
+
 @Composable
 private fun AboutPage() {
     Column(
@@ -1180,6 +1263,8 @@ private fun AboutPage() {
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center)
             }
         }
+        Spacer(Modifier.height(14.dp))
+        DonorCard()
     }
 }
 

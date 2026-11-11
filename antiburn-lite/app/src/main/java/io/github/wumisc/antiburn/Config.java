@@ -29,48 +29,72 @@ public final class Config {
 
     public static final String CONF = ConfStore.CONF;
 
-    public static boolean enableStatus = true;
-    public static boolean enableNav = false;
+    public static volatile boolean enableStatus = true;
+    public static volatile boolean enableNav = false;
     /**
      * 像素偏移（防烧屏的温和模式）。默认开启：它视觉无感，且与「隐藏」模式互补 ——
      * 隐藏降低点亮时间，偏移则把轮廓分摊到相邻像素，两者叠加才是完整防护。
      * 默认值与旧配置兼容：老用户 conf 里没有 enable_shift 时沿用此默认 true。
      */
-    public static boolean enableShift = true;
-    public static boolean enableDouyinTop = false;
-    public static boolean enableDouyinBottom = false;
-    public static boolean enableDouyinLike = false;
-    public static boolean enableDouyinRt = false;
-    public static boolean enableDouyinLt = false;
-    public static boolean enableDramaTop = false;
-    public static boolean enableDramaBottom = false;
-    public static boolean enableDramaLike = false;
-    public static boolean enableDramaRt = false;
-    public static boolean enableDramaLt = false;
-    public static boolean enableLive = true;
-    public static boolean enablePoem = false;
-    public static boolean enableBall = false;
-    public static String customPoems = "";
-    public static boolean enableIcon = false;
-    public static boolean enableLog = false;
+    public static volatile boolean enableShift = true;
+    public static volatile boolean enableDouyinTop = false;
+    public static volatile boolean enableDouyinBottom = false;
+    public static volatile boolean enableDouyinLike = false;
+    public static volatile boolean enableDouyinRt = false;
+    public static volatile boolean enableDouyinLt = false;
+    public static volatile boolean enableDramaTop = false;
+    public static volatile boolean enableDramaBottom = false;
+    public static volatile boolean enableDramaLike = false;
+    public static volatile boolean enableDramaRt = false;
+    public static volatile boolean enableDramaLt = false;
+    public static volatile boolean enableLive = true;
+    public static volatile boolean enablePoem = false;
+    public static volatile boolean enableBall = false;
+    public static volatile String customPoems = "";
+    public static volatile boolean enableIcon = false;
+    public static volatile boolean enableLog = false;
     /** 目标 UI 适配方案（conf 里的 ui_style，与 profiles/*.json 对应） */
-    public static String uiStyle = "aosp";
-    public static int hideSec = 30;
-    public static int showSec = 10;
-    public static Set<String> whitelist = new HashSet<>();
+    public static volatile String uiStyle = "aosp";
+    public static volatile int hideSec = 30;
+    public static volatile int showSec = 10;
+    public static volatile Set<String> whitelist = new HashSet<>();
 
     private static long lastRead = 0;
     private static String lastText = null;
     private static volatile Context hostContext;
+    /** 只来自 ConfigProvider 的权威配置；文件 / su 兜底绝不写进这里 */
     private static volatile String remoteText;
+    /** 文件 / su 兜底通道读到的配置，与 provider 严格分开，避免旧副本被当成权威值 */
+    private static volatile String directText;
+    /** 预取通道状态，写进 CONF apply 日志便于定位 provider 为何不通 */
+    public static volatile String fetchState = "init";
     private static volatile boolean fetcherStarted = false;
     private static volatile long lastSuTry = 0;
+    /** provider 的 Binder 调用可能永久阻塞：同一时刻只允许一个在途调用 */
+    private static final java.util.concurrent.atomic.AtomicBoolean callBusy =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+    /** 超时后仍卡在 Binder 里的线程数上限，避免每轮新开导致 daemon 线程无限累积 */
+    private static final java.util.concurrent.atomic.AtomicInteger liveCalls =
+            new java.util.concurrent.atomic.AtomicInteger(0);
+    private static final int MAX_LIVE_CALLS = 3;
+    private static volatile long lastCallReset = 0L;
     /** 已经生效的配置版本号（来自 conf 的 rev=），用于拒绝旧副本回滚新值 */
     private static volatile long appliedRev = 0L;
+    /**
+     * v2.5：appliedRev 以前只在进程内存里，SystemUI 一重启就归零，于是冷启动首帧
+     * 无论多旧的 /data/local/tmp 副本都会被当成「第一份配置」直接应用（真机日志
+     * 19:06:47 的 `src=conf rev=1794393553914`，那是 28 分钟前的值）。
+     * 现在把已生效 rev 落到 SystemUI 自己的 files 目录，attach() 时读回来做初值。
+     */
+    private static volatile File revFile;
+    private static volatile boolean revLoaded;
     /** SystemUI 自己的配置快照：provider 冷启动要几秒，这段时间靠它保证不读到旧值 */
     private static volatile String cacheText;
-    private static volatile boolean cacheLoaded;
+    /** 上次尝试读快照的时间：读失败要允许重试，不能像旧版 cacheLoaded 一次性闭锁 */
+    private static volatile long lastCacheRead;
     private static volatile File cacheFile;
+    /** 上次打印「拒绝过期配置」的时间，避免每 2 秒刷一条 */
+    private static volatile long lastRejectLog;
     /** 当前生效配置来自哪个通道：provider / cache / conf */
     public static volatile String lastSource = "-";
     public static volatile long lastRev = 0L;
@@ -85,6 +109,13 @@ public final class Config {
         }
         if (cacheFile == null) {
             cacheFile = prepareCacheFile(ctx);
+        }
+        if (!revLoaded) {
+            revLoaded = true;
+            long persisted = readPersistedRev();
+            if (persisted > 0L && persisted > appliedRev) {
+                appliedRev = persisted;
+            }
         }
         if (hostContext != null) {
             return;
@@ -104,13 +135,23 @@ public final class Config {
      */
     private static File prepareCacheFile(Context ctx) {
         try {
-            // 只在 SystemUI（system uid）里启用：抖音/红果是普通 app，
-            // 不能把快照写进别人家的私有目录
-            if (android.os.Process.myUid() != android.os.Process.SYSTEM_UID) {
+            File dir = ctx.getFilesDir();
+            if (dir == null) {
                 return null;
             }
-            File dir = ctx.getFilesDir();
-            return dir == null ? null : new File(dir, "antiburn-cache.conf");
+            // v2.4：不再用 myUid() == SYSTEM_UID 硬判断。国产 ROM 的 SystemUI
+            // 未必跑在 uid 1000（真机日志里该判断让快照 5.8 小时都没建立）。
+            // 快照只是「写自己进程的 files 目录」，任何进程写自己的那份都安全，
+            // 且配置自带 rev，旧快照不会覆盖新值。改成真实写探针即可。
+            File probe = new File(dir, "antiburn-cache.probe");
+            try (java.io.FileOutputStream fo = new java.io.FileOutputStream(probe, false)) {
+                fo.write(new byte[]{1});
+                fo.flush();
+            }
+            //noinspection ResultOfMethodCallIgnored
+            probe.delete();
+            revFile = new File(dir, "antiburn-applied.rev");
+            return new File(dir, "antiburn-cache.conf");
         } catch (Throwable t) {
             return null;
         }
@@ -129,10 +170,7 @@ public final class Config {
             Thread t = new Thread(() -> {
                 while (true) {
                     try {
-                        String text = fetchRemote();
-                        if (text != null && !text.trim().isEmpty()) {
-                            remoteText = text;
-                        }
+                        fetchRemote();
                     } catch (Throwable ignored) {
                     }
                     try {
@@ -147,53 +185,96 @@ public final class Config {
         }
     }
 
-    private static String fetchRemote() {
+    /**
+     * 取一次配置，分别更新 provider 通道与文件兜底通道。
+     *
+     * <p>v2.4 关键修复：ContentResolver.call() 在 HyperOS 上可能永久阻塞
+     * （provider 进程冷启动 / 被冻结），旧实现没有超时，一次卡住就让整个预取线程
+     * 再也不循环 —— 真机日志实测 5.8 小时内 2585 次读取全部落到 /data/local/tmp
+     * 的 su 副本。现在把 call 放进独立线程并限时 2.5 秒，超时就走文件兜底，
+     * 预取线程永远活着。同时文件兜底只写 directText，绝不覆盖 remoteText，
+     * 避免把滞后的旧副本误当成 provider 的权威值。</p>
+     */
+    private static void fetchRemote() {
         Context ctx = hostContext;
         if (ctx == null) {
             ctx = reflectApplication();
         }
-        if (ctx != null) {
-            try {
-                Bundle b = ctx.getContentResolver().call(
-                        Uri.parse("content://" + ConfigProvider.AUTHORITY),
-                        ConfigProvider.METHOD_GET, null, null);
-                if (b != null) {
-                    String s = b.getString(ConfigProvider.KEY_CONF);
-                    if (s != null && !s.trim().isEmpty()) {
-                        return s;
+        String state;
+        long now = System.currentTimeMillis();
+
+        // 5 分钟才强制放开一次，且卡住的线程累计到 MAX_LIVE_CALLS 就彻底不再新建：
+        // 旧版每 60 秒无条件放开，会每 60 秒泄漏一个永久阻塞的 daemon 线程。
+        if (now - lastCallReset > 300000L && liveCalls.get() < MAX_LIVE_CALLS) {
+            lastCallReset = now;
+            callBusy.set(false);
+        }
+
+        if (ctx == null) {
+            state = "no-context";
+        } else if (liveCalls.get() >= MAX_LIVE_CALLS) {
+            state = "provider-exhausted";
+        } else if (callBusy.compareAndSet(false, true)) {
+            final Context c = ctx;
+            final String[] out = new String[1];
+            liveCalls.incrementAndGet();
+            Thread call = new Thread(() -> {
+                try {
+                    Bundle req = new Bundle();
+                    req.putString(ConfigProvider.KEY_TOKEN, ConfigProvider.TOKEN);
+                    Bundle b = c.getContentResolver().call(
+                            Uri.parse("content://" + ConfigProvider.AUTHORITY),
+                            ConfigProvider.METHOD_GET, null, req);
+                    if (b != null) {
+                        out[0] = b.getString(ConfigProvider.KEY_CONF);
                     }
+                } catch (Throwable ignored) {
+                } finally {
+                    callBusy.set(false);
+                    liveCalls.decrementAndGet();
                 }
+            }, "antiburn-provider-call-" + liveCalls.get());
+            call.setDaemon(true);
+            call.start();
+            try {
+                call.join(2500L);
             } catch (Throwable ignored) {
             }
+            if (out[0] != null && !out[0].trim().isEmpty()) {
+                remoteText = out[0];
+                state = "provider";
+            } else {
+                state = call.isAlive() ? "provider-timeout" : "provider-empty";
+                if (call.isAlive()) {
+                    // 给 Binder 一个中断机会；不响应也无妨，liveCalls 会拦住后续新建
+                    call.interrupt();
+                }
+            }
+        } else {
+            state = "provider-busy";
         }
-        // Provider 偶发失败（进程被杀 / binder 抖动 / 包可见性）时：
-        // 若此前已经拿到过 provider 的权威值，就继续复用它，绝不降级成文件值，
-        // 否则一次瞬时失败会把刚保存的新配置回滚成 /data/local/tmp 里的旧内容。
-        if (remoteText != null && !remoteText.trim().isEmpty()) {
-            return remoteText;
-        }
-        // 从未拿到过 provider 文本时，才读公共存储镜像（保存时由 root 同步写入）
+
         String direct = readDirect();
         if (direct != null && !direct.trim().isEmpty()) {
-            return direct;
-        }
-        // 最后兜底：低频尝试 su cat（避免每 1.5s fork 一次 su）
-        long now = System.currentTimeMillis();
-        if (now - lastSuTry > 30000L) {
-            lastSuTry = now;
-            String s = ConfStore.execSuCapture("cat " + CONF + " 2>/dev/null");
-            if (s != null && !s.trim().isEmpty()) {
-                return s;
+            directText = direct;
+            state += "+direct";
+        } else {
+            // 低频尝试 su cat（避免每 1.5s fork 一次 su）
+            if (now - lastSuTry > 30000L) {
+                lastSuTry = now;
+                String s = ConfStore.execSuCapture("cat " + CONF + " 2>/dev/null");
+                if (s == null || s.trim().isEmpty()) {
+                    s = ConfStore.execSuCapture(
+                            "cat /data/user/0/io.github.wumisc.antiburn/files/antiburn.conf 2>/dev/null"
+                                    + " || cat /data/data/io.github.wumisc.antiburn/files/antiburn.conf 2>/dev/null");
+                }
+                if (s != null && !s.trim().isEmpty()) {
+                    directText = s;
+                    state += "+su";
+                }
             }
-            // 再兜底：直接读模块应用内镜像（部分 root 方案允许 hook 进程调用 su）
-            s = ConfStore.execSuCapture(
-                    "cat /data/user/0/io.github.wumisc.antiburn/files/antiburn.conf 2>/dev/null"
-                            + " || cat /data/data/io.github.wumisc.antiburn/files/antiburn.conf 2>/dev/null");
-            if (s != null && !s.trim().isEmpty()) {
-                return s;
-            }
         }
-        return null;
+        fetchState = state;
     }
 
     private static Context reflectApplication() {
@@ -288,8 +369,12 @@ public final class Config {
             }
         }
         if (best == null) {
-            // 两条主通道都没有（首次安装 / App 从未保存过）才读文件兜底
-            String direct = readDirect();
+            // provider 与快照都还没有（首次安装 / 冷启动窗口）时用文件兜底。
+            // 优先复用后台线程已读好的 directText，避免主线程再做一次文件 IO。
+            String direct = directText;
+            if (direct == null || direct.trim().isEmpty()) {
+                direct = readDirect();
+            }
             if (direct != null && !direct.trim().isEmpty()) {
                 best = direct;
                 src = "conf";
@@ -300,43 +385,108 @@ public final class Config {
             return; // 全通道失败：保留现有值，绝不回退默认值
         }
         if (rev < appliedRev) {
-            // 手上这份比已经生效的更旧：不解析、不覆盖，等更新的版本来
+            // 手上这份比已经生效的更旧：不解析、不覆盖，等更新的版本来。
+            // appliedRev 现在由 SystemUI 本地文件持久化，冷启动首帧的旧 su 副本
+            // 会被这里直接挡掉，不再出现「重启后先按几天前的配置跑一阵」。
+            long t = System.currentTimeMillis();
+            if (t - lastRejectLog > 30000L) {
+                lastRejectLog = t;
+                XposedInit.diagForce("CONF reject stale src=" + src + " rev=" + rev
+                        + " applied=" + appliedRev + " fetch=" + fetchState);
+            }
             return;
         }
         if (rev == appliedRev && best.equals(lastText)) {
             return;
         }
+        boolean newVersion = rev > appliedRev;
         parse(best);
         lastText = best;
         appliedRev = rev;
         lastSource = src;
         lastRev = rev;
-        if (!"cache".equals(src)) {
+        writePersistedRev(rev);
+        // 只允许 provider 来源刷新快照。旧版把 conf 兜底也写进快照，等于把滞后的
+        // su 副本「洗白」成本地权威值，冷启动会一直读它。
+        if ("provider".equals(src)) {
             writeCache(best);
+        }
+        // 用户改了配置就给熔断一次重试机会：否则某 ROM 上偶发 3 次异常后
+        // 本进程内像素偏移永久停用，改设置也救不回来。
+        if (newVersion) {
+            FeatureGuard.resetAll();
         }
         XposedInit.diagForce("CONF apply src=" + src + " rev=" + rev
                 + " status=" + enableStatus + " nav=" + enableNav
                 + " shift=" + enableShift + " ui=" + uiStyle
-                + " wl=" + whitelist.size());
+                + " wl=" + whitelist.size() + " fetch=" + fetchState
+                + " cache=" + (cacheText != null ? "ok" : "none"));
     }
 
-    /** 读一次配置快照；之后只用内存里的副本，避免每个周期都做文件 IO。 */
+    /** 读回上次真正生效的 rev；文件不存在 / 损坏都当 0（首次安装）。 */
+    private static long readPersistedRev() {
+        File f = revFile;
+        if (f == null || !f.exists()) {
+            return 0L;
+        }
+        try (BufferedReader br = new BufferedReader(new FileReader(f))) {
+            String line = br.readLine();
+            return line == null ? 0L : Long.parseLong(line.trim());
+        } catch (Throwable ignored) {
+            return 0L;
+        }
+    }
+
+    /** 原子写回已生效 rev，失败不影响主流程。 */
+    private static void writePersistedRev(long rev) {
+        File f = revFile;
+        if (f == null) {
+            return;
+        }
+        try {
+            File tmp = new File(f.getAbsolutePath() + ".tmp");
+            try (java.io.FileOutputStream fo = new java.io.FileOutputStream(tmp, false)) {
+                fo.write(Long.toString(rev).getBytes("UTF-8"));
+                fo.flush();
+            }
+            if (!tmp.renameTo(f)) {
+                //noinspection ResultOfMethodCallIgnored
+                f.delete();
+                //noinspection ResultOfMethodCallIgnored
+                tmp.renameTo(f);
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /**
+     * 读配置快照。
+     *
+     * <p>v2.5：去掉旧版 `cacheLoaded` 一次性门闩 —— 首次 attach 时写探针若临时失败，
+     * 后续 attach 重试成功也不会再读文件，冷启动兜底快照永久缺失。
+     * 改成「内存已有就直接返回；否则每 3 秒最多重试一次」。</p>
+     */
     private static String cacheText() {
-        if (!cacheLoaded) {
-            cacheLoaded = true;
-            File f = cacheFile;
-            if (f != null && f.exists() && f.length() > 0 && f.length() <= 65536) {
-                try (BufferedReader br = new BufferedReader(new FileReader(f))) {
-                    StringBuilder sb = new StringBuilder();
-                    String line;
-                    while ((line = br.readLine()) != null) {
-                        sb.append(line).append('\n');
-                    }
-                    if (sb.length() > 0) {
-                        cacheText = sb.toString();
-                    }
-                } catch (Throwable ignored) {
+        if (cacheText != null) {
+            return cacheText;
+        }
+        long now = System.currentTimeMillis();
+        if (now - lastCacheRead < 3000L) {
+            return null;
+        }
+        lastCacheRead = now;
+        File f = cacheFile;
+        if (f != null && f.exists() && f.length() > 0 && f.length() <= 65536) {
+            try (BufferedReader br = new BufferedReader(new FileReader(f))) {
+                StringBuilder sb = new StringBuilder();
+                String line;
+                while ((line = br.readLine()) != null) {
+                    sb.append(line).append('\n');
                 }
+                if (sb.length() > 0) {
+                    cacheText = sb.toString();
+                }
+            } catch (Throwable ignored) {
             }
         }
         return cacheText;

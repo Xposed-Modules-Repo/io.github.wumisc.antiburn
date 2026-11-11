@@ -96,6 +96,13 @@ public final class ConfStore {
     private static volatile String lastSyncState = "未同步";
     private static volatile long rootCheckedAt;
     private static volatile boolean rootCached;
+    /** 最近一次写盘使用的 rev；配合 max(now, base+1) 保证时间回拨后仍单调递增 */
+    private static volatile long lastStampRev = 0L;
+    /** root 副本同步结果单独缓存，不再污染 hasRoot() 的「id -u 是否为 0」语义 */
+    private static volatile boolean syncOk;
+    private static volatile long syncAt;
+    /** 镜像是否仍是「启动时的默认配置」，供后台 su 迁移判断是否允许覆盖 */
+    private static volatile boolean mirrorIsDefault;
 
     private ConfStore() {
     }
@@ -107,6 +114,49 @@ public final class ConfStore {
         }
         Context a = ctx.getApplicationContext();
         appCtx = (a != null) ? a : ctx;
+        // v2.5：App 进程一启动就把镜像建好（纯本地文件 IO，毫秒级，绝不触发 su）。
+        // 这样之后任何写入都有完整基底，既不需要在 commit() 主线程里跑 su，
+        // 也不会出现「迁移线程几秒后回来覆盖用户刚点的开关」的竞态。
+        initMirrorFast();
+    }
+
+    /** 同步建立镜像基底：优先直读旧 conf，读不到用默认配置；全程无 su、无阻塞。 */
+    private static void initMirrorFast() {
+        if (readMirror() != null) {
+            return;
+        }
+        synchronized (LOCK) {
+            if (readMirror() != null) {
+                return;
+            }
+            String conf = readConfDirect();
+            boolean fromConf = conf != null && !conf.trim().isEmpty();
+            String base = fromConf ? conf : defaultContent();
+            writeMirror(base);
+            mirrorIsDefault = !fromConf;
+            appendAudit("MIRROR fast src=" + (fromConf ? "conf-direct" : "default"));
+        }
+    }
+
+    /** 直接读 /data/local/tmp 旧 conf；SELinux 拒绝时立即失败，不 fork su、不阻塞。 */
+    private static String readConfDirect() {
+        try {
+            File f = new File(CONF);
+            if (!f.exists() || f.length() <= 0 || f.length() > 65536L) {
+                return null;
+            }
+            try (FileInputStream in = new FileInputStream(f)) {
+                ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                byte[] buf = new byte[4096];
+                int n;
+                while ((n = in.read(buf)) > 0) {
+                    bos.write(buf, 0, n);
+                }
+                return new String(bos.toByteArray(), StandardCharsets.UTF_8);
+            }
+        } catch (Throwable ignored) {
+            return null;
+        }
     }
 
     private static File mirrorFile() {
@@ -216,6 +266,23 @@ public final class ConfStore {
         return (out != null && !out.trim().isEmpty()) ? out : null;
     }
 
+    /**
+     * 确保应用内镜像存在，返回其内容。
+     *
+     * <p>v2.5：init() 已在进程入口同步建好镜像，这里只做兜底，且**绝不触发 su**
+     * —— commit() 跑在主线程，一次 su 最长 20s 会直接 ANR。
+     * 旧 conf 的 su 迁移由 migrateIfNeededAsync() 在后台完成，且只在镜像仍为默认时合并。</p>
+     */
+    public static String ensureMirror() {
+        String m = readMirror();
+        if (m != null && !m.trim().isEmpty()) {
+            return m;
+        }
+        initMirrorFast();
+        m = readMirror();
+        return (m != null && !m.trim().isEmpty()) ? m : defaultContent();
+    }
+
     /** 兼容旧调用：是否「至少保存成功」。 */
     public static boolean write(String content) {
         return writeEx(content) != WRITE_FAILED;
@@ -233,6 +300,11 @@ public final class ConfStore {
      * （回读校验原本是为了确认 su 写成功，现在镜像写完即成功，无需校验）。
      */
     public static int writeEx(String content) {
+        return writeEx(content, null);
+    }
+
+    /** 带变更明细的写入：审计行能直接回答「谁把哪个键改成了什么」。 */
+    public static int writeEx(String content, String changes) {
         if (content == null) {
             return WRITE_FAILED;
         }
@@ -243,10 +315,11 @@ public final class ConfStore {
         synchronized (LOCK) {
             if (writeMirror(stamped)) {
                 // 镜像已落盘 = 保存成功。副本同步异步进行，绝不阻塞调用线程。
+                mirrorIsDefault = false;
                 scheduleSync(stamped);
                 appendAudit("WRITE ok rev=" + revOf(stamped)
                         + " status=" + valueOf(stamped, "enable_status")
-                        + " by=" + caller());
+                        + " by=" + caller() + (changes == null ? "" : " " + changes));
                 return WRITE_OK;
             }
         }
@@ -258,11 +331,22 @@ public final class ConfStore {
         return WRITE_FAILED;
     }
 
-    /** 在首行写入 rev=<毫秒时间戳>，并去掉旧 rev 行（保持「一个 key 一行」的格式）。 */
+    /**
+     * 在首行写入 rev=，并去掉旧 rev 行。
+     *
+     * <p>v2.5：不再直接用墙钟时间。NTP 校时 / 手动改时间 / 时区回拨会让新配置的
+     * rev 反而小于已生效版本，Config.reload() 里 `rev < appliedRev` 会把之后所有保存
+     * 永久拒绝（开关再也存不住，只能杀进程）。现在取 max(当前时间, 上次 rev+1,
+     * 现有镜像 rev+1)，保证任何情况下都严格递增。</p>
+     */
     private static String stampRev(String content) {
-        StringBuilder sb = new StringBuilder("rev=")
-                .append(System.currentTimeMillis())
-                .append('\n');
+        long rev;
+        synchronized (LOCK) {
+            long base = Math.max(lastStampRev, revOf(readMirror()));
+            rev = Math.max(System.currentTimeMillis(), base + 1L);
+            lastStampRev = rev;
+        }
+        StringBuilder sb = new StringBuilder("rev=").append(rev).append('\n');
         for (String line : content.split("\n", -1)) {
             if (line.startsWith("rev=") || line.trim().isEmpty()) {
                 continue;
@@ -301,6 +385,29 @@ public final class ConfStore {
         return "?";
     }
 
+    /** 把本次变更写成紧凑的一行，值过长的（诗句 / 白名单）截断，避免日志膨胀。 */
+    private static String describeChanges(Map<String, String> updates) {
+        StringBuilder sb = new StringBuilder("ch=");
+        int n = 0;
+        for (Map.Entry<String, String> e : updates.entrySet()) {
+            if (n++ > 0) {
+                sb.append(',');
+            }
+            if (n > 8) {
+                sb.append("...");
+                break;
+            }
+            String v = e.getValue();
+            if (v == null) {
+                v = "<del>";
+            } else if (v.length() > 24) {
+                v = v.substring(0, 24) + "~";
+            }
+            sb.append(e.getKey()).append('=').append(v);
+        }
+        return sb.toString();
+    }
+
     /**
      * 保存审计日志：每次写配置留下「谁写的 / 版本号 / 关键值」。
      *
@@ -317,10 +424,14 @@ public final class ConfStore {
             long now = System.currentTimeMillis();
             if (f.length() > 64 * 1024L) {
                 File old = new File(f.getAbsolutePath() + ".1");
-                //noinspection ResultOfMethodCallIgnored
-                old.delete();
-                //noinspection ResultOfMethodCallIgnored
-                f.renameTo(old);
+                // 先尝试直接 rename；只有目标已存在导致失败时才删旧备份重试。
+                // 旧实现先 delete 再 rename，rename 一旦失败备份已经丢了。
+                if (!f.renameTo(old)) {
+                    //noinspection ResultOfMethodCallIgnored
+                    old.delete();
+                    //noinspection ResultOfMethodCallIgnored
+                    f.renameTo(old);
+                }
             }
             try (FileOutputStream fo = new FileOutputStream(f, true)) {
                 fo.write((now + " " + s + "\n").getBytes(StandardCharsets.UTF_8));
@@ -402,8 +513,8 @@ public final class ConfStore {
                 + " && mv -f " + EXTERNAL_MIRROR + ".tmp " + EXTERNAL_MIRROR
                 + " && chmod 644 " + EXTERNAL_MIRROR + "; } 2>/dev/null; true";
         boolean ok = execSu(cmd);
-        rootCheckedAt = System.currentTimeMillis();
-        rootCached = ok;
+        syncAt = System.currentTimeMillis();
+        syncOk = ok;
         lastSyncState = ok ? "已同步 root 副本" : "root 不可用，仅用应用内配置（功能正常）";
     }
 
@@ -418,13 +529,26 @@ public final class ConfStore {
      * su 会阻塞，必须在后台线程执行。
      */
     public static void migrateIfNeededAsync() {
-        if (readMirror() != null) {
-            return;
-        }
         Thread t = new Thread(() -> {
+            // 只有「镜像仍是启动时的默认配置」才需要迁移；
+            // 用户已经保存过（镜像带 rev / 内容已变）时绝不覆盖。
+            if (!mirrorIsDefault) {
+                return;
+            }
             String conf = execSuCapture("cat " + CONF + " 2>/dev/null");
-            if (conf != null && !conf.trim().isEmpty()) {
-                writeMirrorOnly(conf);
+            if (conf == null || conf.trim().isEmpty()) {
+                return;
+            }
+            synchronized (LOCK) {
+                String cur = readMirror();
+                // 二次校验：内容必须仍是默认、且没有 rev（说明没人保存过）
+                if (cur == null || revOf(cur) > 0L
+                        || !cur.trim().equals(defaultContent().trim())) {
+                    return;
+                }
+                writeMirror(conf);
+                mirrorIsDefault = false;
+                appendAudit("MIRROR migrate from conf rev=" + revOf(conf));
             }
         }, "antiburn-conf-migrate");
         t.setDaemon(true);
@@ -465,12 +589,9 @@ public final class ConfStore {
             return WRITE_FAILED;
         }
         synchronized (LOCK) {
-            // 只读镜像，绝不在写入路径上触发 su：首次安装镜像不存在时直接基于默认配置生成，
-            // 旧版 conf 的迁移由 migrateIfNeededAsync() 在应用启动后异步完成。
-            String content = readMirror();
-            if (content == null || content.trim().isEmpty()) {
-                content = defaultContent();
-            }
+            // 基底必须完整：镜像缺失时先从旧 conf 迁移，绝不能用 defaultContent()
+            // 打底只叠加本次 diff（那会把用户其它所有设置静默重置）。
+            String content = ensureMirror();
             StringBuilder sb = new StringBuilder();
             Set<String> done = new HashSet<>();
             for (String line : content.split("\n", -1)) {
@@ -501,7 +622,7 @@ public final class ConfStore {
                     sb.append(e.getKey()).append('=').append(e.getValue()).append('\n');
                 }
             }
-            return writeEx(sb.toString());
+            return writeEx(sb.toString(), describeChanges(updates));
         }
     }
 
@@ -589,17 +710,36 @@ public final class ConfStore {
      * 把兜底目录里的日志汇总到用户指定目录，返回写入结果描述。
      * 用于「SystemUI 没有 /sdcard 写权限、只能写 /data/local/tmp」的设备。
      */
+    /**
+     * 汇总日志到用户可见文件。
+     *
+     * <p>v2.5 修复三个可观测性 bug（真机日志直接证实）：
+     * ① 旧实现用 `>>` 把 audit 与兜底日志反复追加，每点一次「日志」就重复一批
+     *    WRITE/SAVE 行，且 audit 全部堆在正文前面，时间戳从几小时前跳到现在，
+     *    按行读会严重误判时序；
+     * ② 只收 LOG_DIR_FALLBACK/*.log，主目录里其它进程的日志收不到；
+     * ③ 没有上限，长期使用无限膨胀。
+     * 现在：收集全部来源 → 按行首时间戳排序 → 整行去重 → 只留最近 4000 行 →
+     * 写临时文件后原子覆盖，绝不重复追加。</p>
+     */
     public static String exportLogs() {
-        // 保存审计日志在应用私有目录：root 才能读，一并复制到用户可见目录，
-        // 「谁把开关改回去」直接看这一段就够了
         File audit = auditFile();
-        String auditCmd = audit == null ? ""
-                : "cat \"" + audit.getAbsolutePath() + "\" >> \"" + LOG_FILE + "\" 2>/dev/null; ";
-        String cmd = "mkdir -p \"" + LOG_DIR + "\" 2>/dev/null; " + auditCmd
-                + "for f in \"" + LOG_DIR_FALLBACK + "\"/*.log; do "
-                + "[ -f \"$f\" ] && cat \"$f\" >> \"" + LOG_FILE + "\" 2>/dev/null; done; "
+        String auditSrc = audit == null ? "" : " \"" + audit.getAbsolutePath() + "\"";
+        String cmd = "mkdir -p \"" + LOG_DIR + "\" 2>/dev/null; "
+                + "{ cat" + auditSrc
+                + " \"" + LOG_DIR + "\"/antiburn*.log"
+                + " \"" + LOG_DIR_FALLBACK + "\"/*.log"
+                + " \"" + LOG_FILE + "\" 2>/dev/null; } "
+                + "| grep -E '^[0-9]{10,}' "
+                + "| sort -n -s -k1,1 "
+                + "| awk '!seen[$0]++' "
+                + "| tail -n 4000 > \"" + LOG_FILE + ".tmp\" 2>/dev/null; "
+                // 排序工具异常时宁可保留原日志，也不要把用户日志清空
+                + "if [ -s \"" + LOG_FILE + ".tmp\" ]; then "
+                + "mv -f \"" + LOG_FILE + ".tmp\" \"" + LOG_FILE + "\"; "
+                + "else rm -f \"" + LOG_FILE + ".tmp\"; fi 2>/dev/null; "
                 + "chmod 0666 \"" + LOG_FILE + "\" 2>/dev/null; "
-                + "ls -l \"" + LOG_FILE + "\" 2>/dev/null; true";
+                + "wc -l \"" + LOG_FILE + "\" 2>/dev/null; true";
         String out = execSuCapture(cmd);
         return out == null ? "" : out.trim();
     }
@@ -740,8 +880,12 @@ public final class ConfStore {
         return false;
     }
 
+    /**
+     * 执行写 / 重启类命令：超时或异常时**不重跑整条命令**。
+     * 旧实现会走 tryAltSu 再执行一遍，`pkill -f` 这类非幂等命令会把 SystemUI 杀两次。
+     */
     public static boolean execSu(String cmd) {
-        return execSuCapture(cmd) != null;
+        return runSu("su", cmd, false) != null;
     }
 
     /**
@@ -749,10 +893,10 @@ public final class ConfStore {
      * 独立线程消费 stdout + stderr，避免未读流把 su 进程缓冲区塞满而卡死。
      */
     public static String execSuCapture(String cmd) {
-        return runSu("su", cmd);
+        return runSu("su", cmd, true);
     }
 
-    private static String runSu(String suPath, String cmd) {
+    private static String runSu(String suPath, String cmd, boolean allowRetry) {
         Process p = null;
         final ByteArrayOutputStream out = new ByteArrayOutputStream();
         try {
@@ -782,9 +926,8 @@ public final class ConfStore {
             se.setDaemon(true);
             se.start();
             if (!p.waitFor(4, TimeUnit.SECONDS)) {
-                // su 卡在授权弹窗：杀掉后也要尝试绝对路径兜底，不能直接放弃
                 p.destroy();
-                return tryAltSu(suPath, cmd);
+                return allowRetry ? tryAltSu(suPath, cmd) : null;
             }
             so.join(1500);
             se.join(500);
@@ -799,7 +942,7 @@ public final class ConfStore {
                 } catch (Throwable ignore) {
                 }
             }
-            return tryAltSu(suPath, cmd);
+            return allowRetry ? tryAltSu(suPath, cmd) : null;
         }
     }
 
@@ -814,7 +957,7 @@ public final class ConfStore {
         };
         for (String alt : alts) {
             if (new File(alt).exists()) {
-                String r = runSu(alt, cmd);
+                String r = runSu(alt, cmd, false);
                 if (r != null) {
                     return r;
                 }

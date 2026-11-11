@@ -24,6 +24,9 @@ public final class ConfigProvider extends ContentProvider {
     public static final String AUTHORITY = "io.github.wumisc.antiburn.config";
     public static final String METHOD_GET = "antiburn_get_conf";
     public static final String KEY_CONF = "conf";
+    /** Provider 是 exported 的：要求调用方带模块内约定的 token，防止任意 App 读走配置全文 */
+    public static final String KEY_TOKEN = "token";
+    public static final String TOKEN = "antiburn-hook-v25";
 
     @Override
     public boolean onCreate() {
@@ -37,6 +40,11 @@ public final class ConfigProvider extends ContentProvider {
     @Override
     public Bundle call(String method, String arg, Bundle extras) {
         if (!METHOD_GET.equals(method)) {
+            return null;
+        }
+        // 模块 APK 同时加载进 App 与 hook 进程，两边共享这个常量；
+        // 第三方 App 直接 call() 不带 token 时返回 null。
+        if (extras == null || !TOKEN.equals(extras.getString(KEY_TOKEN))) {
             return null;
         }
         // 只读应用内镜像：provider 是导出的，不能在 Binder 线程里被任意应用触发 su。
