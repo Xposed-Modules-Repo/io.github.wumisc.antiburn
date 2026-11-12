@@ -314,6 +314,8 @@ object AbConf {
         lines["list_mode"] = s.listMode
         lines["whitelist"] = s.whiteList.trim()
         lines["blacklist"] = s.blackList.trim()
+        // 供 Hook 侧识别混装（App 已升级、SystemUI 仍跑旧 dex）
+        lines["app_ver"] = BuildConfig.VERSION_NAME
 
         val sb = StringBuilder()
         for (c in comments) sb.append(c).append('\n')
@@ -381,7 +383,13 @@ object AbConf {
     /** 把 diff 落到磁盘。名单三键由 diffOf 保证同批提交，这里无需再删旧别名。 */
     fun applyDiff(m: Map<String, String>): Int {
         if (m.isEmpty()) return ConfStore.WRITE_OK
-        return ConfStore.updateEx(m)
+        // 每次落盘都带上写入方版本。Hook 侧拿它与自己 dex 里内联的版本比对：
+        // 不一致说明「App 已升级、SystemUI 还在跑旧版 Hook」，此时新增配置键会被
+        // 旧代码静默忽略，表现为「开关点了没反应」。旧版 Hook 不认识这个键，
+        // 走 default 分支丢弃，不影响向下兼容。
+        val withVer = LinkedHashMap(m)
+        withVer["app_ver"] = BuildConfig.VERSION_NAME
+        return ConfStore.updateEx(withVer)
     }
 }
 

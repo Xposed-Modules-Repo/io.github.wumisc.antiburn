@@ -70,6 +70,16 @@ public final class Config {
     /** 两份名单各自的条数，仅用于诊断日志，便于核对「模式与内容是否配套」 */
     public static volatile int whiteCount = 0;
     public static volatile int blackCount = 0;
+    /**
+     * App 写入配置时记录的自身版本（App 侧 {@code app_ver} 键）。
+     *
+     * <p>用途只有一个：识别「App 已升级、SystemUI 还在跑旧版 Hook」这种混装状态。
+     * LSPosed 更新模块后，被 hook 的进程若不重启，它持有的仍是旧 APK 的 dex，
+     * 新增的配置键（如 {@code list_mode}）会被静默忽略，表现为「改了没反应」，
+     * 而两端各自看都正常。旧版 dex 编译期固化的版本号与新配置里的版本号一对，
+     * 不一致即可判定混装。</p>
+     */
+    public static volatile String appVer = "";
 
     private static long lastRead = 0;
     private static String lastText = null;
@@ -448,7 +458,23 @@ public final class Config {
                 + " shift=" + enableShift + " ui=" + uiStyle
                 + " wl=" + list.size() + " lm=" + listMode
                 + " w=" + whiteCount + " b=" + blackCount + " fetch=" + fetchState
-                + " cache=" + (cacheText != null ? "ok" : "none"));
+                + " cache=" + (cacheText != null ? "ok" : "none")
+                + " ver=" + BuildConfig.VERSION_NAME + staleTag());
+    }
+
+    /**
+     * 混装标记：App 写入的版本与当前运行的 Hook 版本不一致时输出。
+     *
+     * <p>出现这个标记说明「App 已经是新版、SystemUI 里还是旧版 Hook」，新配置键
+     * 不会被旧 dex 识别，所有新增开关都会表现为无效。修法是重启 SystemUI，
+     * 不要再去翻配置内容。</p>
+     */
+    private static String staleTag() {
+        String app = appVer;
+        if (app == null || app.isEmpty() || app.equals(BuildConfig.VERSION_NAME)) {
+            return "";
+        }
+        return " HOOK-STALE app_ver=" + app;
     }
 
     /** 读回上次真正生效的 rev；文件不存在 / 损坏都当 0（首次安装）。 */
@@ -570,6 +596,8 @@ public final class Config {
         boolean blackPresent = false;
         Set<String> wl = new HashSet<>();
         Set<String> bl = new HashSet<>();
+        /** App 侧写入的版本号；缺键或空串表示旧配置，不做混装判定 */
+        String appVerRaw = null;
         // 兼容旧版：custom_poems 曾被直接写成多行，后续行没有 '='，这里回收成诗句
         StringBuilder orphan = new StringBuilder();
         String customDecoded = null;
@@ -619,6 +647,9 @@ public final class Config {
                 case "list_mode":
                     modePresent = true;
                     modeRaw = ConfStore.normMode(v);
+                    break;
+                case "app_ver":
+                    appVerRaw = v;
                     break;
                 case "whitelist":
                     whitePresent = true;
@@ -670,6 +701,9 @@ public final class Config {
         enableLog = lg;
         uiStyle = style;
         customPoems = custom;
+        if (appVerRaw != null) {
+            appVer = appVerRaw;
+        }
         // 与 App 侧 coerceIn 保持一致，防止外部写入超大值让周期变成几十小时
         hideSec = Math.min(3600, Math.max(1, h));
         showSec = Math.min(3600, Math.max(1, s));

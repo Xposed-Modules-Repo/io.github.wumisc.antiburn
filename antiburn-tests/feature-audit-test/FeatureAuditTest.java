@@ -299,6 +299,22 @@ public class FeatureAuditTest {
         check(count(main, "ListModeChips\\(") == 2,
                 "T-07b 名单卡片全局只有 1 处调用（1 定义 + 1 调用）", "");
 
+        // ---------- T-08 混装检测：App 已升级、SystemUI 仍跑旧 Hook ----------
+        // 这是真实发生过的一次排障：App 是 2.9.1、SystemUI 进程还是装包前启动的，
+        // 跑着 2.7 的 dex，list_mode 等新键全被忽略，日志却看不出任何异常。
+        // 版本号必须出现在诊断行里，否则下次还只能靠「日志格式像哪一版」去猜。
+        System.out.println("== T-08 版本标识（识别 App 新 / Hook 旧） ==");
+        String controller = read(dir.resolve("Controller.java"));
+        check(config.contains("case \"app_ver\":"), "T-08a Config 解析 app_ver 键", "");
+        check(config.contains("BuildConfig.VERSION_NAME"), "T-08b Hook 侧诊断输出自身版本", "");
+        check(controller.contains("\" ver=\" + BuildConfig.VERSION_NAME"),
+                "T-08c SYS 行带版本号", "");
+        check(controller.contains("pauseReason("), "T-08d SHIFT 停止按原因分类打印", "");
+        check(!controller.contains("SHIFT 总开关关闭"),
+                "T-08e 不再把灭屏 / 名单命中 / 总开关都写成「总开关关闭」", "");
+        check(main.contains("withVer[\"app_ver\"]"), "T-08f App 增量写入带 app_ver", "");
+        check(count(main, "lines\\[\"app_ver\"\\]") == 1, "T-08g App 全量写入带 app_ver", "");
+
         System.out.println();
         System.out.println("结果：" + pass + " 通过 / " + fail + " 失败");
         if (fail > 0) {

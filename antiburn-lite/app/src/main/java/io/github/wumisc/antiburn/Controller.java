@@ -357,7 +357,7 @@ public final class Controller {
                     + " nav=" + Config.enableNav + " shift=" + Config.enableShift
                     + " ui=" + Config.uiStyle + " src=" + Config.lastSource
                     + " rev=" + Config.lastRev + " cache=" + (Config.cacheReady() ? "ok" : "none")
-                    + " fetch=" + Config.fetchState);
+                    + " fetch=" + Config.fetchState + " ver=" + BuildConfig.VERSION_NAME);
         }
 
         // 暂停条件：灭屏 / 该前台包按当前名单模式不需要干预。
@@ -372,7 +372,7 @@ public final class Controller {
             }
             if (PixelShift.isActive()) {
                 PixelShift.shutdown();
-                XposedInit.diag("SHIFT 总开关关闭，位移归零");
+                XposedInit.diag("SHIFT 停止：" + pauseReason(screenOn, intervene, top));
             }
             // 暂停期间古诗浮层同样必须移除（applyShow 只恢复系统栏，不清理 Overlay）
             removePoemScroll();
@@ -753,6 +753,24 @@ public final class Controller {
                 }
             }
         }
+    }
+
+    /**
+     * 暂停原因。原来无论灭屏、名单命中还是总开关关闭都打印「总开关关闭」，
+     * 真机日志里会出现「status=true 却报总开关关闭」这类自相矛盾的记录，
+     * 排障时把人引向错误方向。三种原因必须分开写。
+     */
+    private static String pauseReason(boolean screenOn, boolean intervene, String top) {
+        if (!screenOn) {
+            return "灭屏";
+        }
+        if (!Config.enableStatus) {
+            return "总开关关闭";
+        }
+        if (!intervene) {
+            return "当前模式不干预该前台包 mode=" + Config.listMode + " top=" + top;
+        }
+        return "未知条件";
     }
 
     private static boolean isScreenOn() {
