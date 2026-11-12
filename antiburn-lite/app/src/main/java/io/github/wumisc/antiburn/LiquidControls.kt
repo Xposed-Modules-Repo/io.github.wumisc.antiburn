@@ -45,9 +45,10 @@ fun LiquidToggle(
     onCheckedChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val light = !isSystemInDarkTheme()
-    val accent = if (light) Color(0xFF34C759) else Color(0xFF30D158)
-    val trackColor = if (light) Color(0xFF787878).copy(0.2f) else Color(0xFF787880).copy(0.36f)
+    val dark = isSystemInDarkTheme()
+    // v2.6：统一强调色。旧版开关是 iOS 绿、滑条是亮蓝，加上主题紫/粉，观感割裂。
+    val accent = UiPalette.accent(dark)
+    val trackColor = if (!dark) Color(0xFF787878).copy(0.2f) else Color(0xFF787880).copy(0.36f)
 
     val density = LocalDensity.current
     val dragWidth = with(density) { 20f.dp.toPx() }
@@ -149,9 +150,10 @@ fun LiquidSlider(
     valueRange: ClosedFloatingPointRange<Float>,
     modifier: Modifier = Modifier,
 ) {
-    val light = !isSystemInDarkTheme()
-    val accent = if (light) Color(0xFF0088FF) else Color(0xFF0091FF)
-    val trackColor = if (light) Color(0xFF787878).copy(0.2f) else Color(0xFF787880).copy(0.36f)
+    val dark = isSystemInDarkTheme()
+    // v2.6：滑条与开关共用同一强调色，不再一处蓝一处绿。
+    val accent = UiPalette.accent(dark)
+    val trackColor = if (!dark) Color(0xFF787878).copy(0.2f) else Color(0xFF787880).copy(0.36f)
 
     val density = LocalDensity.current
     val thumbWidth = with(density) { 40f.dp.toPx() }

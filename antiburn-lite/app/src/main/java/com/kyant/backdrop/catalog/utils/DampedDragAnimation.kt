@@ -114,6 +114,18 @@ class DampedDragAnimation(
         }
     }
 
+    /**
+     * 由外部连续进度源（如 Pager 的滚动偏移）直接置位。
+     *
+     * <p>不走 [updateValue] 的弹簧插值：那条路径每帧重启一次动画，目标领先当前值约
+     * 100ms，滚动时指示器会明显落后于手指。这里用 snapTo 与滚动进度 1:1 对齐。
+     * 声明为 suspend 是为了让调用方在 snapshotFlow 的 collect 里同步调用，
+     * 不必每帧额外启一个协程。
+     */
+    suspend fun snapToValue(value: Float) {
+        valueAnimation.snapTo(value.coerceIn(valueRange))
+    }
+
     fun animateToValue(value: Float) {
         animationScope.launch {
             mutatorMutex.mutate {

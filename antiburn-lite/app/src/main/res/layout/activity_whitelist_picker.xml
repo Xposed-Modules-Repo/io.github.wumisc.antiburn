@@ -5,8 +5,9 @@
     android:orientation="vertical"
     android:background="@color/bg">
 
-    <!-- 弹窗标题 -->
+    <!-- 弹窗标题：v2.8 起由代码按名单模式（白/黑）动态设置 -->
     <TextView
+        android:id="@+id/wl_title"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:paddingStart="16dp"

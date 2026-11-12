@@ -29,16 +29,22 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * 图形化白名单选择：搜索 + 勾选应用，新用户无需知道包名。
- * 白名单语义：名单内的应用前台时，系统栏不执行周期性隐藏（防烧屏不生效）。
- * Android 11+ 包可见性：枚举已安装应用依赖 QUERY_ALL_PACKAGES 权限
+ * 图形化名单选择：搜索 + 勾选应用，新用户无需知道包名。
+ *
+ * <p>v2.8 起同一个页面服务两种模式，由 Intent extra {@link #EXTRA_MODE} 决定：
+ * 白名单语义是「名单内应用前台时不做防烧屏」，黑名单语义正好相反（只有名单内才做）。
+ * 两者数据分开存（whitelist= / blacklist=），切换模式互不覆盖。</p>
+ *
+ * <p>Android 11+ 包可见性：枚举已安装应用依赖 QUERY_ALL_PACKAGES 权限
  * （HyperOS 上表现为"获取应用列表"运行时授权）。此处主动申请并在授权后重载，
- * 避免授权了仍看不到应用列表。
+ * 避免授权了仍看不到应用列表。</p>
  */
 public final class WhitelistPickerActivity extends Activity {
 
+    /** 由调用方传入 white / black，缺省 white，保持旧调用点的行为 */
+    public static final String EXTRA_MODE = "extra_list_mode";
     private static final String PREFS = "antiburn_prefs";
-    private static final String KEY = "whitelist_apps";
+    private static final String KEY = "list_apps";
     private static final String QUERY_PERM = "android.permission.QUERY_ALL_PACKAGES";
     private static final int REQ_QUERY_ALL = 1;
 
@@ -55,24 +61,38 @@ public final class WhitelistPickerActivity extends Activity {
     private final List<AppItem> shown = new ArrayList<>();
     private final Set<String> selected = new HashSet<>();
     private AppAdapter adapter;
+    /** 当前编辑哪一份名单：white / black（off 模式进不来，由调用方拦掉） */
+    private String mode = ConfStore.MODE_WHITE;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         ConfStore.init(this);
-        // 修复：旧版只从 SharedPreferences 读勾选状态，conf 里已有的白名单会被当成"没选"，
-        // 用户点保存后直接把原白名单清空。现在以配置镜像为权威来源，prefs 仅作兜底。
+        mode = ConfStore.normMode(getIntent().getStringExtra(EXTRA_MODE));
+        if (ConfStore.MODE_OFF.equals(mode)) {
+            mode = ConfStore.MODE_WHITE; // off 模式没有名单可编辑，兜底成白名单
+        }
+        // 修复：旧版只从 SharedPreferences 读勾选状态，conf 里已有的名单会被当成"没选"，
+        // 用户点保存后直接把原名单清空。现在以配置镜像为权威来源，prefs 仅作兜底。
         String mirror = ConfStore.readMirror();
         if (mirror != null && !mirror.trim().isEmpty()) {
-            selected.addAll(ConfStore.parseWhitelist(ConfStore.whitelistFrom(mirror)));
+            ConfStore.Lists lists = ConfStore.readLists(mirror);
+            selected.addAll(ConfStore.MODE_BLACK.equals(mode) ? lists.black : lists.white);
         } else {
-            Set<String> saved = getPrefs().getStringSet(KEY, null);
+            Set<String> saved = getPrefs().getStringSet(prefsKey(), null);
+            if (saved == null && ConfStore.MODE_WHITE.equals(mode)) {
+                // v2.8 换了 prefs 键名，旧安装的勾选记录仍能兜底读回一次
+                saved = getPrefs().getStringSet("whitelist_apps", null);
+            }
             if (saved != null) {
                 selected.addAll(saved);
             }
         }
         setContentView(R.layout.activity_whitelist_picker);
-        setTitle("选择白名单应用");
+        String title = "选择" + listName() + "应用";
+        setTitle(title);
+        // 布局里的标题控件也要跟着模式变，否则窗体内仍是「白名单」字样
+        ((TextView) findViewById(R.id.wl_title)).setText(title);
         // 必须在 setContentView 之后设置小窗尺寸，否则会被 Dialog 主题重算覆盖
         getWindow().setLayout(
                 (int) (getResources().getDisplayMetrics().widthPixels * 0.9f),
@@ -110,19 +130,21 @@ public final class WhitelistPickerActivity extends Activity {
         loadApps(); // 首次加载
     }
 
-    /** 落地白名单：写 prefs（回填勾选）+ 写 conf 镜像/系统配置。失败时不关闭页面，允许重试。 */
+    /** 落地名单：写 prefs（回填勾选）+ 写 conf 镜像/系统配置。失败时不关闭页面，允许重试。 */
     private void saveSelection() {
         View btn = findViewById(R.id.wl_btn_save);
         btn.setEnabled(false);
-        getPrefs().edit().putStringSet(KEY, new HashSet<>(selected)).apply();
+        getPrefs().edit().putStringSet(prefsKey(), new HashSet<>(selected)).apply();
         final Set<String> snapshot = new HashSet<>(selected);
-        Toast.makeText(this, "正在保存 " + snapshot.size() + " 个白名单应用...", Toast.LENGTH_SHORT).show();
+        final String name = listName();
+        Toast.makeText(this, "正在保存 " + snapshot.size() + " 个" + name + "应用...", Toast.LENGTH_SHORT).show();
         new Thread(() -> {
-            boolean ok = ConfStore.replaceWhitelist(snapshot);
+            // 只改当前模式那一份，另一份原样保留；模式键与两份名单同一次落盘
+            boolean ok = ConfStore.replaceListOne(mode, snapshot);
             runOnUiThread(() -> {
                 btn.setEnabled(true);
                 if (ok) {
-                    Toast.makeText(this, "已保存：" + snapshot.size() + " 个白名单应用", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(this, "已保存：" + snapshot.size() + " 个" + name + "应用", Toast.LENGTH_SHORT).show();
                     setResult(RESULT_OK);
                     finish();
                 } else {
@@ -132,6 +154,14 @@ public final class WhitelistPickerActivity extends Activity {
                 }
             });
         }).start();
+    }
+
+    private String prefsKey() {
+        return KEY + "_" + mode;
+    }
+
+    private String listName() {
+        return ConfStore.MODE_BLACK.equals(mode) ? "黑名单" : "白名单";
     }
 
     @Override

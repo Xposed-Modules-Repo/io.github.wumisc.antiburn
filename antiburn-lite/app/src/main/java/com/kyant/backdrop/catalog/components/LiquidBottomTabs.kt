@@ -17,8 +17,10 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -63,6 +65,15 @@ fun LiquidBottomTabs(
     backdrop: Backdrop,
     tabsCount: Int,
     modifier: Modifier = Modifier,
+    /**
+     * 可选的连续页进度源（0f..tabsCount-1f），通常传
+     * `{ pagerState.currentPage + pagerState.currentPageOffsetFraction }`。
+     *
+     * <p>不传时行为与旧版一致：只在 [selectedTabIndex] 的整数变化后做一次弹簧动画，
+     * 用户左右滑动页面时指示器要等翻页进度过半才动一下，视觉上是「跳」而不是「跟」。
+     * 传入后指示器由滚动进度逐帧驱动，滑动全程贴手。
+     */
+    tabProgress: (() -> Float)? = null,
     content: @Composable RowScope.() -> Unit
 ) {
     val isLightTheme = !isSystemInDarkTheme()
@@ -99,6 +110,10 @@ fun LiquidBottomTabs(
         var currentIndex by remember(selectedTabIndex) {
             mutableIntStateOf(selectedTabIndex())
         }
+        /** 手指正按在 tab 上横向拖动：此期间暂停外部进度源写入，避免与拖拽互相覆盖 */
+        var tabDragging by remember { mutableStateOf(false) }
+        /** 拖拽序号：连续连拖时只让最后一次的收尾协程复位 tabDragging，防误复位后抖动 */
+        var dragSeq by remember { mutableIntStateOf(0) }
         val dampedDragAnimation = remember(animationScope) {
             DampedDragAnimation(
                 animationScope = animationScope,
@@ -107,8 +122,12 @@ fun LiquidBottomTabs(
                 visibilityThreshold = 0.001f,
                 initialScale = 1f,
                 pressedScale = 78f / 56f,
-                onDragStarted = {},
+                onDragStarted = {
+                    dragSeq++
+                    tabDragging = true
+                },
                 onDragStopped = {
+                    val mySeq = dragSeq
                     val targetIndex = targetValue.fastRoundToInt().fastCoerceIn(0, tabsCount - 1)
                     currentIndex = targetIndex
                     animateToValue(targetIndex.toFloat())
@@ -117,6 +136,11 @@ fun LiquidBottomTabs(
                             0f,
                             spring(1f, 300f, 0.5f)
                         )
+                        // 等回弹动画结束后再交还控制权：若立刻恢复跟随，此刻 Pager
+                        // 还停在旧页，指示器会先弹回原位再滚到新页，看起来是「跳一下」。
+                        if (dragSeq == mySeq) {
+                            tabDragging = false
+                        }
                     }
                 },
                 onDrag = { _, dragAmount ->
@@ -140,9 +164,30 @@ fun LiquidBottomTabs(
             snapshotFlow { currentIndex }
                 .drop(1)
                 .collectLatest { index ->
-                    dampedDragAnimation.animateToValue(index.toFloat())
+                    // 有连续进度源时位置完全由滚动进度决定，这里只负责通知切页。
+                    // 否则两路同时写同一个 Animatable：进度 snap 刚落地就被弹簧动画
+                    // 覆盖成目标整数，滑动中会看到指示器来回抽搐。
+                    if (tabProgress == null) {
+                        dampedDragAnimation.animateToValue(index.toFloat())
+                    }
                     onTabSelected(index)
                 }
+        }
+
+        // 页面滚动进度驱动指示器：拖动与惯性滚动全程 1:1 跟随手指。
+        if (tabProgress != null) {
+            // 调用方每次重组都会new一个新 lambda，直接把它当 LaunchedEffect 的 key
+            // 会让滚动流反复重建（每重建一次就重发当前值，滑动中偶发顿挫）。
+            // rememberUpdatedState 让流只建一次，始终读最新的进度源。
+            val progressSource = rememberUpdatedState(tabProgress)
+            LaunchedEffect(tabsCount) {
+                snapshotFlow { progressSource.value().coerceIn(0f, (tabsCount - 1).toFloat()) }
+                    .collect { progress ->
+                        if (!tabDragging) {
+                            dampedDragAnimation.snapToValue(progress)
+                        }
+                    }
+            }
         }
 
         val interactiveHighlight = remember(animationScope) {

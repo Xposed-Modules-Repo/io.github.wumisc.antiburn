@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 深色模式：启动帧就用近黑底色，避免系统深色下先闪一下浅色再切黑，护眼。 -->
+    <style name="Theme.AntiburnLite" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowBackground">#131417</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

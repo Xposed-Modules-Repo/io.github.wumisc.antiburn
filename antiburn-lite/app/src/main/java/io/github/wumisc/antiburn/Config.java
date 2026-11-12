@@ -57,7 +57,19 @@ public final class Config {
     public static volatile String uiStyle = "aosp";
     public static volatile int hideSec = 30;
     public static volatile int showSec = 10;
-    public static volatile Set<String> whitelist = new HashSet<>();
+    /**
+     * 当前模式真正生效的名单（v2.8 由旧字段 whitelist 改名而来）。
+     *
+     * <p>旧字段名 whitelist 会误导后来者：名单模式切到 black 后它装的是黑名单。
+     * 现在只管「生效集合」，语义由 {@link #listMode} 决定，判定统一走
+     * {@link #shouldIntervene(String)}，不要在别处直接 contains。</p>
+     */
+    public static volatile Set<String> list = new HashSet<>();
+    /** 名单模式：white（名单内豁免）/ black（仅名单内干预）/ off（不用名单） */
+    public static volatile String listMode = ConfStore.MODE_WHITE;
+    /** 两份名单各自的条数，仅用于诊断日志，便于核对「模式与内容是否配套」 */
+    public static volatile int whiteCount = 0;
+    public static volatile int blackCount = 0;
 
     private static long lastRead = 0;
     private static String lastText = null;
@@ -350,6 +362,18 @@ public final class Config {
 
         String provider = remoteText;
         String cache = cacheText();
+        // v2.6 关键修复：direct 通道必须参与 rev 仲裁，不能只在 provider/cache 都空时兜底。
+        // 真机日志实证：provider 曾成功过一次后 remoteText 一直留着旧文本；之后 provider
+        // 通道变空（provider-empty），best 便永远指向那份昨天的旧配置，而 App 新写入的内容
+        // 由 su 同步到 /data/local/tmp、被后台线程读进 directText（日志里 +direct），却因
+        // best 非空被整段丢弃 —— 结果 rev 卡在 19:12，00:42~01:02 的新设置全部没生效，
+        // 表现为「开关记不住 / 白名单不生效 / 保存了却没进 SystemUI」。
+        // 现在三条通道一起按 rev 取最新；rev 由 stampRev 保证严格单调，滞后的旧副本 rev
+        // 更小，会被下面 rev < appliedRev 的门槛挡掉，不会把配置回滚。
+        String direct = directText;
+        if (direct == null || direct.trim().isEmpty()) {
+            direct = readDirect();
+        }
         String best = null;
         String src = null;
         long rev = Long.MIN_VALUE;
@@ -368,17 +392,12 @@ public final class Config {
                 rev = r;
             }
         }
-        if (best == null) {
-            // provider 与快照都还没有（首次安装 / 冷启动窗口）时用文件兜底。
-            // 优先复用后台线程已读好的 directText，避免主线程再做一次文件 IO。
-            String direct = directText;
-            if (direct == null || direct.trim().isEmpty()) {
-                direct = readDirect();
-            }
-            if (direct != null && !direct.trim().isEmpty()) {
+        if (direct != null && !direct.trim().isEmpty()) {
+            long r = ConfStore.revOf(direct);
+            if (best == null || r > rev) {
                 best = direct;
                 src = "conf";
-                rev = ConfStore.revOf(direct);
+                rev = r;
             }
         }
         if (best == null) {
@@ -406,9 +425,12 @@ public final class Config {
         lastSource = src;
         lastRev = rev;
         writePersistedRev(rev);
-        // 只允许 provider 来源刷新快照。旧版把 conf 兜底也写进快照，等于把滞后的
-        // su 副本「洗白」成本地权威值，冷启动会一直读它。
-        if ("provider".equals(src)) {
+        // v2.6：快照刷新不再只认 provider。旧逻辑在 provider 通道变空、conf 副本
+        // 持续胜出时会让快照永远停在旧版本，冷启动多绕一次文件 IO。
+        // 现在只要「按 rev 仲裁胜出的是确实更新的版本」(newVersion) 就写；
+        // newVersion 已由 rev > appliedRev 保证，滞后的旧副本 rev 更小，
+        // 早在上面 rev < appliedRev 就被挡掉了，不会被「洗白」成本地权威值。
+        if (newVersion || "provider".equals(src)) {
             writeCache(best);
         }
         // 用户改了配置就给熔断一次重试机会：否则某 ROM 上偶发 3 次异常后
@@ -416,10 +438,16 @@ public final class Config {
         if (newVersion) {
             FeatureGuard.resetAll();
         }
+        // v2.6：带上三条通道各自的 rev，真机日志里能一眼看出「provider/cache 落后、
+        // direct 领先」这类通道不同步，不用再靠猜。
         XposedInit.diagForce("CONF apply src=" + src + " rev=" + rev
+                + " rp=" + ConfStore.revOf(provider)
+                + " rc=" + ConfStore.revOf(cache)
+                + " rd=" + ConfStore.revOf(direct)
                 + " status=" + enableStatus + " nav=" + enableNav
                 + " shift=" + enableShift + " ui=" + uiStyle
-                + " wl=" + whitelist.size() + " fetch=" + fetchState
+                + " wl=" + list.size() + " lm=" + listMode
+                + " w=" + whiteCount + " b=" + blackCount + " fetch=" + fetchState
                 + " cache=" + (cacheText != null ? "ok" : "none"));
     }
 
@@ -534,11 +562,14 @@ public final class Config {
         String style = uiStyle;
         String custom = customPoems;
         int h = hideSec, s = showSec;
-        // whitelist 优先；仅当它不存在时才用旧别名 blacklist，与 App 侧保持一致
+        // v2.8：模式与两份名单都来自 conf 的独立键。缺 list_mode 的旧配置按 white
+        // 解释，且 whitelist 缺键时回退旧别名 blacklist —— 与 v2.7 行为一致。
+        boolean modePresent = false;
+        String modeRaw = listMode;
         boolean whitePresent = false;
         boolean blackPresent = false;
         Set<String> wl = new HashSet<>();
-        Set<String> wlLegacy = new HashSet<>();
+        Set<String> bl = new HashSet<>();
         // 兼容旧版：custom_poems 曾被直接写成多行，后续行没有 '='，这里回收成诗句
         StringBuilder orphan = new StringBuilder();
         String customDecoded = null;
@@ -585,9 +616,15 @@ public final class Config {
                     break;
                 case "hide_duration": h = parseInt(v, h); break;
                 case "show_duration": s = parseInt(v, s); break;
+                case "list_mode":
+                    modePresent = true;
+                    modeRaw = ConfStore.normMode(v);
+                    break;
                 case "whitelist":
                     whitePresent = true;
-                    for (String p : v.split(",")) {
+                    // 分隔符同时认中文逗号与中英文分号：用户在中文输入法下粘贴包名时
+                    // 打出的是「，」，只认英文逗号会把整串当成一个包名，名单静默失效。
+                    for (String p : v.split("[,，;；]")) {
                         p = p.trim();
                         if (!p.isEmpty()) {
                             wl.add(p);
@@ -596,10 +633,10 @@ public final class Config {
                     break;
                 case "blacklist":
                     blackPresent = true;
-                    for (String p : v.split(",")) {
+                    for (String p : v.split("[,，;；]")) {
                         p = p.trim();
                         if (!p.isEmpty()) {
-                            wlLegacy.add(p);
+                            bl.add(p);
                         }
                     }
                     break;
@@ -636,35 +673,87 @@ public final class Config {
         // 与 App 侧 coerceIn 保持一致，防止外部写入超大值让周期变成几十小时
         hideSec = Math.min(3600, Math.max(1, h));
         showSec = Math.min(3600, Math.max(1, s));
-        // 配置里没写白名单行时保持原值，不因一次解析把已有名单清空
+        // v2.8：模式与名单一次性提交，避免「模式已切、名单还是旧的」中间态。
+        // 有 list_mode 时视为完整快照：目标名单缺键即当作空集（空集由
+        // shouldIntervene 统一兜底），绝不沿用上一次的集合 —— 否则从白名单切到
+        // 黑名单时，会把原白名单内容当成黑名单带进去，语义整体反向。
+        // 没有 list_mode 的旧配置保持「缺键不动已有名单」的原行为。
         if (whitePresent) {
-            whitelist = wl;
-        } else if (blackPresent) {
-            whitelist = wlLegacy;
+            whiteCount = wl.size();
+        }
+        if (blackPresent) {
+            blackCount = bl.size();
+        }
+        if (modePresent) {
+            listMode = ConfStore.normMode(modeRaw);
+            if (ConfStore.MODE_BLACK.equals(listMode)) {
+                list = blackPresent ? bl : new HashSet<String>();
+                if (!blackPresent) {
+                    blackCount = 0;
+                }
+            } else if (ConfStore.MODE_WHITE.equals(listMode)) {
+                list = whitePresent ? wl : new HashSet<String>();
+                if (!whitePresent) {
+                    whiteCount = 0;
+                }
+            }
+            // off：保留 list 原值，用户切回黑白名单时名单内容还在
+        } else {
+            listMode = ConfStore.MODE_WHITE;
+            if (whitePresent) {
+                list = wl;
+            } else if (blackPresent) {
+                // 旧别名迁移：v2.7 及更早版本的 blacklist 键其实就是白名单
+                list = bl;
+                whiteCount = bl.size();
+                blackCount = 0;
+            }
         }
         // 日志开关关闭时不输出（原来无条件 Log.i 会把白名单/前台包名写进 logcat）
         if (enableLog) {
             Log.i(XposedInit.TAG, "config reloaded: status=" + es + " nav=" + en
                     + " dyTop=" + dtop + " dyBottom=" + dbot + " dyLike=" + dlike
                     + " live=" + live + " poem=" + poem + " ball=" + ball
-                    + " hide=" + hideSec + "s show=" + showSec + "s whitelist=" + whitelist);
+                    + " hide=" + hideSec + "s show=" + showSec + "s mode=" + listMode
+                    + " list=" + list);
         }
     }
 
-    /** 未知的 ui_style 一律归到 aosp，避免外部写入脏值把适配逻辑带偏 */
-    private static String normStyle(String v) {
-        String s = (v == null) ? "" : v.trim().toLowerCase(java.util.Locale.ROOT);
-        switch (s) {
-            case "hyperos":
-            case "magicos":
-            case "coloros":
-            case "originos":
-            case "harmonyos":
-            case "aosp":
-                return s;
-            default:
-                return "aosp";
+    /**
+     * 是否需要对前台包执行干预（状态栏图标隐藏 + 像素偏移）。
+     *
+     * <p>v2.8：名单模式引入后，「灭屏 / 命中名单 / 总开关」这类判定如果继续散落在
+     * Controller 的 if 条件里，会变成四五个布尔项并列，改一处漏一处。这里收敛成
+     * 单一入口，Controller 只问「要不要干预」，不再自己解释名单语义。</p>
+     *
+     * <p>三条规则（与 ConfStore.MODE_* 一一对应）：</p>
+     * <ul>
+     *   <li>white：命中=豁免，未命中=干预；空名单 = 全部干预</li>
+     *   <li>black：命中=干预，未命中=豁免；空名单 = 退回全部干预</li>
+     *   <li>off  ：忽略名单，全部干预</li>
+     * </ul>
+     * <p>黑名单空集之所以不按字面「全部豁免」，是因为用户切到黑名单却没勾任何
+     * 应用时，模块会表现为完全没反应，极易被判定成「功能坏了」。</p>
+     */
+    public static boolean shouldIntervene(String pkg) {
+        if (!enableStatus) {
+            return false;
         }
+        String mode = listMode;
+        if (ConfStore.MODE_OFF.equals(mode)) {
+            return true;
+        }
+        boolean hit = pkg != null && list.contains(pkg);
+        if (ConfStore.MODE_BLACK.equals(mode)) {
+            return hit || list.isEmpty();
+        }
+        return !hit;
+    }
+
+    /** 未知的 ui_style 一律归到 aosp。归一逻辑集中在 UiStyle，App 侧与 Hook 侧共用一份，
+     *  避免两处各自维护列表导致「App 写 hyperos、模块读成 aosp」。 */
+    private static String normStyle(String v) {
+        return UiStyle.norm(v);
     }
 
     private static int parseInt(String s, int def) {

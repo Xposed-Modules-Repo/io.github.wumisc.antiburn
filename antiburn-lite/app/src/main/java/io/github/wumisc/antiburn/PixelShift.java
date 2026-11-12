@@ -71,6 +71,10 @@ public final class PixelShift {
      * 因此按用户选择的 ui_style 决定是否跳过中置容器。</p>
      */
     private static volatile boolean guardCenter;
+    /** 中置判定的容差 / 宽度阈值由 UiStyle 按厂商给出，不再硬编码 8% / 55%。 */
+    private static volatile int centerTolerancePct;
+    private static volatile int centerWidthPct;
+    private static volatile String currentStyle = UiStyle.AOSP;
 
     private PixelShift() {
     }
@@ -109,13 +113,26 @@ public final class PixelShift {
         }
     }
 
-    /** 由 Controller 按 ui_style 设置：非原生 UI 时避让中置胶囊。 */
+    /**
+     * 由 Controller 按 ui_style 设置。v2.7：六个 id 各自带一套「是否避让中置胶囊 +
+     * 中心容差 + 宽度阈值」，不再是「非 aosp 就一律同一个值」的二值判断。
+     * 参数来自 UiStyle（App 侧与 Hook 侧同一份真源），未知值自动归一到 aosp。
+     */
     public static void setStyle(String style) {
-        guardCenter = style != null && !"aosp".equals(style);
+        String id = UiStyle.norm(style);
+        currentStyle = id;
+        guardCenter = UiStyle.guardCenter(id);
+        centerTolerancePct = UiStyle.centerTolerancePct(id);
+        centerWidthPct = UiStyle.centerWidthPct(id);
     }
 
     public static boolean isGuardCenter() {
         return guardCenter;
+    }
+
+    /** 供诊断日志核对当前生效的厂商参数。 */
+    public static String styleState() {
+        return UiStyle.describe(currentStyle);
     }
 
     /** 是否已绑定可用目标。 */
@@ -220,7 +237,7 @@ public final class PixelShift {
      * 取不到宽度（布局尚未完成）时不避让，宁可多移一点也不要漏移。
      */
     private static boolean guarded(View root, View c) {
-        if (!guardCenter) {
+        if (!guardCenter || centerTolerancePct <= 0 || centerWidthPct <= 0) {
             return false;
         }
         int rw = root.getWidth();
@@ -234,7 +251,8 @@ public final class PixelShift {
             return false;
         }
         int cx = left + w / 2;
-        return Math.abs(cx - rw / 2) < rw * 8 / 100 && w < rw * 55 / 100;
+        return Math.abs(cx - rw / 2) < rw * centerTolerancePct / 100
+                && w < rw * centerWidthPct / 100;
     }
 
     private static void apply(View v, int x, int y) {

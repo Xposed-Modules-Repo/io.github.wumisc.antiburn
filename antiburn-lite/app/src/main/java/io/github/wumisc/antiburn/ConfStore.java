@@ -193,7 +193,11 @@ public final class ConfStore {
         sb.append("enable_drama_left_top=0\n");
         sb.append("hide_duration=30\n");
         sb.append("show_duration=10\n");
-        sb.append("whitelist=\n");
+        // v2.8：名单分黑白两种解释，模式与两份名单都是独立键。
+        // 缺 list_mode 的旧配置按 white 解释，升级后行为不变。
+        sb.append(KEY_MODE).append('=').append(MODE_WHITE).append('\n');
+        sb.append(KEY_WHITE).append("=\n");
+        sb.append(KEY_BLACK).append("=\n");
         return sb.toString();
     }
 
@@ -744,46 +748,138 @@ public final class ConfStore {
         return out == null ? "" : out.trim();
     }
 
+    // ---- 名单模式（v2.8）----
+    // 语义唯一真源，Hook 侧 Config 与 App 侧 AbConf 都从这里取，不允许各自维护一份字符串。
+    //   white：名单内豁免（前台时不隐藏/不偏移），名单为空 = 全部应用都干预
+    //   black：名单内干预，名单为空 = 退回全部干预（避免用户切过去后以为模块失效）
+    //   off  ：不使用名单，所有应用都干预
+    public static final String MODE_WHITE = "white";
+    public static final String MODE_BLACK = "black";
+    public static final String MODE_OFF = "off";
+    public static final String KEY_MODE = "list_mode";
+    public static final String KEY_WHITE = "whitelist";
+    public static final String KEY_BLACK = "blacklist";
+
+    /** 未知值一律归到 white：与旧版（没有 mode 键）的行为一致，升级后语义不变。 */
+    public static String normMode(String v) {
+        if (v == null) {
+            return MODE_WHITE;
+        }
+        String t = v.trim().toLowerCase(java.util.Locale.ROOT);
+        if (MODE_BLACK.equals(t) || "blacklist".equals(t) || "黑名单".equals(t)) {
+            return MODE_BLACK;
+        }
+        if (MODE_OFF.equals(t) || "off_list".equals(t) || "关闭".equals(t)) {
+            return MODE_OFF;
+        }
+        return MODE_WHITE;
+    }
+
+    /** 一份配置里「模式 + 两份名单」的一次性解析结果。 */
+    public static final class Lists {
+        public String mode = MODE_WHITE;
+        public final Set<String> white = new LinkedHashSet<>();
+        public final Set<String> black = new LinkedHashSet<>();
+
+        /** 当前模式真正生效的那份名单；off 模式下调用方按「不干预过滤」处理。 */
+        public Set<String> active() {
+            return MODE_BLACK.equals(mode) ? black : white;
+        }
+    }
+
     /**
-     * 仅替换白名单行（whitelist=/blacklist=），不动其它配置。
-     * conf 不存在时自动生成默认配置，解决「第一次打开白名单页永远保存失败」。
+     * 解析 list_mode / whitelist / blacklist 三键。
+     *
+     * <p>兼容旧配置：没有 list_mode 时按 white 解释；若既没有 list_mode 也没有
+     * whitelist、只有旧别名 blacklist，则把它当作白名单迁移过来 —— 这正是 v2.7
+     * 及更早版本的实际行为，保证升级后名单效果不变。</p>
      */
-    public static boolean replaceWhitelist(Set<String> whitelist) {
+    public static Lists readLists(String content) {
+        Lists out = new Lists();
+        if (content == null) {
+            return out;
+        }
+        boolean modePresent = false;
+        boolean whitePresent = false;
+        boolean blackPresent = false;
+        Set<String> w = new LinkedHashSet<>();
+        Set<String> b = new LinkedHashSet<>();
+        for (String line : content.split("\n")) {
+            String t = line.trim();
+            if (t.isEmpty() || t.startsWith("#")) {
+                continue;
+            }
+            int i = t.indexOf('=');
+            if (i < 0) {
+                continue;
+            }
+            String k = t.substring(0, i).trim();
+            String v = t.substring(i + 1).trim();
+            if (KEY_MODE.equals(k)) {
+                out.mode = normMode(v);
+                modePresent = true;
+            } else if (KEY_WHITE.equals(k)) {
+                whitePresent = true;
+                w.addAll(parseWhitelist(v));
+            } else if (KEY_BLACK.equals(k)) {
+                blackPresent = true;
+                b.addAll(parseWhitelist(v));
+            }
+        }
+        out.white.addAll(w);
+        out.black.addAll(b);
+        if (!modePresent && !whitePresent && blackPresent) {
+            out.white.clear();
+            out.white.addAll(b);
+            out.black.clear();
+        }
+        return out;
+    }
+
+    /**
+     * 原子写「模式 + 两份名单」。
+     *
+     * <p>三者必须在同一次 updateEx 里落盘：分成两次写会出现「模式已切到黑名单、
+     * 名单行还是旧白名单内容」的中间态，那一刻名单语义整体反向。conf 不存在时
+     * 自动生成默认配置，解决「第一次打开名单页永远保存失败」。</p>
+     */
+    public static boolean replaceList(String mode, Set<String> white, Set<String> black) {
         Map<String, String> m = new LinkedHashMap<>();
-        m.put("whitelist", join(whitelist));
-        m.put("blacklist", null); // 移除旧别名，避免两套名单互相打架
+        m.put(KEY_MODE, normMode(mode));
+        m.put(KEY_WHITE, join(white));
+        m.put(KEY_BLACK, join(black));
         return updateEx(m) != WRITE_FAILED;
     }
 
-    /**
-     * 从配置全文里取白名单：whitelist 优先（即使为空也优先），仅当不存在时才用旧别名 blacklist。
-     * 与 AbConf.load() / Config.parse() 的语义保持一致，避免两套名单共存时 UI 与 Hook 各读各的。
-     */
-    public static String whitelistFrom(String content) {
-        if (content == null) {
-            return "";
-        }
-        String whitelist = null;
-        String blacklist = null;
-        for (String line : content.split("\n")) {
-            String t = line.trim();
-            if (t.startsWith("whitelist=")) {
-                whitelist = t.substring(t.indexOf('=') + 1).trim();
-            } else if (t.startsWith("blacklist=")) {
-                blacklist = t.substring(t.indexOf('=') + 1).trim();
+    /** 只改指定模式那一份名单，另一份原样保留；模式与两份名单仍同批写入。 */
+    public static boolean replaceListOne(String mode, Set<String> set) {
+        // 「读另一半 → 合并 → 写回」必须整体持锁：否则在这中间有别的入口
+        // （磁贴 / 另一个页面 / 上一轮 save）写入时，会把对方刚写的名单覆盖掉。
+        // updateEx 内部也锁 LOCK，Java 的 synchronized 可重入，不会自锁。
+        synchronized (LOCK) {
+            Lists cur = readLists(ensureMirror());
+            Set<String> w = new LinkedHashSet<>(cur.white);
+            Set<String> b = new LinkedHashSet<>(cur.black);
+            Set<String> v = set == null ? new LinkedHashSet<>() : new LinkedHashSet<>(set);
+            if (MODE_BLACK.equals(normMode(mode))) {
+                b = v;
+            } else {
+                w = v;
             }
+            return replaceList(normMode(mode), w, b);
         }
-        if (whitelist != null) {
-            return whitelist;
-        }
-        return blacklist != null ? blacklist : "";
     }
 
-    /** 解析逗号分隔的白名单文本为去重、去空白的包名集合。 */
+    /**
+     * 解析名单文本为去重、去空白的包名集合。
+     *
+     * <p>分隔符认中文逗号与中英文分号，与 {@code Config.parse} 保持一致：
+     * 两侧必须用同一套规则，否则会出现「界面里存好了、模块侧解析不出来」的不一致。</p>
+     */
     public static Set<String> parseWhitelist(String text) {
         Set<String> set = new LinkedHashSet<>();
         if (text != null) {
-            for (String p : text.split(",")) {
+            for (String p : text.split("[,，;；]")) {
                 p = p.trim();
                 if (!p.isEmpty()) {
                     set.add(p);

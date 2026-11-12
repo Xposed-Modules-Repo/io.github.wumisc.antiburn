@@ -342,25 +342,30 @@ public final class Controller {
 
         boolean screenOn = isScreenOn();
         String top = currentTopPackage();
-        boolean inWhitelist = Config.whitelist.contains(top);
+        // v2.8：名单模式（白/黑/关闭）的解释权全部收进 shouldIntervene，
+        // 这里不再出现 inWhitelist 这类把某一种模式写死的变量。
+        boolean intervene = Config.shouldIntervene(top);
+        boolean inList = top != null && Config.list.contains(top);
 
-        // 白名单诊断（5s 节流）：让用户从 diag 文件直接核对"前台包 vs 白名单"是否命中
+        // 名单诊断（5s 节流）：让用户从 diag 文件直接核对「前台包 vs 名单」是否命中
         long nowWl = SystemClock.elapsedRealtime();
         if (nowWl - lastWlDiag >= 5000) {
             lastWlDiag = nowWl;
-            XposedInit.diag("SYS top=" + top + " whitelist=" + Config.whitelist
-                    + " inWhitelist=" + inWhitelist + " status=" + Config.enableStatus
+            XposedInit.diag("SYS top=" + top + " mode=" + Config.listMode
+                    + " list=" + Config.list + " hit=" + inList
+                    + " intervene=" + intervene + " status=" + Config.enableStatus
                     + " nav=" + Config.enableNav + " shift=" + Config.enableShift
                     + " ui=" + Config.uiStyle + " src=" + Config.lastSource
                     + " rev=" + Config.lastRev + " cache=" + (Config.cacheReady() ? "ok" : "none")
                     + " fetch=" + Config.fetchState);
         }
 
-        // 暂停条件：灭屏 / 前台在白名单 / 总开关关闭。
+        // 暂停条件：灭屏 / 该前台包按当前名单模式不需要干预。
+        // 名单模式与总开关的解释统一在 Config.shouldIntervene 内完成（含 black 空集兜底）。
         // v2.5：总开关（防烧屏保护）是总闸。旧版条件是 (!status && !nav)，
         // 只要导航栏开关开着，总开关关了隐藏动作照跑；enableShift 更是完全不看总开关，
         // 真机日志里 status=false 时 SHIFT 仍连续跑了 25 分钟。现在关掉即全部停止。
-        if (!screenOn || inWhitelist || !Config.enableStatus) {
+        if (!screenOn || !intervene) {
             if (hidden) {
                 applyShow();
                 hidden = false;
@@ -405,8 +410,8 @@ public final class Controller {
                 if (!Config.uiStyle.equals(lastShiftStyle)) {
                     lastShiftStyle = Config.uiStyle;
                     PixelShift.setStyle(Config.uiStyle);
-                    XposedInit.diagForce("SHIFT style=" + Config.uiStyle
-                            + " guardCenter=" + PixelShift.isGuardCenter());
+                    // v2.7：日志带上归一后的 id 与三家参数，便于真机逐家核对
+                    XposedInit.diagForce("SHIFT style=" + PixelShift.styleState());
                 }
                 PixelShift.bind(statusView, navView);
                 PixelShift.tick();
@@ -664,15 +669,11 @@ public final class Controller {
         // 状态栏：用 alpha=0 透明化而非 GONE。
         // 关键：透明不点亮像素（防烧屏效果不变），但视图保留触摸与下拉把手，
         // 第三方 App 里也能正常下拉通知栏/控制中心。
-        // 开关关闭时立即恢复（不等到显示窗口，否则用户关了开关还一直隐藏）
+        // v2.7：tick() 在 !enableStatus 时已提前 return + applyShow()，
+        // 能走到这里总闸必然是开的。删掉旧版恒真的 if (enableStatus) 冗余判断，
+        // 状态栏隐藏不再与总闸语义重复；恢复统一交给暂停分支处理。
         if (statusView != null) {
-            if (Config.enableStatus) {
-                hideStatusKeepNotify();
-            } else if (statusView.getAlpha() != 1f) {
-                // 开关关闭：父与子容器全部恢复（子容器透明不随父恢复，须逐个还原）
-                restoreStatusChildren();
-                Log.i(TAG, "status shown (switch off)");
-            }
+            hideStatusKeepNotify();
         }
         if (navView != null) {
             if (Config.enableNav) {

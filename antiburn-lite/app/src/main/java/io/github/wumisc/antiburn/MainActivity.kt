@@ -2,16 +2,21 @@ package io.github.wumisc.antiburn
 
 import android.app.Activity
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -37,13 +42,12 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -58,13 +62,15 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
@@ -132,8 +138,17 @@ data class AbState(
     val hideSec: Int = 30,
     val showSec: Int = 10,
     val customPoems: String = "",
-    val whitelist: String = "",
-)
+    /** 名单模式：white / black / off（off = 不使用名单，所有应用都干预） */
+    val listMode: String = ConfStore.MODE_WHITE,
+    /** 白名单内容：名单内应用前台时不干预 */
+    val whiteList: String = "",
+    /** 黑名单内容：只有名单内应用才干预（为空时退回全部干预） */
+    val blackList: String = "",
+) {
+    /** 当前模式对应的那份名单文本，UI 的输入框与卡片都读它 */
+    val activeList: String
+        get() = if (listMode == ConfStore.MODE_BLACK) blackList else whiteList
+}
 
 /** 改动后延迟写盘：合并连续点击，短时间内退出由 MainActivity.onStop 强制补齐 */
 private const val SAVE_DEBOUNCE_MS = 700L
@@ -147,8 +162,8 @@ private val AbStateSaver = listSaver(
             s.enableDouyinRt, s.enableDouyinLt, s.enableLive,
             s.enableDramaTop, s.enableDramaBottom, s.enableDramaLike,
             s.enableDramaRt, s.enableDramaLt,
-            s.hideSec, s.showSec, s.customPoems, s.whitelist,
-            s.enableShift, s.enableIcon, s.uiStyle,
+            s.hideSec, s.showSec, s.customPoems, s.whiteList,
+            s.enableShift, s.enableIcon, s.uiStyle, s.listMode, s.blackList,
         )
     },
     restore = { l: List<Any> ->
@@ -157,9 +172,13 @@ private val AbStateSaver = listSaver(
         } else {
             // v2.5：跨版本升级时 Bundle 里的元素类型可能变化，旧版无条件 as
             // 会直接 ClassCastException 崩溃；逐项用 as? + 默认值兜底。
-            fun Bool(i: Int, def: Boolean = false) = l[i] as? Boolean ?: def
-            fun Intv(i: Int, def: Int) = l[i] as? Int ?: def
-            fun Str(i: Int, def: String = "") = l[i] as? String ?: def
+            // v2.8：末尾新增 listMode / blackList，条数由 23 增到 25。
+            // 用 getOrNull 而不是直接下标，v2.7 存的 23 项 Bundle 仍能恢复
+            // （索引 19 在旧版就是名单文本，语义正好对应 whiteList），
+            // 新增字段取默认值，不会整体丢状态。
+            fun Bool(i: Int, def: Boolean = false) = l.getOrNull(i) as? Boolean ?: def
+            fun Intv(i: Int, def: Int) = l.getOrNull(i) as? Int ?: def
+            fun Str(i: Int, def: String = "") = l.getOrNull(i) as? String ?: def
             AbState(
                 enableStatus = Bool(0, true),
                 enableNav = Bool(1),
@@ -180,10 +199,12 @@ private val AbStateSaver = listSaver(
                 hideSec = Intv(16, 30),
                 showSec = Intv(17, 10),
                 customPoems = Str(18),
-                whitelist = Str(19),
+                whiteList = Str(19),
                 enableShift = Bool(20, true),
                 enableIcon = Bool(21),
                 uiStyle = Str(22, "aosp"),
+                listMode = ConfStore.normMode(Str(23)),
+                blackList = Str(24),
             )
         }
     },
@@ -194,14 +215,11 @@ object AbConf {
     private fun i(v: String?, def: Int): Int = v?.trim()?.toIntOrNull() ?: def
     private fun b(v: String?, def: Boolean = false): Boolean = if (v == null) def else v.trim() == "1"
 
-    /** 已知的 UI 适配方案 id（与 profiles 目录下的 json 一一对应） */
-    val UI_STYLE_IDS = listOf("hyperos", "magicos", "coloros", "originos", "harmonyos", "aosp")
+    /** 已知的 UI 适配方案 id（与 Hook 侧 UiStyle.IDS 同一份真源） */
+    val UI_STYLE_IDS: List<String> = UiStyle.IDS
 
-    /** 未知 / 空值一律归到 aosp，避免外部写入脏值让适配卡片显示成空白 */
-    fun normUiStyle(v: String?): String {
-        val s = v?.trim()?.lowercase(Locale.ROOT) ?: ""
-        return if (UI_STYLE_IDS.contains(s)) s else "aosp"
-    }
+    /** 未知 / 空值一律归到 aosp。归一逻辑与 Config/UiStyle 共用，避免跨进程不一致 */
+    fun normUiStyle(v: String?): String = UiStyle.norm(v)
 
     fun load(): AbState {
         // conf 与镜像都读不到 → 用类默认值（enableStatus/enableLive 为 true），
@@ -215,6 +233,7 @@ object AbConf {
             if (idx < 0) continue
             map[t.substring(0, idx).trim()] = t.substring(idx + 1).trim()
         }
+        val lists = ConfStore.readLists(conf)
         return AbState(
             enableStatus = b(map["enable_status"], true),
             enableNav = b(map["enable_navigation"]),
@@ -238,7 +257,11 @@ object AbConf {
             hideSec = i(map["hide_duration"], 30),
             showSec = i(map["show_duration"], 10),
             customPoems = ConfStore.decodeValue(map["custom_poems"] ?: ""),
-            whitelist = map["whitelist"] ?: map["blacklist"] ?: "",
+            // 模式与两份名单统一由 ConfStore.readLists 解析：迁移规则（旧别名
+            // blacklist 其实是白名单）只写一份，UI 与 Hook 不会各读各的。
+            listMode = lists.mode,
+            whiteList = lists.white.joinToString(","),
+            blackList = lists.black.joinToString(","),
         )
     }
 
@@ -288,8 +311,9 @@ object AbConf {
         lines["show_duration"] = s.showSec.coerceIn(1, 3600).toString()
         // 多行文本必须编码成单行，否则后面的 key 会被挤成非法行、配置解析错乱
         lines["custom_poems"] = ConfStore.encodeValue(s.customPoems)
-        lines["whitelist"] = s.whitelist.trim()
-        lines.remove("blacklist")
+        lines["list_mode"] = s.listMode
+        lines["whitelist"] = s.whiteList.trim()
+        lines["blacklist"] = s.blackList.trim()
 
         val sb = StringBuilder()
         for (c in comments) sb.append(c).append('\n')
@@ -342,18 +366,22 @@ object AbConf {
         if (old.customPoems != new.customPoems) {
             m["custom_poems"] = ConfStore.encodeValue(new.customPoems)
         }
-        if (old.whitelist != new.whitelist) m["whitelist"] = new.whitelist.trim()
+        if (old.whiteList != new.whiteList) m["whitelist"] = new.whiteList.trim()
+        if (old.blackList != new.blackList) m["blacklist"] = new.blackList.trim()
+        if (old.listMode != new.listMode) {
+            m["list_mode"] = ConfStore.normMode(new.listMode)
+            // 切模式必须与两份名单同批落盘：Hook 侧一旦看到 list_mode 就把它当成
+            // 完整快照（目标名单缺键即视为空），只写模式键会把当前名单清空。
+            m["whitelist"] = new.whiteList.trim()
+            m["blacklist"] = new.blackList.trim()
+        }
         return m
     }
 
-    /** 把 diff 落到磁盘；写白名单时一并清掉旧别名 blacklist，避免两套名单打架。 */
+    /** 把 diff 落到磁盘。名单三键由 diffOf 保证同批提交，这里无需再删旧别名。 */
     fun applyDiff(m: Map<String, String>): Int {
         if (m.isEmpty()) return ConfStore.WRITE_OK
-        return if (m.containsKey("whitelist")) {
-            ConfStore.updateExRemoving(m, setOf("blacklist"))
-        } else {
-            ConfStore.updateEx(m)
-        }
+        return ConfStore.updateEx(m)
     }
 }
 
@@ -384,11 +412,25 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun BurnInProtectApp() {
     val dark = isSystemInDarkTheme()
-    val scheme = if (dark) darkColorScheme() else lightColorScheme()
+    // v2.6：全 App 统一配色，深色正文恒为浅色，不再出现深色模式黑字。
+    val scheme = UiPalette.scheme(dark)
 
-    var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+    // v2.7：主内容改为可左右滑动的 Pager，selectedTab 直接派生自当前页，
+    // 液态玻璃导航栏读同一个值，滑动/点击都会让指示器跟随，不会出现「页面换了、高亮没换」。
+    val scope = rememberCoroutineScope()
+    val pagerState = rememberPagerState(pageCount = { 3 })
+    val selectedTab = pagerState.currentPage
+    fun goTab(index: Int) {
+        if (index in 0 until 3 && index != pagerState.currentPage) {
+            scope.launch { pagerState.animateScrollToPage(index) }
+        }
+    }
     // 功能页内部子页：0=通用 1=抖音 2=红果（抖音/红果各是一整页磁贴）
     var featurePage by rememberSaveable { mutableIntStateOf(0) }
+    // 二级菜单栈：null=主界面；thanks/donate/cycle 各是一个独立二级页。
+    // 用 saveable 保存，旋转/深浅色切换后不会退回主页。
+    var subPage by rememberSaveable { mutableStateOf<String?>(null) }
+    val openSub: (String) -> Unit = { subPage = it }
     var navMicroSec by rememberSaveable { mutableIntStateOf(45) }
     // 旋转/深浅色切换后保留未落盘的改动
     var state by rememberSaveable(stateSaver = AbStateSaver) { mutableStateOf(AbState()) }
@@ -404,7 +446,17 @@ private fun BurnInProtectApp() {
     var loaded by remember { mutableStateOf(false) }
 
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
+
+    /** 打开外部链接（项目地址 / 开源项目致敬名单），失败时给出明确提示而不是静默无反应。 */
+    val openUrl: (String) -> Unit = { url ->
+        try {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+        } catch (t: Throwable) {
+            Toast.makeText(context, "无法打开链接，请检查是否安装了浏览器", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     fun clock(): String =
         SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
@@ -458,17 +510,23 @@ private fun BurnInProtectApp() {
                 null
             }
             if (disk != null && disk != target) {
-                val drift = AbConf.diffOf(disk, target).keys
+                // 只把「本次真正写下去的键」算进偏差。名单文本经过 trim / 去重后回读
+                // 可能与输入框原文不完全一致（例如用户多打了一个逗号），这不是覆盖，
+                // 按整份状态比较会误报「已被其它入口改写」。其它入口改的键也不该报警，
+                // 直接以磁盘为准刷新界面即可。
+                val drift = AbConf.diffOf(disk, target).keys.filter { it in diff.keys }
                 state = disk
                 savedState = disk
                 pendingSave = null
-                status = "未完全生效：" + drift.take(3).joinToString("、") + " 已被其它入口改写"
-                Toast.makeText(context, status, Toast.LENGTH_LONG).show()
-                ConfStore.appendAudit(
-                    "SAVE-DRIFT want_status=" + target.enableStatus + " disk_status=" + disk.enableStatus
-                            + " keys=" + drift,
-                )
-                return
+                if (drift.isNotEmpty()) {
+                    status = "未完全生效：" + drift.take(3).joinToString("、") + " 已被其它入口改写"
+                    Toast.makeText(context, status, Toast.LENGTH_LONG).show()
+                    ConfStore.appendAudit(
+                        "SAVE-DRIFT want_status=" + target.enableStatus + " disk_status=" + disk.enableStatus
+                                + " keys=" + drift,
+                    )
+                    return
+                }
             }
             if (disk != null) {
                 state = disk
@@ -526,21 +584,30 @@ private fun BurnInProtectApp() {
         commit(newState)
     }
 
-    val wlLauncher = rememberLauncherForActivityResult(
+    val listLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) { result ->
-        // 只有白名单页真正保存成功才刷新，且只更新白名单字段：
+        // 只有名单页真正保存成功才刷新，且只更新名单相关字段：
         // 取消 / 点窗口外部关闭时不能把主页面其它未落盘改动一起丢弃。
         if (result.resultCode == Activity.RESULT_OK) {
             scope.launch {
                 val fresh = withContext(Dispatchers.IO) { AbConf.load() }
-                state = state.copy(whitelist = fresh.whitelist)
-                savedState = savedState.copy(whitelist = fresh.whitelist)
+                state = state.copy(
+                    listMode = fresh.listMode, whiteList = fresh.whiteList, blackList = fresh.blackList,
+                )
+                savedState = savedState.copy(
+                    listMode = fresh.listMode, whiteList = fresh.whiteList, blackList = fresh.blackList,
+                )
             }
         }
     }
-    val openWhitelist: () -> Unit = {
-        wlLauncher.launch(Intent(context, WhitelistPickerActivity::class.java))
+    // off 模式没有「生效名单」可编辑，此时打开选择页仍编辑白名单，便于用户先备好内容再启用
+    val openList: (String) -> Unit = { mode ->
+        val edit = if (mode == ConfStore.MODE_OFF) ConfStore.MODE_WHITE else mode
+        listLauncher.launch(
+            Intent(context, WhitelistPickerActivity::class.java)
+                .putExtra(WhitelistPickerActivity.EXTRA_MODE, edit)
+        )
     }
 
     // 每次 Activity 重建都重新读盘（loaded 不再参与 saveable），
@@ -596,82 +663,150 @@ private fun BurnInProtectApp() {
         )
     }
 
-    val backgroundBrush = Brush.linearGradient(
-        colors = listOf(
-            scheme.surfaceVariant.copy(alpha = 0.5f),
-            scheme.background,
-        ),
-    )
+    /** 名单生效自检：把「名单有没有真正落盘」和「怎么确认模块侧命中」分开讲清楚。 */
+    fun selfCheckList() {
+        scope.launch {
+            val msg = withContext(Dispatchers.IO) {
+                val conf = ConfStore.read()
+                if (conf == null) {
+                    "自检：读不到应用内配置，请先点一次保存"
+                } else {
+                    val lists = ConfStore.readLists(conf)
+                    val n = lists.active().size
+                    val mode = lists.mode
+                    val modeName = when (mode) {
+                        ConfStore.MODE_BLACK -> "黑名单"
+                        ConfStore.MODE_OFF -> "关闭名单"
+                        else -> "白名单"
+                    }
+                    val visible = if (mode == ConfStore.MODE_BLACK) state.blackList else state.whiteList
+                    if (mode == ConfStore.MODE_OFF) {
+                        "自检：当前已关闭名单，所有应用前台都会执行防烧屏（名单内容仍保留）"
+                    } else if (n == 0) {
+                        if (mode == ConfStore.MODE_BLACK) {
+                            "自检：黑名单为空，按兜底规则所有应用仍会执行防烧屏；" +
+                                    "勾选应用后只有这些应用生效"
+                        } else {
+                            "自检：白名单为空，所有应用前台都会执行防烧屏（当前 conf 已落盘）"
+                        }
+                    } else if (visible.isBlank()) {
+                        "自检异常：磁盘有 $n 个$modeName 应用，但界面没显示，请重新读取"
+                    } else {
+                        "自检通过：$modeName 已落盘 $n 个应用。命中判定由模块每 2 秒执行，" +
+                                "打开名单内应用后，诊断日志出现 hit=true 即代表生效"
+                    }
+                }
+            }
+            status = msg
+            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+        }
+    }
 
     MaterialTheme(colorScheme = scheme) {
+        // 系统返回键先回二级页，不直接退出 App
+        BackHandler(enabled = subPage != null) { subPage = null }
         Box(
             Modifier
                 .fillMaxSize()
-                .background(backgroundBrush)
+                .background(UiPalette.background(dark))
                 .windowInsetsPadding(WindowInsets.safeDrawing),
         ) {
-            when (selectedTab) {
-                0 -> HomeTilePage(
-                    enabled = state.enableStatus,
-                    onToggle = { on -> onStateChange { s -> s.copy(enableStatus = on) } },
-                    hideSec = state.hideSec,
-                    onHideSecChange = { sec -> onStateChange { s -> s.copy(hideSec = sec) } },
-                    showSec = state.showSec,
-                    whitelist = state.whitelist,
-                    uiStyle = state.uiStyle,
-                    onUiStyleChange = { id -> onStateChange { s -> s.copy(uiStyle = id) } },
-                    onOpenWhitelist = openWhitelist,
-                    saveBar = saveBar,
-                )
-                1 -> FeaturesPage(
-                    state = state,
-                    onStateChange = onStateChange,
-                    onOpenWhitelist = openWhitelist,
-                    saveBar = saveBar,
-                    featurePage = featurePage,
-                    onFeaturePageChange = { featurePage = it },
-                )
-                2 -> AboutPage()
-            }
+            // 柔光叠层：极淡的径向高光，深色近黑、浅色近白，细腻半透不刺眼
+            Box(Modifier.fillMaxSize().background(UiPalette.sheen(dark)))
 
-            Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 16.dp)) {
-                var burnOffsetY by remember { mutableStateOf(0.dp) }
-                LaunchedEffect(navMicroSec) {
-                    val ms = navMicroSec * 1000L
-                    while (true) {
-                        burnOffsetY = 1.dp
-                        delay(ms)
-                        burnOffsetY = 0.dp
-                        delay(ms)
+            if (subPage == null) {
+                // v2.7：左右滑动切换首页/功能/关于。selectedTab 派生自 pagerState.currentPage，
+                // 底部液态玻璃导航栏读同一个值，滑动过程中指示器随页面一起跟随。
+                // userScrollEnabled 保持开启；首页界面适配 chips 的横向滚动由 Pager 的
+                // 嵌套滚动机制让位，不会与整页滑动互相抢手势。
+                HorizontalPager(
+                    state = pagerState,
+                    modifier = Modifier.fillMaxSize(),
+                    beyondViewportPageCount = 2,
+                ) { page ->
+                    when (page) {
+                        0 -> HomeTilePage(
+                            enabled = state.enableStatus,
+                            onToggle = { on -> onStateChange { s -> s.copy(enableStatus = on) } },
+                            hideSec = state.hideSec,
+                            showSec = state.showSec,
+                            listMode = state.listMode,
+                            activeList = state.activeList,
+                            onListModeChange = { m -> onStateChange { s -> s.copy(listMode = m) } },
+                            onListTextChange = { txt ->
+                                onStateChange { s ->
+                                    if (s.listMode == ConfStore.MODE_BLACK) s.copy(blackList = txt)
+                                    else s.copy(whiteList = txt)
+                                }
+                            },
+                            uiStyle = state.uiStyle,
+                            onUiStyleChange = { id -> onStateChange { s -> s.copy(uiStyle = id) } },
+                            onOpenList = { openList(state.listMode) },
+                            onOpenCycle = { openSub("cycle") },
+                            onSelfCheck = { selfCheckList() },
+                            saveBar = saveBar,
+                        )
+                        1 -> FeaturesPage(
+                            state = state,
+                            onStateChange = onStateChange,
+                            saveBar = saveBar,
+                            featurePage = featurePage,
+                            onFeaturePageChange = { featurePage = it },
+                        )
+                        2 -> AboutPage(onOpen = openSub, onOpenUrl = openUrl)
                     }
                 }
-                Box(Modifier.offset { IntOffset(0, burnOffsetY.roundToPx()) }) {
-                    LiquidBottomTabs(
-                        selectedTabIndex = { selectedTab },
-                        onTabSelected = { selectedTab = it },
-                        backdrop = rememberLayerBackdrop(),
-                        tabsCount = tabs.size,
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
-                    ) {
-                        tabs.forEachIndexed { index, item ->
-                            LiquidBottomTab({ selectedTab = index }) {
-                                Icon(
-                                    imageVector = item.icon,
-                                    contentDescription = item.label,
-                                    tint = if (dark) Color.White.copy(alpha = 0.9f)
-                                    else Color.Black.copy(alpha = 0.85f),
-                                    modifier = Modifier.size(22.dp),
-                                )
-                                Text(
-                                    text = item.label,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = if (dark) Color.White.copy(alpha = 0.9f)
-                                    else Color.Black.copy(alpha = 0.85f),
-                                )
+
+                Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 16.dp)) {
+                    var burnOffsetY by remember { mutableStateOf(0.dp) }
+                    LaunchedEffect(navMicroSec) {
+                        val ms = navMicroSec * 1000L
+                        while (true) {
+                            burnOffsetY = 1.dp
+                            delay(ms)
+                            burnOffsetY = 0.dp
+                            delay(ms)
+                        }
+                    }
+                    Box(Modifier.offset { IntOffset(0, burnOffsetY.roundToPx()) }) {
+                        LiquidBottomTabs(
+                            selectedTabIndex = { selectedTab },
+                            onTabSelected = { goTab(it) },
+                            backdrop = rememberLayerBackdrop(),
+                            tabsCount = tabs.size,
+                            // currentPageOffsetFraction 表示当前页相对整页的偏移（翻页中为小数），
+                            // 两者相加即 0f..2f 的连续进度，导航栏据此逐帧跟随
+                            tabProgress = {
+                                pagerState.currentPage + pagerState.currentPageOffsetFraction
+                            },
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
+                        ) {
+                            tabs.forEachIndexed { index, item ->
+                                LiquidBottomTab({ goTab(index) }) {
+                                    Icon(
+                                        imageVector = item.icon,
+                                        contentDescription = item.label,
+                                        tint = UiPalette.ink(dark).copy(alpha = 0.9f),
+                                        modifier = Modifier.size(22.dp),
+                                    )
+                                    Text(
+                                        text = item.label,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = UiPalette.ink(dark).copy(alpha = 0.9f),
+                                    )
+                                }
                             }
                         }
                     }
                 }
+            } else {
+                SubPageHost(
+                    page = subPage!!,
+                    state = state,
+                    onStateChange = onStateChange,
+                    onBack = { subPage = null },
+                    onOpenUrl = openUrl,
+                )
             }
         }
     }
@@ -723,20 +858,72 @@ private fun SaveBar(
     }
 }
 
+// ---- 名单（白名单 / 黑名单 / 关闭）----
+
+/** 卡片标题跟着模式走，避免「模式是黑名单、标题写白名单」的自相矛盾 */
+private fun listTitle(mode: String): String = when (ConfStore.normMode(mode)) {
+    ConfStore.MODE_BLACK -> "黑名单"
+    ConfStore.MODE_OFF -> "名单（已关闭）"
+    else -> "白名单"
+}
+
+/** 一句话讲清「当前模式 + 这份名单」到底会怎么表现 */
+private fun listSummary(mode: String, text: String): String {
+    // 与 ConfStore.parseWhitelist / Config.parse 用同一套分隔符，否则用户填中文逗号时
+    // 卡片上的「以下 N 个应用」会显示成 1 个（整串当一项），与实际生效数量不符
+    val n = text.split(",", "，", ";", "；").count { it.trim().isNotEmpty() }
+    return when (ConfStore.normMode(mode)) {
+        ConfStore.MODE_OFF -> "已关闭名单：所有应用前台都执行防烧屏"
+        ConfStore.MODE_BLACK ->
+            if (n == 0) "黑名单为空：按兜底仍对所有应用生效；勾选应用后只有名单内的会生效"
+            else "只在以下 $n 个应用前台时执行防烧屏：$text"
+        else ->
+            if (n == 0) "未设置：所有应用前台都执行防烧屏"
+            else "以下 $n 个应用前台时不隐藏系统栏：$text"
+    }
+}
+
+/** 模式三选一。切换只改解释，不动两份名单内容，用户来回切不会丢数据。 */
+@Composable
+private fun ListModeChips(mode: String, onChange: (String) -> Unit) {
+    val items = listOf(
+        ConfStore.MODE_WHITE to "白名单",
+        ConfStore.MODE_BLACK to "黑名单",
+        ConfStore.MODE_OFF to "关闭",
+    )
+    Row(
+        Modifier.fillMaxWidth().padding(top = 8.dp).horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        for ((id, label) in items) {
+            FilterChip(
+                selected = ConfStore.normMode(mode) == id,
+                onClick = { onChange(id) },
+                label = { Text(label, style = MaterialTheme.typography.bodySmall) },
+            )
+        }
+    }
+}
+
 // ---- 首页 ----
 @Composable
 private fun HomeTilePage(
     enabled: Boolean,
     onToggle: (Boolean) -> Unit,
     hideSec: Int,
-    onHideSecChange: (Int) -> Unit,
     showSec: Int,
-    whitelist: String,
+    listMode: String,
+    activeList: String,
+    onListModeChange: (String) -> Unit,
+    onListTextChange: (String) -> Unit,
     uiStyle: String,
     onUiStyleChange: (String) -> Unit,
-    onOpenWhitelist: () -> Unit,
+    onOpenList: () -> Unit,
+    onOpenCycle: () -> Unit,
+    onSelfCheck: () -> Unit,
     saveBar: @Composable () -> Unit,
 ) {
+    val dark = isSystemInDarkTheme()
     Column(
         Modifier
             .fillMaxSize()
@@ -744,7 +931,8 @@ private fun HomeTilePage(
             .padding(horizontal = 20.dp)
             .padding(top = 24.dp, bottom = 96.dp),
     ) {
-        Text("防止烧屏", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Text("防止烧屏", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold,
+            color = UiPalette.ink(dark))
         Text("LSPosed 模块 · 全面功能", style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant)
 
@@ -755,21 +943,22 @@ private fun HomeTilePage(
         Card(
             Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(18.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
+            colors = CardDefaults.cardColors(containerColor = UiPalette.surface(dark)),
         ) {
             Row(
                 Modifier.fillMaxWidth().padding(16.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(Modifier.weight(1f)) {
-                    Text("防烧屏保护", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text("防烧屏保护", style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold, color = UiPalette.ink(dark))
                     Text("周期隐藏状态栏图标，防 OLED 烧屏。与系统快捷磁贴同步。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 4.dp))
                     Text(if (enabled) "已开启" else "已关闭",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary,
+                        color = UiPalette.accent(dark),
                         modifier = Modifier.padding(top = 6.dp))
                 }
                 LiquidToggle(checked = enabled, onCheckedChange = onToggle)
@@ -778,48 +967,29 @@ private fun HomeTilePage(
 
         Spacer(Modifier.height(12.dp))
 
-        Card(
-            Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(18.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
-        ) {
-            Column(Modifier.padding(16.dp)) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("隐藏持续时长", style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                    Text("每 $hideSec 秒", style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary)
-                }
-                Text("状态栏/导航栏/抖音各区域每隐藏 $hideSec 秒，再显示 $showSec 秒。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp))
-                Spacer(Modifier.height(14.dp))
-                LiquidSlider(
-                    value = hideSec.toFloat(),
-                    onValueChange = { onHideSecChange(it.roundToInt()) },
-                    valueRange = 10f..120f,
-                )
-            }
-        }
+        // 周期时长：v2.6 起收进独立磁贴 + 二级菜单，首页只留一个单行入口
+        ListRow(
+            title = "周期时长",
+            subtitle = "隐藏 ${hideSec}s · 显示 ${showSec}s",
+            onClick = onOpenCycle,
+            dark = dark,
+        )
 
         Spacer(Modifier.height(12.dp))
 
         Card(
             Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(18.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
+            colors = CardDefaults.cardColors(containerColor = UiPalette.surface(dark)),
         ) {
             Column(Modifier.padding(16.dp)) {
-                // 第一行：标题 + 一句注明（不放控件，避免和下面的选择行挤在一起）
                 Text("界面适配", style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold)
+                    fontWeight = FontWeight.Bold, color = UiPalette.ink(dark))
                 Text("选择你手机的系统界面，模块按它的胶囊 / 导航栏结构避让，不会误隐藏灵动岛、原子岛。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 4.dp))
                 Spacer(Modifier.height(12.dp))
-                // 第二行：五大厂商 + 原生，单选。横向滚动保证窄屏也不换行、不挤压
                 Row(
                     Modifier.fillMaxWidth()
                         .horizontalScroll(rememberScrollState())
@@ -842,20 +1012,39 @@ private fun HomeTilePage(
         Card(
             Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(18.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
+            colors = CardDefaults.cardColors(containerColor = UiPalette.surface(dark)),
         ) {
             Column(Modifier.padding(16.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("白名单", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold,
-                        modifier = Modifier.weight(1f))
-                    TextButton(onClick = onOpenWhitelist) { Text("选择应用") }
+                    Text(listTitle(listMode), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold,
+                        color = UiPalette.ink(dark), modifier = Modifier.weight(1f))
+                    TextButton(onClick = onOpenList) { Text("选择应用") }
                 }
-                val wl = whitelist
-                Text(if (wl.isBlank()) "未设置：所有应用前台都执行防烧屏"
-                    else "以下 ${wl.split(",").size} 个应用前台时不隐藏系统栏：$wl",
+                ListModeChips(listMode, onListModeChange)
+                Text(listSummary(listMode, activeList),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 4.dp))
+                // 手动填包名：图形选择页是主路径，这里保留快速粘贴的能力
+                if (ConfStore.normMode(listMode) != ConfStore.MODE_OFF) {
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = activeList,
+                        onValueChange = onListTextChange,
+                        label = {
+                            Text(if (ConfStore.normMode(listMode) == ConfStore.MODE_BLACK)
+                                "黑名单包名，逗号分隔" else "白名单包名，逗号分隔")
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 2,
+                        maxLines = 4,
+                    )
+                }
+                // 生效自检：明确告诉用户名单有没有落盘、怎么确认模块侧命中
+                TextButton(onClick = onSelfCheck, modifier = Modifier.padding(top = 2.dp)) {
+                    Text("检测是否生效", style = MaterialTheme.typography.labelMedium,
+                        color = UiPalette.accent(dark))
+                }
             }
         }
     }
@@ -863,25 +1052,29 @@ private fun HomeTilePage(
 
 // ---- 功能：磁贴式开关；抖音 / 红果 各自独立成一页 ----
 
-/** 一个磁贴的数据。enabled=false 表示常驻不可切换（如红果底部剧集入口）。 */
+/**
+ * 一个磁贴的数据。enabled=false 表示常驻不可切换（如红果底部剧集入口）。
+ * navClick 不为空时是「入口磁贴」：点击进二级菜单，不显示开关状态。
+ */
 private data class TileItem(
     val title: String,
     val glyph: String,
     val subtitle: String,
     val checked: Boolean,
     val enabled: Boolean = true,
-    val onToggle: (Boolean) -> Unit,
+    val onToggle: (Boolean) -> Unit = {},
+    val navClick: (() -> Unit)? = null,
 )
 
 @Composable
 private fun FeaturesPage(
     state: AbState,
     onStateChange: ((AbState) -> AbState) -> Unit,
-    onOpenWhitelist: () -> Unit,
     saveBar: @Composable () -> Unit,
     featurePage: Int,
     onFeaturePageChange: (Int) -> Unit,
 ) {
+    val dark = isSystemInDarkTheme()
     Column(
         Modifier
             .fillMaxSize()
@@ -889,8 +1082,9 @@ private fun FeaturesPage(
             .padding(horizontal = 20.dp)
             .padding(top = 24.dp, bottom = 96.dp),
     ) {
-        Text("功能磁贴", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-        Text("点击磁贴即可开关；改动自动保存，也可按「保存设置」立即落盘",
+        Text("功能磁贴", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold,
+            color = UiPalette.ink(dark))
+        Text("点击磁贴即可开关；带 › 的磁贴可进入详细设置",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant)
 
@@ -918,16 +1112,21 @@ private fun FeaturesPage(
         when (featurePage) {
             0 -> {
                 GroupTitle("系统栏与通用")
+                // v2.7：删除原「状态栏图标」磁贴。它错绑了 enableStatus（总闸），
+                // 点一下等于把整个模块关掉，与首页总开关重复且严重误导
+                // （日志里 status 反复 0↔1 正来源于此）。状态栏图标隐藏本就是
+                // 总闸开启后的固有行为（hideStatusKeepNotify），无需第二个入口。
                 TileGrid(
                     listOf(
-                        TileItem("状态栏图标", "栏", "时钟/信号/电池周期透明化", state.enableStatus) {
-                            onStateChange { s -> s.copy(enableStatus = !s.enableStatus) }
-                        },
                         TileItem("导航栏", "导", "底部系统导航栏", state.enableNav) {
                             onStateChange { s -> s.copy(enableNav = !s.enableNav) }
                         },
-                        TileItem("励志古诗", "诗", "隐藏期间滚动诗句", state.enablePoem) {
-                            onStateChange { s -> s.copy(enablePoem = !s.enablePoem) }
+                        // v2.9：补回「状态栏偏移」磁贴。该能力的 Hook 侧实现一直在
+                        // （Controller.java 读 Config.enableShift → PixelShift.bind/tick），
+                        // 但 2.7 删磁贴时连唯一入口一起删掉了，配置里永远保持默认值 true，
+                        // 用户既关不掉也无从得知。此处恢复为可开关。
+                        TileItem("状态栏偏移", "移", "图标 1~2px 微移", state.enableShift) {
+                            onStateChange { s -> s.copy(enableShift = !s.enableShift) }
                         },
                         TileItem("诊断日志", "志", "写 diag.log 排查", state.enableLog) {
                             onStateChange { s -> s.copy(enableLog = !s.enableLog) }
@@ -935,80 +1134,15 @@ private fun FeaturesPage(
                         TileItem("悬浮球", "球", "点击切换隐藏控件", state.enableBall) {
                             onStateChange { s -> s.copy(enableBall = !s.enableBall) }
                         },
+                        // v2.7：按用户要求移除功能页「周期时长」磁贴，首页保留唯一入口，
+                        // 避免同一设置两处入口、状态不一致。
                     )
                 )
 
-                GroupTitle("周期时长")
-                Card(
-                    Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(18.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
-                ) {
-                    Column(Modifier.padding(16.dp)) {
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Text("隐藏 ${state.hideSec} 秒", style = MaterialTheme.typography.bodyMedium,
-                                modifier = Modifier.weight(1f))
-                            TextButton(onClick = { onStateChange { s -> s.copy(hideSec = (s.hideSec - 5).coerceAtLeast(5)) } }) { Text("-5s") }
-                            TextButton(onClick = { onStateChange { s -> s.copy(hideSec = (s.hideSec + 5).coerceAtMost(3600)) } }) { Text("+5s") }
-                        }
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Text("显示 ${state.showSec} 秒", style = MaterialTheme.typography.bodyMedium,
-                                modifier = Modifier.weight(1f))
-                            TextButton(onClick = { onStateChange { s -> s.copy(showSec = (s.showSec - 1).coerceAtLeast(1)) } }) { Text("-1s") }
-                            TextButton(onClick = { onStateChange { s -> s.copy(showSec = (s.showSec + 1).coerceAtMost(3600)) } }) { Text("+1s") }
-                        }
-                    }
-                }
-
-                GroupTitle("自定义诗句")
-                Card(
-                    Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(18.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
-                ) {
-                    Column(Modifier.padding(16.dp)) {
-                        Text("每行一首，格式：诗句 或 诗句|作者|出处",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Spacer(Modifier.height(8.dp))
-                        OutlinedTextField(
-                            value = state.customPoems,
-                            onValueChange = { onStateChange { s -> s.copy(customPoems = it) } },
-                            label = { Text("自定义诗句") },
-                            modifier = Modifier.fillMaxWidth(),
-                            minLines = 3,
-                            maxLines = 8,
-                        )
-                    }
-                }
-
-                GroupTitle("白名单")
-                Card(
-                    Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(18.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
-                ) {
-                    Column(Modifier.padding(16.dp)) {
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Text("白名单", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold,
-                                modifier = Modifier.weight(1f))
-                            TextButton(onClick = onOpenWhitelist) { Text("选择应用") }
-                        }
-                        Text("名单内应用前台时不隐藏系统栏；也可直接填包名，逗号分隔",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(top = 4.dp))
-                        Spacer(Modifier.height(8.dp))
-                        OutlinedTextField(
-                            value = state.whitelist,
-                            onValueChange = { onStateChange { s -> s.copy(whitelist = it) } },
-                            label = { Text("包名，逗号分隔") },
-                            modifier = Modifier.fillMaxWidth(),
-                            minLines = 2,
-                            maxLines = 4,
-                        )
-                    }
-                }
+                // v2.9：名单卡片只在首页保留一份，此处不再重复。
+                // 同一份设置在两个页面各摆一张卡片时，两处入口的展开状态、滚动位置
+                // 互不同步，用户会以为是两套名单；且功能页这张的表单会把页面撑长，
+                // 压掉下方抖音 / 红果子页的可见性。
             }
             1 -> {
                 GroupTitle("抖音 · 视频页六个区域")
@@ -1090,17 +1224,22 @@ private fun TileGrid(items: List<TileItem>) {
 
 @Composable
 private fun TileCard(item: TileItem) {
+    val dark = isSystemInDarkTheme()
+    val isEntry = item.navClick != null
     val active = item.enabled && item.checked
     val container = when {
-        !item.enabled -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.18f)
+        !item.enabled -> UiPalette.surface(dark, 0.18f)
         item.checked -> MaterialTheme.colorScheme.primaryContainer
-        else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+        else -> UiPalette.surface(dark, 0.45f)
     }
+    val nav = item.navClick
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 116.dp)
-            .clickable(enabled = item.enabled) { item.onToggle(!item.checked) },
+            .clickable(enabled = item.enabled) {
+                if (nav != null) nav.invoke() else item.onToggle(!item.checked)
+            },
         shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(containerColor = container),
     ) {
@@ -1111,7 +1250,7 @@ private fun TileCard(item: TileItem) {
                         .size(30.dp)
                         .clip(RoundedCornerShape(10.dp))
                         .background(
-                            if (active) MaterialTheme.colorScheme.primary
+                            if (active || isEntry) UiPalette.accent(dark)
                             else MaterialTheme.colorScheme.outline.copy(alpha = 0.22f)
                         ),
                     contentAlignment = Alignment.Center,
@@ -1120,25 +1259,27 @@ private fun TileCard(item: TileItem) {
                         item.glyph,
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Bold,
-                        color = if (active) MaterialTheme.colorScheme.onPrimary
+                        color = if (active || isEntry) MaterialTheme.colorScheme.onPrimary
                         else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 Spacer(Modifier.weight(1f))
                 Text(
                     when {
+                        isEntry -> "›"
                         !item.enabled -> "常驻"
                         item.checked -> "已开启"
                         else -> "已关闭"
                     },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (active) MaterialTheme.colorScheme.primary
+                    style = if (isEntry) MaterialTheme.typography.titleMedium
+                    else MaterialTheme.typography.labelSmall,
+                    color = if (active || isEntry) UiPalette.accent(dark)
                     else MaterialTheme.colorScheme.outline,
                 )
             }
             Spacer(Modifier.height(10.dp))
             Text(item.title, style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold, maxLines = 1)
+                fontWeight = FontWeight.Bold, maxLines = 1, color = UiPalette.ink(dark))
             Text(item.subtitle, style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2,
                 modifier = Modifier.padding(top = 2.dp))
@@ -1148,78 +1289,91 @@ private fun TileCard(item: TileItem) {
 
 @Composable
 private fun GroupTitle(t: String) {
+    val dark = isSystemInDarkTheme()
     Text(t, style = MaterialTheme.typography.titleSmall,
-        color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold,
+        color = UiPalette.accent(dark), fontWeight = FontWeight.Bold,
         modifier = Modifier.padding(top = 12.dp, bottom = 6.dp))
+}
+
+// ---- 通用单行列表项（不是卡片，护眼、层级清晰） ----
+
+/**
+ * 单行列表项：标题 + 副标题 + 右侧箭头，整行可点击。
+ * 关于页与首页入口统一用它，去掉了大卡片堆叠，深浅色下都清爽。
+ */
+@Composable
+private fun ListRow(
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
+    dark: Boolean,
+    trailing: String = "›",
+) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 4.dp, vertical = 14.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold, color = UiPalette.ink(dark))
+                if (subtitle.isNotEmpty()) {
+                    Text(subtitle, style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 3.dp))
+                }
+            }
+            Text(trailing, style = MaterialTheme.typography.titleLarge,
+                color = UiPalette.accent(dark))
+        }
+    }
+    Box(Modifier.fillMaxWidth().height(1.dp)
+        .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.18f)))
 }
 
 // ---- 关于 ----
 
 /**
- * 捐赠名单：只记录头像文字与昵称，金额一律不入库、不展示。
- * 以后加人只改这张表的一行，界面会自动多出一行，不用动排版代码。
+ * 感谢名单：只记昵称与贡献，金额一律不入库、不展示。
+ * 加人只改这张表的一行，二级菜单会自动多出一行。
  */
-private data class Donor(val name: String, val badge: String)
+private data class Thanks(val name: String, val badge: String, val contribution: String)
 
-private val DONORS = listOf(
-    Donor("*辉", "辉"),
+private val THANKS = listOf(
+    Thanks("辉哥", "辉", "资金支持"),
+    Thanks("酷安@专属的小哈基米", "哈", "提供悬浮球思路"),
+    Thanks(".哥", "哥", "资金支持"),
+)
+
+/** 项目仓库地址（GitHub）——关于页「项目地址」点击跳转。 */
+private const val PROJECT_URL = "https://github.com/Xposed-Modules-Repo/io.github.wumisc.antiburn"
+
+/**
+ * 致敬名单：本模块借鉴过的开源项目。只放确有依赖/参考关系的仓库，
+ * 链接经可用性校验，点击用系统浏览器打开。加项目只改这张表一行。
+ */
+private data class Credit(val name: String, val desc: String, val url: String)
+
+private val CREDITS = listOf(
+    Credit("AndroidLiquidGlass · Kyant0", "液态玻璃渲染：backdrop / lens / vibrancy（Apache-2.0）",
+        "https://github.com/Kyant0/AndroidLiquidGlass"),
+    Credit("Miuix · YuKongA", "液态玻璃导航栏、blur 与 squircle 组件",
+        "https://github.com/YuKongA/Miuix"),
+    Credit("LSPosed", "Hook 框架与模块运行环境",
+        "https://github.com/LSPosed/LSPosed"),
+    Credit("XposedBridge · rovo89", "Xposed API（编译期依赖）",
+        "https://github.com/rovo89/XposedBridge"),
+    Credit("Jetpack Compose · AndroidX", "声明式 UI 工具包与 Material 3",
+        "https://developer.android.com/jetpack/compose"),
+    Credit("kotlinx.coroutines · Kotlin", "协程与异步调度",
+        "https://github.com/Kotlin/kotlinx.coroutines"),
 )
 
 @Composable
-private fun DonorCard() {
-    Card(
-        Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
-    ) {
-        Column(Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("捐赠名单", style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                Text(DONORS.size.toString() + " 位",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary)
-            }
-            Text("感谢每一位支持模块的朋友。名单只展示头像与昵称，金额不予展示。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 6.dp))
-            Spacer(Modifier.height(14.dp))
-            DONORS.forEachIndexed { index, d ->
-                if (index > 0) {
-                    Spacer(Modifier.height(10.dp))
-                }
-                // 头像 + 名称同一行：不设副行，避免出现金额 / 备注这类信息
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        Modifier
-                            .size(38.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(Brush.linearGradient(listOf(
-                                MaterialTheme.colorScheme.primary,
-                                MaterialTheme.colorScheme.tertiary))),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(d.badge, style = MaterialTheme.typography.bodyMedium,
-                            color = Color.White)
-                    }
-                    Spacer(Modifier.width(12.dp))
-                    Text(d.name, style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                }
-            }
-            Text("名单按加入顺序排列 · 谢谢你们",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.outline,
-                modifier = Modifier.fillMaxWidth().padding(top = 14.dp),
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-        }
-    }
-}
-
-@Composable
-private fun AboutPage() {
+private fun AboutPage(onOpen: (String) -> Unit, onOpenUrl: (String) -> Unit) {
+    val dark = isSystemInDarkTheme()
     Column(
         Modifier
             .fillMaxSize()
@@ -1227,45 +1381,275 @@ private fun AboutPage() {
             .padding(horizontal = 20.dp)
             .padding(top = 24.dp, bottom = 96.dp),
     ) {
-        Text("关于", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Text("关于", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold,
+            color = UiPalette.ink(dark))
         Text("防止烧屏 · 精简磁贴版 v" + BuildConfig.VERSION_NAME,
             style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold,
+            color = UiPalette.accent(dark), fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(top = 12.dp))
-        Spacer(Modifier.height(12.dp))
-        Card(
-            Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(18.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
+        Spacer(Modifier.height(8.dp))
+
+        ListRow("感谢名单", "${THANKS.size} 位朋友的支持与建议", { onOpen("thanks") }, dark)
+        ListRow("支持捐赠", "支付宝 / 微信 · 金额随意，心意最重", { onOpen("donate") }, dark)
+        ListRow("致敬名单", "${CREDITS.size} 个借鉴过的开源项目 · 点击查看", { onOpen("credit") }, dark)
+        // v2.7：项目地址单独一行，点击直接跳 GitHub；不进二级菜单，减少一层跳转
+        ListRow("项目地址", "github.com/Xposed-Modules-Repo/…", { onOpenUrl(PROJECT_URL) }, dark,
+            trailing = "↗")
+
+        Text("本模块仅供学习交流使用 · LSPosed + root 环境",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.outline,
+            modifier = Modifier.fillMaxWidth().padding(top = 18.dp),
+            textAlign = TextAlign.Center)
+    }
+}
+
+// ---- 二级菜单容器 ----
+@Composable
+private fun SubPageHost(
+    page: String,
+    state: AbState,
+    onStateChange: ((AbState) -> AbState) -> Unit,
+    onBack: () -> Unit,
+    onOpenUrl: (String) -> Unit,
+) {
+    val dark = isSystemInDarkTheme()
+    val title = when (page) {
+        "thanks" -> "感谢名单"
+        "donate" -> "支持捐赠"
+        "cycle" -> "周期时长"
+        "credit" -> "致敬名单"
+        else -> "设置"
+    }
+    Column(
+        Modifier
+            .fillMaxSize()
+            .padding(horizontal = 20.dp)
+            .padding(top = 16.dp),
+    ) {
+        // 顶部返回条
+        Row(verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth()) {
+            IconButton(onClick = onBack) {
+                Text("‹", style = MaterialTheme.typography.headlineLarge,
+                    color = UiPalette.accent(dark))
+            }
+            Text(title, style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold, color = UiPalette.ink(dark))
+        }
+        Spacer(Modifier.height(6.dp))
+        Box(Modifier.fillMaxWidth().height(1.dp)
+            .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.18f)))
+        Column(
+            Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(bottom = 40.dp),
         ) {
-            Column(Modifier.padding(16.dp)) {
-                Text("LSPosed 模块：SystemUI / 抖音 / 红果进程内周期隐藏固定 UI，防 OLED 烧屏。",
-                    style = MaterialTheme.typography.bodyMedium)
-                Text("功能：状态栏/导航栏透明化、抖音/红果各区+直播间、励志古诗、白名单、悬浮球。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp))
-                Text("功能页为磁贴式开关（通用 / 抖音 / 红果三个子页）；保存后可点「重启系统界面」立即生效。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp))
-                Text("液态玻璃渲染：Kyant0 / AndroidLiquidGlass（Apache-2.0）",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp))
-                Text("配置：/data/local/tmp/antiburn.conf（root）+ 应用内镜像（ConfigProvider）",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.outline, modifier = Modifier.padding(top = 4.dp))
-                Text("需要 root + LSPosed，并在模块作用域勾选 系统界面/抖音/红果；修改后最多 2 秒生效。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.outline, modifier = Modifier.padding(top = 8.dp))
-                Text("本模块仅供学习交流使用",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.outline,
-                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+            Spacer(Modifier.height(14.dp))
+            when (page) {
+                "thanks" -> ThanksPage(dark)
+                "donate" -> DonatePage(dark)
+                "credit" -> CreditPage(dark, onOpenUrl)
+                "cycle" -> CyclePage(state, onStateChange, dark)
             }
         }
-        Spacer(Modifier.height(14.dp))
-        DonorCard()
     }
+}
+
+/** 感谢名单二级页：单行列表，不用卡片。 */
+@Composable
+private fun ThanksPage(dark: Boolean) {
+    Text("感谢每一位支持与帮助过模块的朋友。名单只展示昵称与贡献，金额不予展示。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Spacer(Modifier.height(10.dp))
+    THANKS.forEach { t ->
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 13.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier.size(38.dp).clip(RoundedCornerShape(12.dp))
+                    .background(UiPalette.accent(dark)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(t.badge, style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimary)
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(t.name, style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Bold, color = UiPalette.ink(dark))
+                Text(t.contribution, style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 2.dp))
+            }
+        }
+        Box(Modifier.fillMaxWidth().height(1.dp)
+            .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.18f)))
+    }
+    Text("名单按加入顺序排列 · 谢谢你们",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.outline,
+        modifier = Modifier.fillMaxWidth().padding(top = 18.dp),
+        textAlign = TextAlign.Center)
+}
+
+/** 支持捐赠二级页：支付宝 + 微信二维码，白底保证可扫。 */
+@Composable
+private fun DonatePage(dark: Boolean) {
+    Text("如果模块帮到了你，欢迎扫码支持。金额随意，心意最重；名单里不会展示金额。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Spacer(Modifier.height(16.dp))
+    QrCard("支付宝", R.drawable.qr_alipay, dark)
+    Spacer(Modifier.height(16.dp))
+    QrCard("微信支付", R.drawable.qr_wechat, dark)
+    Text("保存图片后可用对应 App「扫一扫」识别；长按二维码图片也可保存。",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.outline,
+        modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+        textAlign = TextAlign.Center)
+}
+
+@Composable
+private fun QrCard(label: String, resId: Int, dark: Boolean) {
+    Column(
+        Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(label, style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold, color = UiPalette.ink(dark))
+        Spacer(Modifier.height(10.dp))
+        Card(
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+        ) {
+            // 二维码必须白底才能可靠扫码，这里不随主题变色
+            Image(
+                painter = painterResource(resId),
+                contentDescription = label + "收款二维码",
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(12.dp)
+                    .clip(RoundedCornerShape(10.dp)),
+            )
+        }
+    }
+}
+
+/**
+ * 致敬名单二级页：把借鉴过的开源项目以可点击超链接一一列出。
+ * 名称用主色 + 下划线 + ↗ 明确「可点」，点击用系统浏览器打开仓库；
+ * 深色模式下主色是浅雾青，不会出现黑字看不清。
+ */
+@Composable
+private fun CreditPage(dark: Boolean, onOpenUrl: (String) -> Unit) {
+    Text("本模块站在这些开源项目的肩膀上。点击名称可跳转对应仓库，感谢每一位作者。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Spacer(Modifier.height(8.dp))
+    CREDITS.forEach { c ->
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .clickable { onOpenUrl(c.url) }
+                .padding(horizontal = 4.dp, vertical = 13.dp),
+        ) {
+            Text(
+                c.name + "  ↗",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Bold,
+                color = UiPalette.accent(dark),
+                textDecoration = TextDecoration.Underline,
+            )
+            Text(c.desc,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 3.dp))
+            Text(c.url,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.padding(top = 2.dp))
+        }
+        Box(Modifier.fillMaxWidth().height(1.dp)
+            .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.18f)))
+    }
+    Text("按借鉴顺序排列 · 开源让工具更好",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.outline,
+        modifier = Modifier.fillMaxWidth().padding(top = 18.dp),
+        textAlign = TextAlign.Center)
+}
+
+/** 周期时长二级页：本地暂存，点保存一次落盘，避免滑条每帧写盘。 */
+@Composable
+private fun CyclePage(
+    state: AbState,
+    onStateChange: ((AbState) -> AbState) -> Unit,
+    dark: Boolean,
+) {
+    var hide by remember(state.hideSec) { mutableIntStateOf(state.hideSec) }
+    var show by remember(state.showSec) { mutableIntStateOf(state.showSec) }
+    val changed = hide != state.hideSec || show != state.showSec
+
+    Text("一个周期 = 隐藏时长 + 显示时长。隐藏期间状态栏/导航栏/抖音各区域透明化，" +
+            "显示期间恢复，如此往复防止固定像素常亮。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+    Spacer(Modifier.height(18.dp))
+    Text("隐藏时长 · $hide 秒", style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.Bold, color = UiPalette.ink(dark))
+    Text("建议 20~60 秒；越长省电但恢复越慢",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 2.dp))
+    Spacer(Modifier.height(8.dp))
+    LiquidSlider(
+        value = hide.toFloat(),
+        onValueChange = { hide = it.roundToInt() },
+        valueRange = 10f..120f,
+    )
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        TextButton(onClick = { hide = (hide - 5).coerceAtLeast(5) }) { Text("-5s") }
+        TextButton(onClick = { hide = (hide + 5).coerceAtMost(3600) }) { Text("+5s") }
+        Spacer(Modifier.weight(1f))
+    }
+
+    Spacer(Modifier.height(20.dp))
+    Text("显示时长 · $show 秒", style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.Bold, color = UiPalette.ink(dark))
+    Text("建议 5~15 秒；太短会频繁闪烁",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 2.dp))
+    Spacer(Modifier.height(8.dp))
+    LiquidSlider(
+        value = show.toFloat(),
+        onValueChange = { show = it.roundToInt() },
+        valueRange = 1f..60f,
+    )
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        TextButton(onClick = { show = (show - 1).coerceAtLeast(1) }) { Text("-1s") }
+        TextButton(onClick = { show = (show + 1).coerceAtMost(3600) }) { Text("+1s") }
+        Spacer(Modifier.weight(1f))
+    }
+
+    Spacer(Modifier.height(22.dp))
+    Button(
+        onClick = { onStateChange { s -> s.copy(hideSec = hide, showSec = show) } },
+        enabled = changed,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(if (changed) "保存时长设置" else "当前已是所设时长")
+    }
+    Text("改动自动保存，最多 2 秒生效；想立刻看到效果可点顶部「重启界面」。",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.outline,
+        modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+        textAlign = TextAlign.Center)
 }
 
 // ---- Tab 图标 ----
