@@ -62,18 +62,26 @@ public final class Controller {
                     new XC_MethodHook() {
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) {
-                            View win = (View) param.thisObject;
-                            View bar = findStatusBarView(win);
-                            if (bar != null) {
-                                statusView = bar;
-                                findNotifyArea(bar);
-                                Log.i(TAG, "status bar view found: " + desc(bar));
-                            } else {
-                                // 兜底：找不到内容容器就用窗口本身（会连下拉面板一起隐藏，慎用）
-                                statusView = win;
-                                Log.w(TAG, "status_bar_container not found, fallback to window");
+                            // Hook 回调里的异常会一路冒到宿主主线程：SystemUI 因此崩溃重启，
+                            // LSPosed 连崩几次就把模块丢进安全模式（用户看到的是「莫名其妙
+                            // 进了安全模式，所有模块都失效」）。宿主是别人的进程，
+                            // 我们没有任何理由让它替我们崩。
+                            try {
+                                View win = (View) param.thisObject;
+                                View bar = findStatusBarView(win);
+                                if (bar != null) {
+                                    statusView = bar;
+                                    findNotifyArea(bar);
+                                    Log.i(TAG, "status bar view found: " + desc(bar));
+                                } else {
+                                    // 兜底：找不到内容容器就用窗口本身（会连下拉面板一起隐藏，慎用）
+                                    statusView = win;
+                                    Log.w(TAG, "status_bar_container not found, fallback to window");
+                                }
+                                startCycle();
+                            } catch (Throwable t) {
+                                hookFail("StatusBarWindowView.attach", t);
                             }
-                            startCycle();
                         }
                     });
         } else {
@@ -89,9 +97,13 @@ public final class Controller {
                         new XC_MethodHook() {
                             @Override
                             protected void afterHookedMethod(MethodHookParam param) {
-                                navView = (View) param.thisObject;
-                                Log.i(TAG, "nav view found (NavigationBarView): " + desc(navView));
-                                startCycle();
+                                try {
+                                    navView = (View) param.thisObject;
+                                    Log.i(TAG, "nav view found (NavigationBarView): " + desc(navView));
+                                    startCycle();
+                                } catch (Throwable t) {
+                                    hookFail("NavigationBarView.attach", t);
+                                }
                             }
                         });
             } catch (Throwable t) {
@@ -110,14 +122,18 @@ public final class Controller {
                         new XC_MethodHook() {
                             @Override
                             protected void afterHookedMethod(MethodHookParam param) {
-                                if (navView != null) {
-                                    return;
+                                try {
+                                    if (navView != null) {
+                                        return;
+                                    }
+                                    View frame = (View) param.thisObject;
+                                    View nb = findNavById(frame);
+                                    navView = nb != null ? nb : frame;
+                                    Log.i(TAG, "nav view found (NavigationBarFrame): " + desc(navView));
+                                    startCycle();
+                                } catch (Throwable t) {
+                                    hookFail("NavigationBarFrame.attach", t);
                                 }
-                                View frame = (View) param.thisObject;
-                                View nb = findNavById(frame);
-                                navView = nb != null ? nb : frame;
-                                Log.i(TAG, "nav view found (NavigationBarFrame): " + desc(navView));
-                                startCycle();
                             }
                         });
             } catch (Throwable t) {
@@ -134,25 +150,31 @@ public final class Controller {
                     new XC_MethodHook() {
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) {
-                            View v = (View) param.thisObject;
-                            if (v == null) {
-                                return;
-                            }
-                            // 导航栏
-                            if (navView == null && isNavView(v)) {
-                                navView = v;
-                                Log.i(TAG, "nav view caught (View scan): " + desc(v));
-                                startCycle();
-                                return;
-                            }
-                            // 状态栏兜底：类名含 StatusBar 且非导航（HyperOS3 类名若不同也能抓）
-                            if (statusView == null && isStatusBarWindow(v)) {
-                                View bar = findStatusBarView(v);
-                                if (bar != null) {
-                                    statusView = bar;
-                                    Log.i(TAG, "status bar view caught (View scan): " + desc(bar));
-                                    startCycle();
+                            // 这是全 View 扫描：宿主里每一次 attach 都会进这里，
+                            // 是全模块最热的回调，也是最该包住的那个。
+                            try {
+                                View v = (View) param.thisObject;
+                                if (v == null) {
+                                    return;
                                 }
+                                // 导航栏
+                                if (navView == null && isNavView(v)) {
+                                    navView = v;
+                                    Log.i(TAG, "nav view caught (View scan): " + desc(v));
+                                    startCycle();
+                                    return;
+                                }
+                                // 状态栏兜底：类名含 StatusBar 且非导航（HyperOS3 类名若不同也能抓）
+                                if (statusView == null && isStatusBarWindow(v)) {
+                                    View bar = findStatusBarView(v);
+                                    if (bar != null) {
+                                        statusView = bar;
+                                        Log.i(TAG, "status bar view caught (View scan): " + desc(bar));
+                                        startCycle();
+                                    }
+                                }
+                            } catch (Throwable t) {
+                                hookFail("View.attach scan", t);
                             }
                         }
                     });
@@ -312,6 +334,23 @@ public final class Controller {
                 + " pkg=" + (v.getContext() != null ? v.getContext().getPackageName() : "?");
     }
 
+    /**
+     * Hook 回调里的异常兜底：记一条 logcat + 一条 diag，然后咽掉。
+     *
+     * <p>必须是 Throwable 而不是 Exception —— 宿主 View 里出现的
+     * LinkageError / StackOverflowError / OOM 同样会把 SystemUI 打崩，
+     * 而这三种在「模块被安全模式禁用」的现场里最常见。</p>
+     */
+    private static void hookFail(String where, Throwable t) {
+        Log.w(TAG, "hook callback failed: " + where, t);
+        try {
+            XposedInit.diag("HOOK FAIL " + where + " "
+                    + t.getClass().getSimpleName()
+                    + (t.getMessage() == null ? "" : ": " + t.getMessage()));
+        } catch (Throwable ignored) {
+        }
+    }
+
     private static void startCycle() {
         if (started) {
             return;
@@ -355,9 +394,14 @@ public final class Controller {
                     + " list=" + Config.list + " hit=" + inList
                     + " intervene=" + intervene + " status=" + Config.enableStatus
                     + " nav=" + Config.enableNav + " shift=" + Config.enableShift
+                    + " sb=" + Config.enableStatusBar
                     + " ui=" + Config.uiStyle + " src=" + Config.lastSource
                     + " rev=" + Config.lastRev + " cache=" + (Config.cacheReady() ? "ok" : "none")
-                    + " fetch=" + Config.fetchState + " ver=" + BuildConfig.VERSION_NAME);
+                    + " fetch=" + Config.fetchState
+                    // eng：哪条引擎在跑。升级期最容易出现的怪象就是「用户切了 overlay，
+                    // SystemUI 里还是旧 Hook 在动手」，没有这个字段只能靠版本号猜。
+                    + " eng=" + Config.engine
+                    + " ver=" + BuildConfig.VERSION_NAME);
         }
 
         // 暂停条件：灭屏 / 该前台包按当前名单模式不需要干预。
@@ -389,7 +433,11 @@ public final class Controller {
         boolean shouldHide = pos < hideMs;
 
         if (shouldHide) {
-            if (!hidden) {
+            // 开关本身变了也要重跑一次：hideSec 动辄 30 秒，如果只在 !hidden 时应用，
+            // 用户中途关掉「状态栏」要等整个隐藏相位结束才看得到图标回来。
+            boolean cfgChanged = lastStatusBarSwitch != Config.enableStatusBar
+                    || lastNavSwitch != Config.enableNav;
+            if (!hidden || cfgChanged) {
                 applyHide();
                 hidden = true;
             }
@@ -429,6 +477,10 @@ public final class Controller {
     /** 上一次应用到 PixelShift 的 UI 方案，变化时才重设并打日志 */
     private static String lastShiftStyle = "";
 
+    /** 上一次 applyHide 时两个系统栏开关的状态，用于「开关变了立刻重画」 */
+    private static boolean lastStatusBarSwitch = true;
+    private static boolean lastNavSwitch = false;
+
     private static void applyHide() {
         // 状态栏：用 alpha=0 透明化而非 GONE。
         // 关键：透明不点亮像素（防烧屏效果不变），但视图保留触摸与下拉把手，
@@ -437,7 +489,16 @@ public final class Controller {
         // 能走到这里总闸必然是开的。删掉旧版恒真的 if (enableStatus) 冗余判断，
         // 状态栏隐藏不再与总闸语义重复；恢复统一交给暂停分支处理。
         if (statusView != null) {
-            hideStatusKeepNotify();
+            if (Config.enableStatusBar) {
+                hideStatusKeepNotify();
+            } else if (statusView.getAlpha() != 1f || statusChildrenHidden()) {
+                // 用户在功能页关掉了「状态栏」，但导航栏仍要按周期隐藏。
+                // 旧版这里没有分支：总闸一开必然调用 hideStatusKeepNotify()，
+                // 于是「关掉状态栏」这个诉求根本无处表达，真机反馈为
+                // 「总开关一开，状态栏和导航栏百分百一起隐藏」。
+                restoreStatusChildren();
+                Log.i(TAG, "status shown (switch off)");
+            }
         }
         if (navView != null) {
             if (Config.enableNav) {
@@ -450,6 +511,8 @@ public final class Controller {
                 Log.i(TAG, "nav shown (switch off)");
             }
         }
+        lastStatusBarSwitch = Config.enableStatusBar;
+        lastNavSwitch = Config.enableNav;
     }
 
     /** 隐藏状态栏静态元素（时钟/信号/电池等），但保留通知图标区，通知照常可见 */
@@ -488,6 +551,27 @@ public final class Controller {
             navView.setAlpha(1f);
             Log.i(TAG, "nav shown");
         }
+    }
+
+    /**
+     * 状态栏里是否有子容器仍处于透明态。
+     *
+     * <p>父容器 alpha 恢复不等于子容器恢复：hideStatusKeepNotify 是逐个 setAlpha(0) 的，
+     * 关掉「状态栏」开关时必须同样逐个还原。只看父容器会漏判，
+     * 导致关了开关图标还是不见。</p>
+     */
+    private static boolean statusChildrenHidden() {
+        if (!(statusView instanceof android.view.ViewGroup)) {
+            return false;
+        }
+        android.view.ViewGroup g = (android.view.ViewGroup) statusView;
+        for (int i = 0; i < g.getChildCount(); i++) {
+            View c = g.getChildAt(i);
+            if (c != notifyArea && c.getAlpha() != 1f) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** 恢复状态栏父容器与被透明化的子容器（父恢复不等于子恢复，须逐个还原） */

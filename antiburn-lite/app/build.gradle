@@ -12,8 +12,8 @@ android {
         applicationId "io.github.wumisc.antiburn"
         minSdk 33
         targetSdk 37
-        versionCode 22
-        versionName "2.5.2"
+        versionCode 28
+        versionName "2.6.5"
     }
 
     compileOptions {
@@ -58,4 +58,10 @@ dependencies {
 
     // LSPosed/Xposed API（仅编译期）：SystemUI/抖音/红果 Hook 引擎
     compileOnly 'de.robv.android.xposed:api:82'
+
+    // Shizuku（线路 B）：api 提供 Shizuku.newProcess / 权限查询，
+    // provider 是 binder 中继（manifest 里注册 ShizukuProvider 才有用）。
+    // 两者都在 Maven Central 与阿里云镜像上有，版本锁 13.1.5。
+    implementation 'dev.rikka.shizuku:api:13.1.5'
+    implementation 'dev.rikka.shizuku:provider:13.1.5'
 }

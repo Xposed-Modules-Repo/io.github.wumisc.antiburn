@@ -52,6 +52,14 @@ public final class Config {
     public static volatile boolean enableBall = false;
     public static volatile String customPoems = "";
     public static volatile boolean enableIcon = false;
+    /**
+     * 状态栏是否隐藏（conf 里的 enable_status_bar）。
+     *
+     * <p>默认 true，与 v2.7~v2.6.3 的「总闸一开状态栏必隐藏」完全一致 ——
+     * 老配置没有这个键，缺键必须沿用默认开，否则升级后状态栏会突然不再隐藏。
+     * 关掉它只影响状态栏，导航栏仍由 {@link #enableNav} 独立控制。</p>
+     */
+    public static volatile boolean enableStatusBar = true;
     public static volatile boolean enableLog = false;
     /** 目标 UI 适配方案（conf 里的 ui_style，与 profiles/*.json 对应） */
     public static volatile String uiStyle = "aosp";
@@ -67,6 +75,15 @@ public final class Config {
     public static volatile Set<String> list = new HashSet<>();
     /** 名单模式：white（名单内豁免）/ black（仅名单内干预）/ off（不用名单） */
     public static volatile String listMode = ConfStore.MODE_WHITE;
+    /**
+     * 运行引擎：{@link ConfStore#ENGINE_LSPOSED} 或 {@link ConfStore#ENGINE_OVERLAY}。
+     *
+     * <p>Hook 侧读它的唯一目的是「知道该不该让位」。用户在没有 root 的机器上选了遮盖引擎，
+     * 但可能同一台机器之前装过 LSPosed、或者换了台有 root 的机器又装回来 —— 只要配置里是
+     * overlay，SystemUI 里的 Hook 就必须停手，否则状态栏会被隐藏一次、再被盖一条黑边，
+     * 用户看到的是「多了一条更黑的边」，而不是任何一条单独的效果。</p>
+     */
+    public static volatile String engine = ConfStore.ENGINE_LSPOSED;
     /** 两份名单各自的条数，仅用于诊断日志，便于核对「模式与内容是否配套」 */
     public static volatile int whiteCount = 0;
     public static volatile int blackCount = 0;
@@ -459,6 +476,7 @@ public final class Config {
                 + " wl=" + list.size() + " lm=" + listMode
                 + " w=" + whiteCount + " b=" + blackCount + " fetch=" + fetchState
                 + " cache=" + (cacheText != null ? "ok" : "none")
+                + " eng=" + engine
                 + " ver=" + BuildConfig.VERSION_NAME + staleTag());
     }
 
@@ -585,9 +603,13 @@ public final class Config {
         boolean drRt = enableDramaRt, drLt = enableDramaLt;
         boolean live = enableLive, poem = enablePoem, ball = enableBall;
         boolean ic = enableIcon, lg = enableLog;
+        boolean sb = enableStatusBar;
         String style = uiStyle;
         String custom = customPoems;
         int h = hideSec, s = showSec;
+        // v2.6：运行引擎。缺键时沿用当前值（首次加载即默认 lsposed），
+        // 与「缺失的 key 保留上一次的值」这条既有规则保持一致。
+        String engRaw = engine;
         // v2.8：模式与两份名单都来自 conf 的独立键。缺 list_mode 的旧配置按 white
         // 解释，且 whitelist 缺键时回退旧别名 blacklist —— 与 v2.7 行为一致。
         boolean modePresent = false;
@@ -621,7 +643,10 @@ public final class Config {
             String v = line.substring(i + 1).trim();
             switch (k) {
                 case "enable_status": es = "1".equals(v); break;
-                case "enable_shift": sh = "1".equals(v); break;
+                // v2.6.5：像素微移内置常开。界面已无开关，这里即使读到老配置里
+                // 残留的 enable_shift=0 也强制 true，避免用户升级后仍停在关闭状态
+                // 却找不到入口恢复。App 侧 AbConf.load/save 同样固定为开。
+                case "enable_shift": sh = true; break;
                 case "enable_navigation": en = "1".equals(v); break;
                 case "ui_style": style = normStyle(v); break;
                 case "enable_douyin_top": dtop = "1".equals(v); break;
@@ -638,6 +663,7 @@ public final class Config {
                 case "enable_poem": poem = "1".equals(v); break;
                 case "enable_ball": ball = "1".equals(v); break;
                 case "enable_icon": ic = "1".equals(v); break;
+                case "enable_status_bar": sb = "1".equals(v); break;
                 case "enable_log": lg = "1".equals(v); break;
                 case "custom_poems":
                     customDecoded = ConfStore.decodeValue(v);
@@ -650,6 +676,9 @@ public final class Config {
                     break;
                 case "app_ver":
                     appVerRaw = v;
+                    break;
+                case "engine":
+                    engRaw = ConfStore.normEngine(v);
                     break;
                 case "whitelist":
                     whitePresent = true;
@@ -683,6 +712,7 @@ public final class Config {
 
         enableStatus = es;
         enableNav = en;
+        engine = ConfStore.normEngine(engRaw);
         enableShift = sh;
         enableDouyinTop = dtop;
         enableDouyinBottom = dbot;
@@ -698,6 +728,7 @@ public final class Config {
         enablePoem = poem;
         enableBall = ball;
         enableIcon = ic;
+        enableStatusBar = sb;
         enableLog = lg;
         uiStyle = style;
         customPoems = custom;
@@ -773,15 +804,14 @@ public final class Config {
         if (!enableStatus) {
             return false;
         }
-        String mode = listMode;
-        if (ConfStore.MODE_OFF.equals(mode)) {
-            return true;
+        // 用户选了无障碍遮盖引擎：Hook 必须完全让位，否则两套引擎同时动手，
+        // 表现是「状态栏被隐藏后又盖了一条黑边」，比任何单套都更难看。
+        if (ConfStore.ENGINE_OVERLAY.equals(engine)) {
+            return false;
         }
-        boolean hit = pkg != null && list.contains(pkg);
-        if (ConfStore.MODE_BLACK.equals(mode)) {
-            return hit || list.isEmpty();
-        }
-        return !hit;
+        // 名单语义交给 ListRules：无障碍遮盖引擎读的是同一份实现，
+        // 两边各写一份 if 迟早出现「换个引擎名单行为就反了」。
+        return ListRules.shouldIntervene(listMode, list, pkg);
     }
 
     /** 未知的 ui_style 一律归到 aosp。归一逻辑集中在 UiStyle，App 侧与 Hook 侧共用一份，

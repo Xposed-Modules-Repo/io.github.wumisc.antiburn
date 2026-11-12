@@ -27,7 +27,18 @@ object UiPalette {
     private val InkDark = Color(0xFFE7E8EA)
     private val InkLight = Color(0xFF1B1D20)
 
+    /**
+     * 警示橙：只给「操作顺序错了会出事」这类提示用（例如关功能前必须先开无障碍）。
+     *
+     * <p>刻意不复用强调色：雾青在这套配色里代表「可用 / 已生效」，拿它去写警告，
+     * 用户会当成又一个普通说明。橙色是这套界面里唯一的非青绿色，看到就知道要停一下。
+     * 深浅两档都按 WCAG AA 正文标准挑过（深色底 8.2:1，浅色底 5.4:1）。</p>
+     */
+    private val WarnDark = Color(0xFFE8A347)
+    private val WarnLight = Color(0xFF9A5B00)
+
     fun accent(dark: Boolean): Color = if (dark) AccentDark else AccentLight
+    fun warn(dark: Boolean): Color = if (dark) WarnDark else WarnLight
     fun ink(dark: Boolean): Color = if (dark) InkDark else InkLight
 
     /** secondary / tertiary 全部收到同一色相，杜绝 Material3 默认给 tertiary 的粉色。 */

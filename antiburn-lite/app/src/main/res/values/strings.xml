@@ -2,4 +2,6 @@
 <resources>
     <string name="app_name">防止烧屏</string>
     <string name="tile_label">防止烧屏</string>
+    <!-- 无障碍服务说明：系统设置里会原样展示，需要让用户在开启前就知道它做什么、不做什么 -->
+    <string name="a11y_description">免 root 防烧屏：按设定周期用纯黑覆盖层遮住状态栏与导航栏，让那块 OLED 像素停止发光，从而延缓烧屏。不会读取、上传或修改你的任何内容；触摸操作完全穿透，不影响正常使用。</string>
 </resources>

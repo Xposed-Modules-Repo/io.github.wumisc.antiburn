@@ -15,6 +15,8 @@
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
         </intent>
+        <!-- Shizuku：Android 11+ 不声明就查不到这个包，运行方式卡片会一直显示「未安装」 -->
+        <package android:name="moe.shizuku.privileged.api" />
     </queries>
 
     <application
@@ -53,6 +55,33 @@
             </intent-filter>
         </service>
 
+        <!-- 免 root 遮盖引擎（线路 A）。必须由用户在系统设置里手动开启，或走线路 B 的
+             Shizuku 授权代开；BIND_ACCESSIBILITY_SERVICE 保证只有系统能绑定它。 -->
+        <service
+            android:name=".BurnInMaskService"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+        <!-- 线路 B：Shizuku 的 binder 中继。没有它，普通应用拿不到 Shizuku 的 binder，
+             checkSelfPermission / newProcess 全部不可用。authorities 必须以 applicationId
+             开头，Shizuku 按这个规则反查调用方。 -->
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:enabled="true"
+            android:exported="true"
+            android:multiprocess="false"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL"
+            tools:ignore="ProtectedPermissions" />
+
         <!-- 被 Hook 的进程无法直接读 /data/local/tmp（SELinux shell_data_file），
              通过此导出的 provider 读取「应用内镜像」配置文本，设置才能真正生效。
              只暴露一小段开关文本，不提供 query/insert/update/delete。 -->
@@ -67,7 +96,7 @@
             android:value="true" />
         <meta-data
             android:name="xposeddescription"
-            android:value="防 OLED 烧屏：像素微移 + 周期性隐藏状态栏/导航栏/抖音各区域，按小米 HyperOS、荣耀 MagicOS、OPPO ColorOS、vivo OriginOS、华为 HarmonyOS 与原生 AOSP 分别适配胶囊与导航栏结构。支持白名单、周期时长、感谢名单与支持捐赠；所有开关在 App 内即时保存。" />
+            android:value="防 OLED 烧屏：周期性隐藏状态栏/导航栏与抖音、红果短剧各区域，像素微移内置常开。提供 LSPosed（需 root 与框架，真隐藏）与无障碍遮盖（免 root，盖黑系统栏、触摸穿透）两种运行方式，按小米 HyperOS、荣耀 MagicOS、OPPO ColorOS、vivo OriginOS、华为 HarmonyOS 与原生 AOSP 分别适配胶囊与导航栏结构。支持白名单、周期时长、感谢名单与支持捐赠；所有开关在 App 内即时保存。" />
         <meta-data
             android:name="xposedminversion"
             android:value="82" />

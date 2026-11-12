@@ -1,9 +1,12 @@
 package io.github.wumisc.antiburn
 
 import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -49,6 +52,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -67,12 +71,16 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import com.kyant.backdrop.catalog.components.LiquidBottomTab
 import com.kyant.backdrop.catalog.components.LiquidBottomTabs
@@ -112,10 +120,24 @@ private val UI_STYLE_LABELS = listOf(
 data class AbState(
     val enableStatus: Boolean = true,
     val enableNav: Boolean = false,
-    /** 像素偏移（AOSP BurnInProtection 同思路的温和模式，默认开） */
+    /**
+     * 像素偏移（AOSP BurnInProtection 同思路的温和模式）。
+     * v2.6.5 起内置常开：界面不再暴露开关，load() 固定 true、Hook 侧解析也固定 true。
+     * 字段与 Saver 索引保留，仅为兼容老配置与 Bundle 恢复，用户无需再操心它。
+     */
     val enableShift: Boolean = true,
     /** 状态栏图标单独开关（与 enable_status 分离，供只想隐藏图标不想隐藏整栏的用户用） */
     val enableIcon: Boolean = false,
+    /**
+     * 状态栏隐藏开关（默认开，与 v2.7 之前「总闸一开状态栏必隐藏」行为一致）。
+     *
+     * <p>v2.7 删掉「状态栏图标」磁贴时把「状态栏能不能单独关」这件事一起删了，
+     * 只留下总闸。于是用户在总闸打开后无论怎么调，状态栏都会跟着隐藏，
+     * 表现为「状态栏和导航栏一起消失，单独开关无效」。这里补一个独立开关，
+     * 键名与 enable_icon 分开：后者是历史死字段，旧配置里普遍是 0，
+     * 直接复用会让所有老用户升级后状态栏突然不再隐藏。</p>
+     */
+    val enableStatusBar: Boolean = true,
     /**
      * 目标 UI 适配方案：hyperos / magicos / coloros / originos / harmonyos / aosp。
      * 决定 Hook 侧用哪套「胶囊保护区 + 导航栏结构」配置，见 profiles/ 与 Config.uiStyle。
@@ -144,10 +166,22 @@ data class AbState(
     val whiteList: String = "",
     /** 黑名单内容：只有名单内应用才干预（为空时退回全部干预） */
     val blackList: String = "",
+    /**
+     * 运行引擎：lsposed（在 SystemUI 里 Hook，真隐藏 + 像素微移，需 root）/
+     * overlay（无障碍覆盖层遮盖，免 root，只能盖黑）。
+     *
+     * 默认 lsposed 是刻意的：老用户升级后配置里没有这个键，必须保持原行为，
+     * 不能因为「新功能是免 root」就把所有人切到遮盖引擎。
+     */
+    val engine: String = ConfStore.ENGINE_LSPOSED,
 ) {
     /** 当前模式对应的那份名单文本，UI 的输入框与卡片都读它 */
     val activeList: String
         get() = if (listMode == ConfStore.MODE_BLACK) blackList else whiteList
+
+    /** 是否走免 root 遮盖引擎 */
+    val isOverlay: Boolean
+        get() = ConfStore.normEngine(engine) == ConfStore.ENGINE_OVERLAY
 }
 
 /** 改动后延迟写盘：合并连续点击，短时间内退出由 MainActivity.onStop 强制补齐 */
@@ -164,6 +198,10 @@ private val AbStateSaver = listSaver(
             s.enableDramaRt, s.enableDramaLt,
             s.hideSec, s.showSec, s.customPoems, s.whiteList,
             s.enableShift, s.enableIcon, s.uiStyle, s.listMode, s.blackList,
+            // v2.6：运行引擎。索引由 25 增到 26。
+            s.engine,
+            // v2.6.4：状态栏独立开关。索引 26。
+            s.enableStatusBar,
         )
     },
     restore = { l: List<Any> ->
@@ -205,6 +243,10 @@ private val AbStateSaver = listSaver(
                 uiStyle = Str(22, "aosp"),
                 listMode = ConfStore.normMode(Str(23)),
                 blackList = Str(24),
+                // v2.6 新增：旧 Bundle 只有 25 项，getOrNull 会返回 null → 取默认值
+                engine = ConfStore.normEngine(Str(25, ConfStore.ENGINE_LSPOSED)),
+                // v2.6.4 新增：默认 true，与「总闸开则状态栏隐藏」的历史行为一致
+                enableStatusBar = Bool(26, true),
             )
         }
     },
@@ -237,8 +279,13 @@ object AbConf {
         return AbState(
             enableStatus = b(map["enable_status"], true),
             enableNav = b(map["enable_navigation"]),
-            enableShift = b(map["enable_shift"], true),
+            // v2.6.5：像素微移改为内置常开，界面不再暴露开关。固定 true 而不是读 map，
+            // 是为了让「老配置里曾把它关成 0」的用户升级后也自动拉回开，不必找不到入口去恢复。
+            // Hook 侧 Config.parse 同样固定 true；这里保留字段只为兼容 Bundle 与落盘审计。
+            enableShift = true,
             enableIcon = b(map["enable_icon"]),
+            // 缺失键按 true：v2.6.3 及以前的配置没有这个键，升级后行为必须保持不变
+            enableStatusBar = b(map["enable_status_bar"], true),
             uiStyle = normUiStyle(map["ui_style"]),
             // 诗句功能已下线（Hook 侧实现同步移除）：界面无入口、消费端已删，
             // 这里固定 false，避免老配置里的 enable_poem=1 被读进来再写回去。
@@ -264,6 +311,8 @@ object AbConf {
             listMode = lists.mode,
             whiteList = lists.white.joinToString(","),
             blackList = lists.black.joinToString(","),
+            // 缺 engine 键的旧配置按 lsposed 解释（normEngine 兜底），升级后行为不变
+            engine = ConfStore.normEngine(map["engine"]),
         )
     }
 
@@ -291,8 +340,11 @@ object AbConf {
             }
         }
         lines["enable_status"] = if (s.enableStatus) "1" else "0"
+        // s.enableShift 恒为 true（load 固定、界面无入口），因此恒写 1：
+        // 老配置里遗留的 enable_shift=0 在任意一次保存后即被纠正。
         lines["enable_shift"] = if (s.enableShift) "1" else "0"
         lines["enable_icon"] = if (s.enableIcon) "1" else "0"
+        lines["enable_status_bar"] = if (s.enableStatusBar) "1" else "0"
         lines["ui_style"] = normUiStyle(s.uiStyle)
         lines["enable_navigation"] = if (s.enableNav) "1" else "0"
         // 字段恒为 false（load 已固定），因此这里恒写 0：老配置里的 1
@@ -318,6 +370,7 @@ object AbConf {
         lines["list_mode"] = s.listMode
         lines["whitelist"] = s.whiteList.trim()
         lines["blacklist"] = s.blackList.trim()
+        lines["engine"] = ConfStore.normEngine(s.engine)
         // 供 Hook 侧识别混装（App 已升级、SystemUI 仍跑旧 dex）
         lines["app_ver"] = BuildConfig.VERSION_NAME
 
@@ -349,8 +402,10 @@ object AbConf {
             if (a != b) m[key] = if (b) "1" else "0"
         }
         putB("enable_status", old.enableStatus, new.enableStatus)
+        // 恒 true，不会产生 diff；保留这一行让「字段 → 落盘」审计仍成立。
         putB("enable_shift", old.enableShift, new.enableShift)
         putB("enable_icon", old.enableIcon, new.enableIcon)
+        putB("enable_status_bar", old.enableStatusBar, new.enableStatusBar)
         if (old.uiStyle != new.uiStyle) m["ui_style"] = normUiStyle(new.uiStyle)
         putB("enable_navigation", old.enableNav, new.enableNav)
         // 诗句字段恒为 false（功能已下线），此行使字段与 conf 的写入路径保持完整，
@@ -382,6 +437,11 @@ object AbConf {
             // 完整快照（目标名单缺键即视为空），只写模式键会把当前名单清空。
             m["whitelist"] = new.whiteList.trim()
             m["blacklist"] = new.blackList.trim()
+        }
+        // 引擎切换是「开关语义级」的改动：Hook 侧看到 overlay 就整体让位，
+        // 遮盖引擎看到 lsposed 就不接管，因此必须单独落盘，不能和别的键合并省略。
+        if (ConfStore.normEngine(old.engine) != ConfStore.normEngine(new.engine)) {
+            m["engine"] = ConfStore.normEngine(new.engine)
         }
         return m
     }
@@ -742,8 +802,6 @@ private fun BurnInProtectApp() {
                         0 -> HomeTilePage(
                             enabled = state.enableStatus,
                             onToggle = { on -> onStateChange { s -> s.copy(enableStatus = on) } },
-                            hideSec = state.hideSec,
-                            showSec = state.showSec,
                             listMode = state.listMode,
                             activeList = state.activeList,
                             onListModeChange = { m -> onStateChange { s -> s.copy(listMode = m) } },
@@ -756,9 +814,15 @@ private fun BurnInProtectApp() {
                             uiStyle = state.uiStyle,
                             onUiStyleChange = { id -> onStateChange { s -> s.copy(uiStyle = id) } },
                             onOpenList = { openList(state.listMode) },
-                            onOpenCycle = { openSub("cycle") },
                             onSelfCheck = { selfCheckList() },
                             saveBar = saveBar,
+                            engineCard = {
+                                EngineCard(
+                                    state = state,
+                                    onStateChange = onStateChange,
+                                    dark = dark,
+                                )
+                            },
                         )
                         1 -> FeaturesPage(
                             state = state,
@@ -816,8 +880,6 @@ private fun BurnInProtectApp() {
             } else {
                 SubPageHost(
                     page = subPage!!,
-                    state = state,
-                    onStateChange = onStateChange,
                     onBack = { subPage = null },
                     onOpenUrl = openUrl,
                 )
@@ -919,13 +981,616 @@ private fun ListModeChips(mode: String, onChange: (String) -> Unit) {
     }
 }
 
+/**
+ * LSPosed 引擎跑不起来的真实原因。
+ *
+ * <p>三态必须分开写：把「root 未授权」说成「未检测到 root」，K90 这类已经刷了
+ * KernelSU 的机器会被误判成「这模块不支持我的手机」，而用户其实只需要去点一下允许。</p>
+ */
+private fun hookBlockReason(c: Capability?): String {
+    if (c == null) {
+        return "正在检测运行环境…"
+    }
+    return when {
+        c.rootState == Capability.ROOT_DENIED ->
+            "root 还没授权给本应用（su 被拒），LSPosed 引擎暂时用不了"
+        c.rootState != Capability.ROOT_GRANTED ->
+            "这台手机没有 root，LSPosed 引擎跑不起来"
+        !c.lsposedPresent ->
+            if (c.note.isNotEmpty()) c.note else "有 root，但系统里没找到 LSPosed 模块"
+        // 走到这里说明探测结果自相矛盾（root 与 LSPosed 都齐了却没被算作可用），
+        // 不编一个原因，直接让用户重测 —— 编出来的解释比不给更误导。
+        else ->
+            "环境探测结果不完整，点「重新检测」再看一次"
+    }
+}
+
+// ---- 运行方式（v2.6：Hook / 无障碍遮盖 双引擎）----
+
+/** 从任意 Context 找到宿主 Activity：Shizuku 的授权对话框必须挂在一个 Activity 上。 */
+private tailrec fun Context.findHostActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findHostActivity()
+    else -> null
+}
+
+/**
+ * 运行方式卡片。
+ *
+ * <p>设计要点（三条都来自之前的教训）：</p>
+ * <ol>
+ *   <li><b>不可用的选项不隐藏，灰显 + 写明原因。</b>v2.9 那次「状态栏偏移磁贴消失」就是
+ *       把入口删了但功能还在跑，用户以为坏了。这里反过来：没 root 也把 LSPosed 选项摆出来，
+ *       点它时明确告诉你缺什么。</li>
+ *   <li><b>选完立刻告诉用户还差哪一步。</b>遮盖引擎选了不等于能用——还要开无障碍；
+ *       开了不等于在跑——服务可能没连上。三个状态分开显示，不合并成一句「已开启」。</li>
+ *   <li><b>不记忆实验性动作。</b>「真隐藏状态栏」用 shell 禁用状态栏，一旦落盘成配置项，
+ *       用户换引擎或卸载应用后状态栏就再也回不来。所以它只是两个手动按钮，不进配置。</li>
+ * </ol>
+ */
+@Composable
+private fun EngineCard(
+    state: AbState,
+    onStateChange: ((AbState) -> AbState) -> Unit,
+    dark: Boolean,
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var cap by remember { mutableStateOf<Capability?>(null) }
+    var hook by remember { mutableStateOf<HookState?>(null) }
+    var refreshTick by remember { mutableIntStateOf(0) }
+    var busy by remember { mutableStateOf("") }
+
+    fun toast(msg: String) {
+        Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+    }
+
+    // 能力探测要 fork su，必须离开主线程；refreshTick 变化即重探（从设置页返回、授权完成等）
+    LaunchedEffect(refreshTick) {
+        val probed = withContext(Dispatchers.IO) { Capability.probe(context) }
+        cap = probed
+        // Hook 版本探测同样要 root（读别人的 /proc），root 没授权时直接跳过，
+        // 否则会白等 8 秒 su 超时，首屏卡片一直停在「正在检测」。
+        hook = withContext(Dispatchers.IO) {
+            if (probed.rootState == Capability.ROOT_GRANTED) HookState.probe(context) else null
+        }
+    }
+
+    // 用户去系统设置里手动开完无障碍、按返回键回来时刷新，否则界面会一直显示「未开启」
+    val owner = LocalLifecycleOwner.current
+    DisposableEffect(owner) {
+        val obs = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) refreshTick++
+        }
+        owner.lifecycle.addObserver(obs)
+        onDispose { owner.lifecycle.removeObserver(obs) }
+    }
+
+    // Shizuku 授权结果回到界面：成功/拒绝都要有反馈，不能静默。
+    // key 用 refreshTick 而不是 Unit：Shizuku 常见的使用顺序是「先装本应用、之后才启动
+    // Shizuku 服务」，只在首次组合时注册会错过之后的回调，用户点完授权看不到任何反应。
+    DisposableEffect(refreshTick) {
+        ShizukuBridge.watchPermission { granted ->
+            toast(if (granted) "Shizuku 已授权" else "Shizuku 授权被拒绝，可到 Shizuku 应用里手动授予")
+            refreshTick++
+        }
+        onDispose { ShizukuBridge.unwatchPermission() }
+    }
+
+    val c = cap
+    val engine = ConfStore.normEngine(state.engine)
+    val overlay = engine == ConfStore.ENGINE_OVERLAY
+    val hookUsable = c?.hookUsable() == true
+    val ink = UiPalette.ink(dark)
+    val sub = MaterialTheme.colorScheme.onSurfaceVariant
+
+    Card(
+        Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = UiPalette.surface(dark)),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "运行方式",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = ink,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    if (overlay) "无障碍遮盖" else "LSPosed 模块",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = UiPalette.accent(dark),
+                )
+            }
+
+            // 总开关是总闸：它关着的时候，下面选哪条引擎都不会动手。真机日志里连续三次
+            // 看到用户在两张芯片之间来回切、而 status 全程 false —— 问题从来不在引擎，
+            // 在最下面那张卡片的开关上，而那里原先只有一行同色小字「已关闭」，看不出来。
+            // 放在芯片之前，是因为它是「切了也不会有反应」的第一顺位原因。
+            if (!state.enableStatus) {
+                MasterOffNotice(dark) { onStateChange { it.copy(enableStatus = true) } }
+            }
+
+            Text(
+                "两条引擎互斥，同一时刻只有一条生效。有 root 走 LSPosed（真隐藏 + 像素微移）；" +
+                        "没有 root 走无障碍遮盖（盖黑系统栏，同样让那块像素停止发光）。",
+                style = MaterialTheme.typography.bodySmall,
+                color = sub,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+
+            Row(
+                Modifier.fillMaxWidth().padding(top = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                FilterChip(
+                    selected = !overlay,
+                    onClick = {
+                        if (!hookUsable) {
+                            toast("没检测到 root + LSPosed，这条引擎跑不起来。没有 root 请选「无障碍遮盖」。")
+                        } else {
+                            onStateChange { it.copy(engine = ConfStore.ENGINE_LSPOSED) }
+                            toast(
+                                "已切换到 LSPosed 引擎。还要确认两件事：" +
+                                        "① LSPosed 里已勾选本应用（作用域含「系统界面」）；" +
+                                        "② 重启一次系统界面。" +
+                                        (if (state.enableStatus) ""
+                                        else "另外，防烧屏保护总开关现在是关着的，不打开不会有任何效果。")
+                            )
+                        }
+                    },
+                    label = { Text("LSPosed 模块", style = MaterialTheme.typography.bodySmall) },
+                )
+                FilterChip(
+                    selected = overlay,
+                    onClick = {
+                        onStateChange { it.copy(engine = ConfStore.ENGINE_OVERLAY) }
+                        // 切到遮盖引擎时，如果之前用 Shizuku 禁用过状态栏，先恢复再切
+                        if (ShizukuBridge.hasPermission()) {
+                            scope.launch { withContext(Dispatchers.IO) { ShizukuBridge.restoreStatusBar() } }
+                        }
+                        // 原先这条分支一声不响：点完芯片界面上除了一行小字没有任何变化，
+                        // 用户不知道下一步该去系统设置里打开无障碍。
+                        toast(
+                            if (!state.enableStatus) {
+                                "已切换到无障碍遮盖引擎。注意：防烧屏保护总开关还关着，打开才会生效。"
+                            } else {
+                                "已切换到无障碍遮盖引擎。去系统设置的无障碍里打开本应用的服务，才会真正开始遮盖。"
+                            }
+                        )
+                    },
+                    label = { Text("无障碍遮盖", style = MaterialTheme.typography.bodySmall) },
+                )
+            }
+
+            Text(
+                c?.summary() ?: "正在检测运行环境…",
+                style = MaterialTheme.typography.labelSmall,
+                color = sub,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+
+            if (!hookUsable && !overlay) {
+                // 关键提示：新用户（无 root）第一次打开时，默认引擎是 lsposed，跑不起来。
+                // 只写「不可用」会让人以为这软件用不了；给一个一键切换，他才知道下一步点哪。
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "· " + hookBlockReason(c),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(
+                        onClick = { onStateChange { it.copy(engine = ConfStore.ENGINE_OVERLAY) } },
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp),
+                    ) {
+                        Text("改用它", style = MaterialTheme.typography.labelMedium)
+                    }
+                }
+            }
+            if (!hookUsable && overlay) {
+                Text(
+                    "· LSPosed 那条不可用：" + hookBlockReason(c).removePrefix("· "),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = sub,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
+            // 「root 未授权」是唯一一种「用户自己点两下就能修好」的状态，必须单独给按钮：
+            // 停在「未检测到 root」会让 K90 这类已 root 的机器被误判成不支持。
+            if (c?.rootState == Capability.ROOT_DENIED) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "去 KernelSU / Magisk / APatch 里给本应用 root 权限，然后点右边重新检测。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = sub,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(
+                        onClick = {
+                            ConfStore.invalidateRootCache()
+                            Capability.invalidate()
+                            HookState.invalidate()
+                            refreshTick++
+                            toast("正在重新检测…首次授权可能要等几秒")
+                        },
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp),
+                    ) {
+                        Text("重新检测", style = MaterialTheme.typography.labelMedium)
+                    }
+                }
+            }
+
+            // 「系统界面里还是旧版」与选哪条引擎无关，所以放在两条引擎各自的区块之前：
+            // 用户切引擎时最容易被这条误导，提示必须在切换点之前出现。
+            HookStaleNotice(
+                hook = hook,
+                dark = dark,
+                busy = busy,
+                onRestart = {
+                    if (busy.isNotEmpty()) return@HookStaleNotice
+                    scope.launch {
+                        busy = "restart"
+                        try {
+                            val out = withContext(Dispatchers.IO) { HookState.restartSystemUi() }
+                            if (out != null && out.contains("ab-restart-ok")) {
+                                HookState.invalidate()
+                                toast(
+                                    "已发出重启指令。屏幕会黑一下、通知栏消失几秒，系统界面会自动恢复；" +
+                                            "等通知栏回来后这里是新版状态才算真正加载。"
+                                )
+                                delay(5000)
+                                refreshTick++
+                            } else {
+                                toast("重启失败，可在终端执行：su -c \"killall com.android.systemui\"")
+                            }
+                        } finally {
+                            busy = ""
+                        }
+                    }
+                },
+            )
+
+            if (overlay) {
+                Spacer(Modifier.height(10.dp))
+                val a11yOn = c?.a11yEnabled == true
+                val running = BurnInMaskService.connected
+                Text(
+                    when {
+                        !a11yOn -> "第 1 步：开启本应用的无障碍服务，遮盖才会工作。"
+                        !running -> "无障碍已开，但服务没连上。到设置里把它关掉再打开一次；仍不行就重启手机。"
+                        else -> "遮盖引擎正在运行：按周期遮住系统栏，触摸完全穿透。"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (a11yOn && running) UiPalette.accent(dark) else sub,
+                )
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    if (!a11yOn || !running) {
+                        TextButton(
+                            onClick = {
+                                try {
+                                    val i = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                                    i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    context.startActivity(i)
+                                } catch (t: Throwable) {
+                                    toast("打不开无障碍设置页，请到「设置 → 无障碍」里手动开启")
+                                }
+                            },
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp),
+                        ) {
+                            Text(
+                                if (a11yOn) "去设置里重开" else "去开启无障碍",
+                                style = MaterialTheme.typography.labelMedium,
+                            )
+                        }
+                    }
+                    if (c?.shizukuGranted == true) {
+                        TextButton(
+                            onClick = {
+                                if (busy.isNotEmpty()) return@TextButton
+                                scope.launch {
+                                    busy = "a11y"
+                                    try {
+                                        val out = withContext(Dispatchers.IO) {
+                                            ShizukuBridge.enableAccessibility(context)
+                                        }
+                                        if (out == null) {
+                                            toast("Shizuku 执行失败：" + ShizukuBridge.lastError())
+                                        } else if (out.contains("ab-ok")) {
+                                            toast("已通过 Shizuku 开通无障碍，系统生效可能需要几秒")
+                                            refreshTick++
+                                        } else {
+                                            toast("执行结果：" + out.take(140))
+                                        }
+                                    } finally {
+                                        busy = ""
+                                    }
+                                }
+                            },
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp),
+                        ) {
+                            Text("用 Shizuku 一键开通", style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
+                    if (running) {
+                        TextButton(
+                            onClick = {
+                                BurnInMaskService.requestPreview()
+                                toast("接下来 5 秒会强制遮盖，看看状态栏有没有变黑")
+                            },
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp),
+                        ) {
+                            Text("预览 5 秒", style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
+                }
+                if (running && BurnInMaskService.lastError.isNotEmpty()) {
+                    Text(
+                        "· " + BurnInMaskService.lastError,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                }
+                A11yRequiredNotice(dark)
+
+            // 可选：Shizuku 增强与上面的无障碍状态同属遮盖引擎专属内容。
+            // LSPosed 引擎不需要借 Shizuku 代开无障碍，展示出来只会让有 root 的用户
+            // 误以为必须装 Shizuku 才能用模块 —— 按需求整块收进 if (overlay)。
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "可选：Shizuku 增强",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold,
+                color = ink,
+            )
+            Text(
+                when {
+                    c == null -> "正在检测…"
+                    !c.shizukuInstalled -> "未安装 Shizuku。装了可以用它代开无障碍、省掉手动找设置页。"
+                    !c.shizukuReady -> "Shizuku 已安装但服务没在跑，请在 Shizuku 应用里启动服务。"
+                    !c.shizukuGranted -> "已连上 Shizuku，但本应用还没被授权。"
+                    else -> "已授权。可用它一键开通无障碍，或临时隐藏状态栏。"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = sub,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+
+            if (c != null && c.shizukuReady && !c.shizukuGranted) {
+                TextButton(
+                    onClick = {
+                        val act = context.findHostActivity()
+                        if (act == null) {
+                            toast("找不到宿主界面，无法发起授权")
+                            return@TextButton
+                        }
+                        val ok = ShizukuBridge.requestPermission(act)
+                        if (!ok) {
+                            toast("无法发起授权：请打开 Shizuku 应用确认服务在运行，并在其中手动授予本应用权限")
+                        }
+                    },
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp),
+                ) {
+                    Text("授权 Shizuku", style = MaterialTheme.typography.labelMedium)
+                }
+            }
+
+            if (c?.shizukuGranted == true) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    TextButton(
+                        onClick = {
+                            if (busy.isNotEmpty()) return@TextButton
+                            scope.launch {
+                                busy = "hide"
+                                try {
+                                    val out = withContext(Dispatchers.IO) { ShizukuBridge.setStatusBarDisabled(true) }
+                                    toast(
+                                        if (out == null) "执行失败：" + ShizukuBridge.lastError()
+                                        else "状态栏已临时隐藏。留意：下拉通知栏会一起失效，记得点「恢复」。"
+                                    )
+                                } finally {
+                                    busy = ""
+                                }
+                            }
+                        },
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp),
+                    ) {
+                        Text("临时隐藏状态栏", style = MaterialTheme.typography.labelMedium)
+                    }
+                    TextButton(
+                        onClick = {
+                            if (busy.isNotEmpty()) return@TextButton
+                            scope.launch {
+                                busy = "restore"
+                                try {
+                                    val out = withContext(Dispatchers.IO) { ShizukuBridge.restoreStatusBar() }
+                                    toast(if (out == null) "执行失败：" + ShizukuBridge.lastError() else "已恢复状态栏")
+                                } finally {
+                                    busy = ""
+                                }
+                            }
+                        },
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp),
+                    ) {
+                        Text("恢复状态栏", style = MaterialTheme.typography.labelMedium)
+                    }
+                }
+                Text(
+                    "「临时隐藏状态栏」不写入配置，重启手机或点「恢复」即还原。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = sub,
+                )
+            }
+            }   // 闭合 if (overlay)：无障碍状态 + Shizuku 增强都只在遮盖引擎下显示
+        }
+    }
+}
+
+/**
+ * 「防烧屏总开关没开」的提示块。
+ *
+ * <p>为什么值得单独占一块：总开关是总闸，引擎只是执行方式。它关着的时候，
+ * 用户在「运行方式」卡片里怎么切都不会有任何反应，而界面上原先只有总开关卡片里
+ * 一行同色小字「已关闭」——连续三份真机日志里，用户都在这张卡片上来回切引擎，
+ * 而 status 全程 false。属于「功能没坏，但用户看不出现在不生效」，与旧版检测同类。</p>
+ *
+ * <p>样式用警示橙而非错误红：这不是故障，是一个用户自己点一下就好的状态，
+ * 但必须比正文更先被看到。按钮直接开总闸，不让用户滚下去找开关。</p>
+ */
+@Composable
+private fun MasterOffNotice(dark: Boolean, onEnable: () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 10.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(UiPalette.warn(dark).copy(alpha = 0.12f))
+            .padding(horizontal = 10.dp, vertical = 9.dp),
+    ) {
+        Text(
+            "防烧屏保护总开关没开",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
+            color = UiPalette.warn(dark),
+        )
+        Text(
+            "总开关是总闸，引擎只是执行方式 —— 它关着的时候，下面选哪一条都不会动手，" +
+                    "隐藏、像素偏移一律不跑。日志里这一项是 status=false。",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 3.dp),
+        )
+        TextButton(
+            onClick = onEnable,
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp),
+            modifier = Modifier.padding(top = 2.dp),
+        ) {
+            Text(
+                "开启防烧屏保护",
+                style = MaterialTheme.typography.labelMedium,
+                color = UiPalette.warn(dark),
+            )
+        }
+    }
+}
+
+/**
+ * 「系统界面里跑的还是旧版」的提示块。
+ *
+ * <p>这不是可选提示：本模块的 Hook 代码注入在系统界面进程里，而系统界面是常驻进程，
+ * 装包、覆盖安装都不会让它重启。用户装完新版后，App 界面已经是新的，但真正干活的
+ * 还是旧 dex —— 所有新增开关都表现为「点了没反应」，而界面上没有任何地方能看出来。
+ * 该现象在真机反馈里出现过三次，与其每次让用户贴日志，不如自己算出来直接给按钮。</p>
+ *
+ * <p>判定不靠日志：拿系统界面进程的启动时刻和本 APK 的安装时刻比大小，进程更老就是旧版。
+ * 探不到（没 root、ROM 改了进程名）时整块不显示，不猜也不误报。</p>
+ */
+@Composable
+private fun HookStaleNotice(
+    hook: HookState?,
+    dark: Boolean,
+    busy: String,
+    onRestart: () -> Unit,
+) {
+    if (hook == null || !hook.stale()) return
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 10.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(UiPalette.warn(dark).copy(alpha = 0.12f))
+            .padding(horizontal = 10.dp, vertical = 9.dp),
+    ) {
+        Text(
+            "系统界面里跑的还是旧版",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
+            color = UiPalette.warn(dark),
+        )
+        Text(
+            "隐藏逻辑注入在系统界面进程里，而它是常驻进程 —— 装包不会让它重启。" +
+                    "它现在这份是 " + agoText(hook.runningForMs()) + "启动的，比你装这一版更早，" +
+                    "所以这次改的东西点了不会有反应。" +
+                    (if (hook.pid > 0) "（pid " + hook.pid + "）" else ""),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 3.dp),
+        )
+        TextButton(
+            onClick = onRestart,
+            enabled = busy.isEmpty(),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp),
+            modifier = Modifier.padding(top = 2.dp),
+        ) {
+            Text(
+                if (busy == "restart") "正在重启…" else "重启系统界面",
+                style = MaterialTheme.typography.labelMedium,
+                color = UiPalette.warn(dark),
+            )
+        }
+    }
+}
+
+/** 把毫秒时长写成「3 分钟前」这种人话；超过一天就报天数，不让数字堆成一长串。 */
+internal fun agoText(ms: Long): String {
+    if (ms <= 0L) return "刚刚"
+    val min = ms / 60_000L
+    return when {
+        min < 1 -> "刚刚"
+        min < 60 -> "$min 分钟前"
+        min < 60 * 24 -> "${min / 60} 小时前"
+        else -> "${min / (60 * 24)} 天前"
+    }
+}
+
+/**
+ * 「关闭也必须开着无障碍」的说明块。
+ *
+ * <p>这条提示不是免责声明，是在解释一个真实机制：遮盖窗口由无障碍服务创建，
+ * 服务一停窗口立刻销毁，功能其实已经停了，但 App 里的开关还是「开」——
+ * 用户下次看到开关会以为功能在跑，或者以为关不掉。所以必须写明
+ * 「先开无障碍，再回这里关开关」，而不是让他去系统设置里关无障碍当关功能。</p>
+ */
+@Composable
+private fun A11yRequiredNotice(dark: Boolean) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 10.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(UiPalette.warn(dark).copy(alpha = 0.12f))
+            .padding(horizontal = 10.dp, vertical = 9.dp),
+    ) {
+        Text(
+            "如果要关闭该功能，必须开启无障碍功能，然后关闭下方总开关",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
+            color = UiPalette.warn(dark),
+        )
+        Text(
+            "遮盖窗口随无障碍服务一起创建、一起销毁。直接在系统设置里关掉无障碍，" +
+                    "功能会立刻停，但下面的总开关还是「开」——你会以为它还在跑，也找不到地方关。",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 3.dp),
+        )
+    }
+}
+
 // ---- 首页 ----
 @Composable
 private fun HomeTilePage(
     enabled: Boolean,
     onToggle: (Boolean) -> Unit,
-    hideSec: Int,
-    showSec: Int,
     listMode: String,
     activeList: String,
     onListModeChange: (String) -> Unit,
@@ -933,9 +1598,9 @@ private fun HomeTilePage(
     uiStyle: String,
     onUiStyleChange: (String) -> Unit,
     onOpenList: () -> Unit,
-    onOpenCycle: () -> Unit,
     onSelfCheck: () -> Unit,
     saveBar: @Composable () -> Unit,
+    engineCard: @Composable () -> Unit,
 ) {
     val dark = isSystemInDarkTheme()
     Column(
@@ -947,10 +1612,18 @@ private fun HomeTilePage(
     ) {
         Text("防止烧屏", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold,
             color = UiPalette.ink(dark))
-        Text("LSPosed 模块 · 全面功能", style = MaterialTheme.typography.bodySmall,
+        // 不再写死「LSPosed 模块」：应用同时支持免 root 的无障碍遮盖引擎，
+        // 无 root 用户看到旧文案会以为这个软件自己用不了。
+        Text("支持 LSPosed / 无障碍遮盖双引擎", style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant)
 
         saveBar()
+
+        Spacer(Modifier.height(12.dp))
+
+        // 运行方式放在最前面：无 root 用户开机第一件事就是得知道「我该选哪个」，
+        // 埋在功能页里等于没有。
+        engineCard()
 
         Spacer(Modifier.height(12.dp))
 
@@ -964,15 +1637,17 @@ private fun HomeTilePage(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(Modifier.weight(1f)) {
-                    Text("防烧屏保护", style = MaterialTheme.typography.titleMedium,
+                    Text("防烧屏总开关", style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold, color = UiPalette.ink(dark))
-                    Text("周期隐藏状态栏图标，防 OLED 烧屏。与系统快捷磁贴同步。",
+                    Text("总闸：关闭后所有隐藏与遮盖都不生效",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 4.dp))
                     Text(if (enabled) "已开启" else "已关闭",
                         style = MaterialTheme.typography.bodySmall,
-                        color = UiPalette.accent(dark),
+                        // 「已关闭」用警示橙：它是「所有功能都不生效」的唯一开关，
+                        // 与强调色同色时，视线扫过去和「已开启」没有区别。
+                        color = if (enabled) UiPalette.accent(dark) else UiPalette.warn(dark),
                         modifier = Modifier.padding(top = 6.dp))
                 }
                 LiquidToggle(checked = enabled, onCheckedChange = onToggle)
@@ -981,16 +1656,7 @@ private fun HomeTilePage(
 
         Spacer(Modifier.height(12.dp))
 
-        // 周期时长：v2.6 起收进独立磁贴 + 二级菜单，首页只留一个单行入口
-        ListRow(
-            title = "周期时长",
-            subtitle = "隐藏 ${hideSec}s · 显示 ${showSec}s",
-            onClick = onOpenCycle,
-            dark = dark,
-        )
-
-        Spacer(Modifier.height(12.dp))
-
+        // 周期时长已移到「功能 → 通用」磁贴，点磁贴弹小窗调整，首页不再放第二处入口。
         Card(
             Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(18.dp),
@@ -1069,6 +1735,17 @@ private fun HomeTilePage(
 /**
  * 一个磁贴的数据。enabled=false 表示常驻不可切换（如红果底部剧集入口）。
  * navClick 不为空时是「入口磁贴」：点击进二级菜单，不显示开关状态。
+ *
+ * <p>参数顺序有硬约束：**onToggle 必须是最后一个**。所有调用点都写成
+ * <code>TileItem(a, b, c, checked) { toggle() }</code> 的尾随 lambda 形式，
+ * Kotlin 把尾随 lambda 绑给「最后一个参数」。v2.9 重排时把 navClick 挪到了末尾，
+ * 于是二十多个功能磁贴的尾随 lambda 全被绑成 navClick，onToggle 退化成空实现。</p>
+ *
+ * <p>后果不是点不动（TileCard 里 nav != null 时也会 invoke），而是
+ * <code>isEntry = navClick != null</code> 恒为真 —— 每个磁贴右上角都显示「›」、
+ * 永远不显示「已开启 / 已关闭」。用户看不出开关状态，只好反复点，
+ * 于是一个本来开着的东西被点成关闭，反馈成「改一下设置它自己就关了」。
+ * 真机日志里 shift 从 true 变 false 只隔 2 秒，正是这么来的。</p>
  */
 private data class TileItem(
     val title: String,
@@ -1076,8 +1753,8 @@ private data class TileItem(
     val subtitle: String,
     val checked: Boolean,
     val enabled: Boolean = true,
-    val onToggle: (Boolean) -> Unit = {},
     val navClick: (() -> Unit)? = null,
+    val onToggle: (Boolean) -> Unit = {},
 )
 
 @Composable
@@ -1089,6 +1766,8 @@ private fun FeaturesPage(
     onFeaturePageChange: (Int) -> Unit,
 ) {
     val dark = isSystemInDarkTheme()
+    // 周期时长点磁贴弹小窗，不再跳二级页；避免和首页入口两处状态不一致。
+    var showCycleDialog by remember { mutableStateOf(false) }
     Column(
         Modifier
             .fillMaxSize()
@@ -1098,7 +1777,7 @@ private fun FeaturesPage(
     ) {
         Text("功能磁贴", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold,
             color = UiPalette.ink(dark))
-        Text("点击磁贴即可开关；带 › 的磁贴可进入详细设置",
+        Text("点击磁贴即可开关；带 › 的磁贴会打开设置小窗",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant)
 
@@ -1130,33 +1809,45 @@ private fun FeaturesPage(
                 // 点一下等于把整个模块关掉，与首页总开关重复且严重误导
                 // （日志里 status 反复 0↔1 正来源于此）。状态栏图标隐藏本就是
                 // 总闸开启后的固有行为（hideStatusKeepNotify），无需第二个入口。
+                //
+                // v2.6.4：上面这个结论被真机推翻了。删掉之后状态栏变成「总闸一开必隐藏」，
+                // 用户想把状态栏留下、只隐藏导航栏时无路可走，反馈成
+                // 「总开关一开，状态栏导航栏百分百一起隐藏」。这次不绑总闸，
+                // 绑独立的 enable_status_bar（默认 true，老配置行为不变）。
                 TileGrid(
                     listOf(
+                        TileItem("状态栏", "栏", "顶部图标周期性隐藏", state.enableStatusBar) {
+                            onStateChange { s -> s.copy(enableStatusBar = !s.enableStatusBar) }
+                        },
                         TileItem("导航栏", "导", "底部系统导航栏", state.enableNav) {
                             onStateChange { s -> s.copy(enableNav = !s.enableNav) }
                         },
-                        // v2.9：补回「状态栏偏移」磁贴。该能力的 Hook 侧实现一直在
-                        // （Controller.java 读 Config.enableShift → PixelShift.bind/tick），
-                        // 但 2.7 删磁贴时连唯一入口一起删掉了，配置里永远保持默认值 true，
-                        // 用户既关不掉也无从得知。此处恢复为可开关。
-                        TileItem("状态栏偏移", "移", "图标 1~2px 微移", state.enableShift) {
-                            onStateChange { s -> s.copy(enableShift = !s.enableShift) }
-                        },
+                        // v2.6.5：按需求删除「状态栏偏移」开关。它在真机上反复引发
+                        // 「改一下设置就自己关掉」的反馈（v2.9 磁贴参数绑错的那次）。
+                        // 像素微移是视觉无感的温和防护，改为内置常开、不再暴露开关：
+                        // AbState / Config / Controller 链路原样保留，避免动 Saver 索引
+                        // 让老用户升级后 Bundle 恢复错位。字段值在 load/save 固定为开。
                         TileItem("诊断日志", "志", "写 diag.log 排查", state.enableLog) {
                             onStateChange { s -> s.copy(enableLog = !s.enableLog) }
                         },
                         TileItem("悬浮球", "球", "点击切换隐藏控件", state.enableBall) {
                             onStateChange { s -> s.copy(enableBall = !s.enableBall) }
                         },
-                        // v2.7：按用户要求移除功能页「周期时长」磁贴，首页保留唯一入口，
-                        // 避免同一设置两处入口、状态不一致。
+                        // v2.6.5：周期时长从首页 ListRow 挪到这里。它是全功能页唯一
+                        // 有意的「入口磁贴」，用命名参数 navClick 显式标注，点开弹小窗，
+                        // 不会像 2.9 那次被尾随 lambda 误绑成一整片的入口。
+                        TileItem(
+                            "周期时长", "时", "隐藏 ${state.hideSec}s · 显示 ${state.showSec}s",
+                            false, navClick = { showCycleDialog = true },
+                        ),
                     )
                 )
 
-                // v2.9：名单卡片只在首页保留一份，此处不再重复。
+                // v2.6.5：名单卡片只在首页保留一份，此处不再重复。
                 // 同一份设置在两个页面各摆一张卡片时，两处入口的展开状态、滚动位置
                 // 互不同步，用户会以为是两套名单；且功能页这张的表单会把页面撑长，
                 // 压掉下方抖音 / 红果子页的可见性。
+                RoadmapCard(dark)
             }
             1 -> {
                 GroupTitle("抖音 · 视频页六个区域")
@@ -1207,6 +1898,16 @@ private fun FeaturesPage(
             }
         }
         Spacer(Modifier.height(8.dp))
+
+        // 周期时长：点「通用」里的入口磁贴就地弹小窗，不再跳二级页。
+        if (showCycleDialog) {
+            CycleDialog(
+                state = state,
+                onStateChange = onStateChange,
+                dark = dark,
+                onDismiss = { showCycleDialog = false },
+            )
+        }
     }
 }
 
@@ -1359,6 +2060,7 @@ private val THANKS = listOf(
     Thanks("辉哥", "辉", "资金支持"),
     Thanks("酷安@专属的小哈基米", "哈", "提供悬浮球思路"),
     Thanks(".哥", "哥", "资金支持"),
+    Thanks("酷安@酷安总作践自己", "酷", "资金支持"),
 )
 
 /** 项目仓库地址（GitHub）——关于页「项目地址」点击跳转。 */
@@ -1410,10 +2112,17 @@ private fun AboutPage(onOpen: (String) -> Unit, onOpenUrl: (String) -> Unit) {
         ListRow("项目地址", "github.com/Xposed-Modules-Repo/…", { onOpenUrl(PROJECT_URL) }, dark,
             trailing = "↗")
 
-        Text("本模块仅供学习交流使用 · LSPosed + root 环境",
+        // v2.6.5：原文案把运行方式写死成单一环境，免 root 用户在关于页会以为
+        // 自己根本用不了这个软件。改成把两种运行方式都讲清楚，并且不夸大能力。
+        Text("有 root 与 LSPosed 框架用 Hook 引擎（真隐藏）；没有 root 用无障碍遮盖引擎（盖黑系统栏、触摸穿透）。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.fillMaxWidth().padding(top = 14.dp),
+            textAlign = TextAlign.Center)
+        Text("本应用仅供学习交流使用 · 支持 LSPosed / 免 root 无障碍两种运行方式",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.outline,
-            modifier = Modifier.fillMaxWidth().padding(top = 18.dp),
+            modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
             textAlign = TextAlign.Center)
     }
 }
@@ -1422,8 +2131,6 @@ private fun AboutPage(onOpen: (String) -> Unit, onOpenUrl: (String) -> Unit) {
 @Composable
 private fun SubPageHost(
     page: String,
-    state: AbState,
-    onStateChange: ((AbState) -> AbState) -> Unit,
     onBack: () -> Unit,
     onOpenUrl: (String) -> Unit,
 ) {
@@ -1431,7 +2138,6 @@ private fun SubPageHost(
     val title = when (page) {
         "thanks" -> "感谢名单"
         "donate" -> "支持捐赠"
-        "cycle" -> "周期时长"
         "credit" -> "致敬名单"
         else -> "设置"
     }
@@ -1465,7 +2171,6 @@ private fun SubPageHost(
                 "thanks" -> ThanksPage(dark)
                 "donate" -> DonatePage(dark)
                 "credit" -> CreditPage(dark, onOpenUrl)
-                "cycle" -> CyclePage(state, onStateChange, dark)
             }
         }
     }
@@ -1597,19 +2302,87 @@ private fun CreditPage(dark: Boolean, onOpenUrl: (String) -> Unit) {
         textAlign = TextAlign.Center)
 }
 
-/** 周期时长二级页：本地暂存，点保存一次落盘，避免滑条每帧写盘。 */
+/**
+ * 适配计划占位卡片（v2.6.5）。
+ *
+ * <p>用户提出「功能区计划增加对快手和哔哩哔哩的支持」，本版选择先放计划说明，
+ * 不动 Hook、不改 xposed_scope、也不放假开关。必须写清楚「规划中、不生效」，
+ * 否则用户会在功能区找开关却找不到，又变成一次「装了没效果」。</p>
+ */
+@Composable
+private fun RoadmapCard(dark: Boolean) {
+    Spacer(Modifier.height(4.dp))
+    Card(
+        Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = UiPalette.surface(dark, 0.55f)),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Text("适配计划", style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold, color = UiPalette.ink(dark))
+            Text("快手、哔哩哔哩的视频页区域隐藏已列入计划，当前版本尚未支持。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 6.dp))
+            Text("本版仅作计划说明，不提供开关；状态栏、导航栏与抖音 / 红果短剧的现有功能不受影响。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.padding(top = 6.dp))
+        }
+    }
+}
+
+/**
+ * 周期时长小窗（v2.6.5）。
+ *
+ * <p>以前是首页 ListRow 跳一个二级页：要先回首页、再进二级页、改完再返回。
+ * 现在入口放在「功能 → 通用」磁贴，点开就在这页弹窗调，改完点保存自动关窗。
+ * 内容复用 CyclePage，滑条与保存逻辑只有一份，避免两处漂移。</p>
+ */
+@Composable
+private fun CycleDialog(
+    state: AbState,
+    onStateChange: ((AbState) -> AbState) -> Unit,
+    dark: Boolean,
+    onDismiss: () -> Unit,
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(22.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        ) {
+            Column(
+                Modifier
+                    .padding(horizontal = 20.dp, vertical = 18.dp)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                Text("周期时长", style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold, color = UiPalette.ink(dark))
+                Spacer(Modifier.height(14.dp))
+                CyclePage(state, onStateChange, dark, onSaved = onDismiss)
+                TextButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {
+                    Text("取消")
+                }
+            }
+        }
+    }
+}
+
+/** 周期时长表单内容：本地暂存，点保存一次落盘，避免滑条每帧写盘。小窗与旧二级页共用。 */
 @Composable
 private fun CyclePage(
     state: AbState,
     onStateChange: ((AbState) -> AbState) -> Unit,
     dark: Boolean,
+    onSaved: () -> Unit = {},
 ) {
     var hide by remember(state.hideSec) { mutableIntStateOf(state.hideSec) }
     var show by remember(state.showSec) { mutableIntStateOf(state.showSec) }
     val changed = hide != state.hideSec || show != state.showSec
 
-    Text("一个周期 = 隐藏时长 + 显示时长。隐藏期间状态栏/导航栏/抖音各区域透明化，" +
-            "显示期间恢复，如此往复防止固定像素常亮。",
+    Text("一个周期 = 隐藏时长 + 显示时长。LSPosed 引擎下状态栏/导航栏与抖音、红果短剧" +
+            "各区域周期性隐藏，无障碍遮盖引擎下按周期盖黑系统栏，如此往复防止固定像素常亮。",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant)
 
@@ -1653,7 +2426,10 @@ private fun CyclePage(
 
     Spacer(Modifier.height(22.dp))
     Button(
-        onClick = { onStateChange { s -> s.copy(hideSec = hide, showSec = show) } },
+        onClick = {
+            onStateChange { s -> s.copy(hideSec = hide, showSec = show) }
+            onSaved()
+        },
         enabled = changed,
         modifier = Modifier.fillMaxWidth(),
     ) {

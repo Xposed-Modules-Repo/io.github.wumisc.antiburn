@@ -49,9 +49,14 @@ public class FeatureAuditTest {
      *
      * <p>enablePoem：界面入口在 v2.6 已按要求删除，2.5.2 把 Hook 侧实现也移除了，
      * 该字段永久不会再有入口，因此同时登记在本表与 KNOWN_NO_HOOK。</p>
+     *
+     * <p>enableShift：v2.6.5 按需求删除「状态栏偏移」磁贴，像素微移改为内置常开。
+     * 字段与 Saver 索引保留只为兼容老配置与 Bundle 恢复；Hook 侧 Config.parse 固定 true、
+     * App 侧 AbConf.load/save 也固定为开，因此它仍有 Hook 消费（不在 KNOWN_NO_HOOK 里），
+     * 只是不再需要界面入口 —— 用户也不该再被一个容易误触的开关困扰。</p>
      */
     private static final Set<String> KNOWN_NO_UI =
-            Set.of("enableIcon", "enableDramaBottom", "enablePoem");
+            Set.of("enableIcon", "enableDramaBottom", "enablePoem", "enableShift");
 
     /**
      * 已知「有界面/存储但无 Hook 消费」的字段。
@@ -303,7 +308,11 @@ public class FeatureAuditTest {
 
         // ---------- T-07 首页关键入口仍在 ----------
         System.out.println("== T-07 首页入口 ==");
-        check(main.contains("title = \"周期时长\""), "T-07a 首页保留「周期时长」唯一入口", "");
+        String features = slice(main, "private fun FeaturesPage", "private fun TileGrid");
+        check(features.contains("\"周期时长\", \"时\""),
+                "T-07a 周期时长入口在功能区通用磁贴（不在首页）", "");
+        check(!main.contains("ListRow(\"周期时长\""),
+                "T-07c 首页不再有周期时长第二处入口", "");
         check(count(main, "ListModeChips\\(") == 2,
                 "T-07b 名单卡片全局只有 1 处调用（1 定义 + 1 调用）", "");
 
@@ -322,6 +331,104 @@ public class FeatureAuditTest {
                 "T-08e 不再把灭屏 / 名单命中 / 总开关都写成「总开关关闭」", "");
         check(main.contains("withVer[\"app_ver\"]"), "T-08f App 增量写入带 app_ver", "");
         check(count(main, "lines\\[\"app_ver\"\\]") == 1, "T-08g App 全量写入带 app_ver", "");
+
+        // ---------- T-09 总开关未开时的可见性 ----------
+        // 连续三份真机日志里，用户都在「运行方式」卡片上来回切引擎，而 status 全程 false。
+        // 功能没坏，是「切了也不会有反应」的原因（总闸关着）在界面上根本看不出来——
+        // 与旧版检测属同一类问题：不可见的不生效状态。这里把「必须说」钉成断言。
+        System.out.println("== T-09 总开关未开时的提示 ==");
+        check(count(main, "MasterOffNotice\\(") == 2,
+                "T-09a 总开关提示块 1 定义 + 1 调用", "实际=" + count(main, "MasterOffNotice\\("));
+        int guard = main.indexOf("if (!state.enableStatus) {");
+        check(guard > 0 && main.substring(guard, Math.min(guard + 140, main.length()))
+                        .contains("MasterOffNotice("),
+                "T-09b 提示只在总开关关闭时出现", "");
+        check(main.contains("it.copy(enableStatus = true)"),
+                "T-09c 提示上的按钮直接开总闸，不用滚下去找开关", "");
+        int offCall = main.indexOf("MasterOffNotice(dark) {");
+        int staleCall = main.indexOf("hook = hook,");
+        check(offCall > 0 && staleCall > 0 && offCall < staleCall,
+                "T-09d 提示排在旧版检测之前（总闸是第一顺位原因）",
+                "off=" + offCall + " stale=" + staleCall);
+        check(main.contains("不打开不会有任何效果") && main.contains("打开才会生效"),
+                "T-09e 两条引擎的切换提示都会点名总开关", "");
+        check(main.contains("if (enabled) UiPalette.accent(dark) else UiPalette.warn(dark)"),
+                "T-09f 「已关闭」用警示色，不再与「已开启」同色", "");
+
+        // ---------- T-10 磁贴参数顺序 / 状态栏独立开关 ----------
+        // 真机反馈：「总开关打开后功能区单独功能失效」「改一下状态栏偏移就自己关闭」。
+        // 前者是 TileItem 的尾随 lambda 被绑到 navClick（最后一个参数），
+        // onToggle 成了空实现、isEntry 恒真、右上角永远是「›」；
+        // 后者是状态栏没有独立开关，总闸一开必然连同导航栏一起隐藏。
+        System.out.println("== T-10 磁贴参数顺序 / 状态栏独立开关 ==");
+        int onClick = main.indexOf("val onToggle: (Boolean) -> Unit");
+        int onNav = main.indexOf("val navClick: (() -> Unit)?");
+        check(onClick > 0 && onNav > 0 && onNav < onClick,
+                "T-10a onToggle 是 TileItem 最后一个参数（尾随 lambda 才能绑对）",
+                "navClick@" + onNav + " onToggle@" + onClick);
+        check(count(main, "navClick = \\{") == 1,
+                "T-10b 只有 1 处显式命名参数的入口磁贴（周期时长），其余开关不得误用入口",
+                "出现=" + count(main, "navClick = \\{"));
+        check(main.contains("val enableStatusBar: Boolean = true"),
+                "T-10c AbState 新字段默认 true（老配置升级行为不变）", "");
+        check(main.contains("TileItem(\"状态栏\""), "T-10d 通用页有「状态栏」磁贴", "");
+        check(config.contains("case \"enable_status_bar\""), "T-10e Config 解析 enable_status_bar", "");
+        check(config.contains("public static volatile boolean enableStatusBar = true"),
+                "T-10f Hook 侧字段默认 true（老配置缺失键行为不变）", "");
+        check(controller.contains("Config.enableStatusBar"),
+                "T-10g applyHide 按开关决定隐藏还是还原状态栏", "");
+        check(controller.contains("statusChildrenHidden()"),
+                "T-10h 关掉开关时逐个还原子容器（父 alpha 恢复不等于子恢复）", "");
+        check(controller.contains("lastStatusBarSwitch != Config.enableStatusBar"),
+                "T-10i 开关一变立刻重画，不等整个隐藏相位结束", "");
+        check(count(main, "enable_status_bar") >= 3,
+                "T-10j App 侧 load/save/diff 三处都带 enable_status_bar",
+                "次数=" + count(main, "enable_status_bar"));
+
+        // ---------- T-11 Hook 回调异常兜底（防 SystemUI 崩 → LSPosed 安全模式）----------
+        // 宿主是别人的进程。回调里任何未捕获异常都会冒到 SystemUI 主线程，
+        // 连续崩几次 LSPosed 就把模块丢进安全模式，用户看到的是「所有模块突然失效」。
+        System.out.println("== T-11 Hook 回调异常兜底 ==");
+        check(count(controller, "hookFail\\(") >= 5,
+                "T-11a 4 个 attach 回调 + 1 处定义，全部包住",
+                "出现=" + count(controller, "hookFail\\("));
+        check(count(controller, "protected void afterHookedMethod") == 4,
+                "T-11b 四个 attach 回调都在（数量没被重构弄丢）",
+                "实际=" + count(controller, "protected void afterHookedMethod"));
+        check(controller.contains("private static void hookFail(String where, Throwable t)"),
+                "T-11c hookFail 本身不抛（内部再包一层 try）", "");
+        check(controller.contains("\"HOOK FAIL \""),
+                "T-11d 失败会写 diag，下次贴日志能直接看到崩在哪一步", "");
+
+        // ---------- T-12 v2.6.5 六项界面 / 交互调整 ----------
+        System.out.println("== T-12 v2.6.5 界面与交互 ==");
+        check(main.contains("Text(\"防烧屏总开关\""),
+                "T-12a 首页总开关改名「防烧屏总开关」", "");
+        check(main.contains("总闸：关闭后所有隐藏与遮盖都不生效"),
+                "T-12b 总开关描述精简为一行", "");
+        check(main.contains("支持 LSPosed / 无障碍遮盖双引擎"),
+                "T-12c 首页副标题改为双引擎中性文案（免 root 用户不再被劝退）", "");
+        check(!main.contains("TileItem(\"状态栏偏移\""),
+                "T-12d 通用页删除「状态栏偏移」磁贴", "");
+        check(main.contains("enableShift = true,") && config.contains("sh = true"),
+                "T-12e 像素微移内置常开（App 读与 Hook 解析都固定 true）", "");
+        check(main.contains("if (showCycleDialog)") && main.contains("CycleDialog("),
+                "T-12f 周期时长点磁贴弹小窗（不是跳二级页）", "");
+        check(!main.contains("\"cycle\" -> CyclePage("),
+                "T-12g 旧二级页路由已清理（不留进不去的死页面）", "");
+        check(main.contains("private fun RoadmapCard(") && main.contains("RoadmapCard(dark)"),
+                "T-12h 适配计划卡片 1 定义 + 1 调用", "");
+        check(main.contains("快手") && main.contains("哔哩哔哩") && main.contains("当前版本尚未支持"),
+                "T-12i 占位卡片点名快手/B站且写明规划中", "");
+        check(main.contains("不提供开关"),
+                "T-12j 占位卡片明确不放假开关", "");
+        check(!main.contains("LSPosed + root 环境") && main.contains("免 root 无障碍两种运行方式"),
+                "T-12k 关于页不再把运行方式写死成单一环境", "");
+        String overlayBlock = slice(main, "if (overlay) {", "闭合 if (overlay)");
+        check(overlayBlock.contains("\"可选：Shizuku 增强\""),
+                "T-12l 「可选 Shizuku 增强」位于 overlay 分支内", "");
+        check(count(main, "\"可选：Shizuku 增强\"") == 1,
+                "T-12m Shizuku 增强文案全 App 只 1 处（LSPosed 模式不展示）", "");
 
         System.out.println();
         System.out.println("结果：" + pass + " 通过 / " + fail + " 失败");

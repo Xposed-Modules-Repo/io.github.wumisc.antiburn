@@ -45,42 +45,50 @@ fi
 
 OUT=$(mktemp -d)
 trap 'rm -rf "$OUT"' EXIT
+mkdir -p "$OUT/list" "$OUT/ui" "$OUT/audit" "$OUT/contrast" "$OUT/conf" "$OUT/engine"
 
 T=$ROOT/antiburn-tests
 
 echo "=============================================="
-echo " 1/5 名单模式 + 界面结构（ListModeTest）"
+echo " 1/6 名单模式 + 界面结构（ListModeTest）"
 echo "=============================================="
 $JAVAC -cp "$CLS:$ANDROID_JAR" -d "$OUT/list" "$T/list-mode-test/ListModeTest.java"
 $JAVA -cp "$OUT/list:$CLS:$ANDROID_JAR" ListModeTest "$SRC"
 
 echo
 echo "=============================================="
-echo " 2/5 厂商适配（UiStyleTest）"
+echo " 2/6 厂商适配（UiStyleTest）"
 echo "=============================================="
 $JAVAC -d "$OUT/ui" "$SRC/UiStyle.java" "$T/ui-style-test/UiStyleTest.java"
 $JAVA -cp "$OUT/ui" UiStyleTest "$SRC"
 
 echo
 echo "=============================================="
-echo " 3/5 全功能矩阵审计（FeatureAuditTest）"
+echo " 3/6 全功能矩阵审计（FeatureAuditTest）"
 echo "=============================================="
 $JAVAC -d "$OUT/audit" "$T/feature-audit-test/FeatureAuditTest.java"
 $JAVA -cp "$OUT/audit" FeatureAuditTest "$SRC"
 
 echo
 echo "=============================================="
-echo " 4/5 UI 视觉审计（UiContrastTest）"
+echo " 4/6 UI 视觉审计（UiContrastTest）"
 echo "=============================================="
 $JAVAC -d "$OUT/contrast" "$T/ui-contrast-test/UiContrastTest.java"
 $JAVA -cp "$OUT/contrast" UiContrastTest "$SRC"
 
 echo
 echo "=============================================="
-echo " 5/5 配置层行为（ConfStoreTest）"
+echo " 5/6 配置层行为（ConfStoreTest）"
 echo "=============================================="
 $JAVAC -cp "$CLS:$ANDROID_JAR" -d "$OUT/conf" "$T/confstore-test/ConfStoreTest.java"
 $JAVA -cp "$OUT/conf:$CLS:$ANDROID_JAR" ConfStoreTest
+
+echo
+echo "=============================================="
+echo " 6/6 双引擎：名单真源 / 引擎让位 / 遮盖几何 / 接线（EngineTest）"
+echo "=============================================="
+$JAVAC -cp "$CLS:$ANDROID_JAR" -d "$OUT/engine" "$T/engine-test/EngineTest.java"
+$JAVA -cp "$OUT/engine:$CLS:$ANDROID_JAR" EngineTest "$SRC"
 
 echo
 echo "全部套件通过。"

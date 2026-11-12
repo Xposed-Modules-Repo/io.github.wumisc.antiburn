@@ -207,9 +207,11 @@ public class ListModeTest {
         check(!features.contains("ListModeChips("), "T-15b 功能页不再重复渲染名单卡片", "");
         check(!features.contains("activeList"), "T-15c 功能页不再引用名单文本", "");
 
-        check(main.contains("TileItem(\"状态栏偏移\""), "T-15d 通用页有状态栏偏移磁贴", "");
-        check(Pattern.compile("TileItem\\(\"状态栏偏移\"[\\s\\S]{0,160}?state\\.enableShift")
-                .matcher(main).find(), "T-15e 该磁贴绑定 enableShift（不是死开关）", "");
+        check(!main.contains("TileItem(\"状态栏偏移\""),
+                "T-15d 通用页已删除「状态栏偏移」磁贴（像素微移改内置常开）", "");
+        String features2 = slice(main, "private fun FeaturesPage", "private fun TileGrid");
+        check(features2.contains("\"周期时长\", \"时\"") && main.contains("CycleDialog("),
+                "T-15e 周期时长改为通用磁贴 + 弹窗小窗", "");
 
         check(main.contains("tabProgress = {"), "T-15f 导航栏接收连续页进度", "");
         check(main.contains("currentPageOffsetFraction"), "T-15g 进度源含页内偏移（否则仍是整页跳）", "");

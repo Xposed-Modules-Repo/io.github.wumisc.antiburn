@@ -198,6 +198,9 @@ public final class ConfStore {
         sb.append(KEY_MODE).append('=').append(MODE_WHITE).append('\n');
         sb.append(KEY_WHITE).append("=\n");
         sb.append(KEY_BLACK).append("=\n");
+        // 缺 engine 的旧配置按 lsposed 解释（normEngine 兜底），这里写出来是为了
+        // 让用户能在 conf 里直接看到这一项存在，而不是只有 UI 上能改。
+        sb.append(KEY_ENGINE).append('=').append(ENGINE_LSPOSED).append('\n');
         return sb.toString();
     }
 
@@ -775,6 +778,29 @@ public final class ConfStore {
         return MODE_WHITE;
     }
 
+    // ---- 运行引擎（v2.6）----
+    // 同一份 APK 里有两条互斥的实现路径，同一时刻只能有一条干活：
+    //   lsposed：在 SystemUI 进程里 Hook，真隐藏 + 像素微移，需要 root + LSPosed
+    //   overlay：无障碍覆盖层遮盖，免 root，只能「盖黑」不能隐藏、不能微移
+    // 默认 lsposed 是为了向后兼容：老用户升级后若突然切到 overlay，会与仍在跑的 Hook
+    // 叠加成双重干预（状态栏既被隐藏又被盖一条黑边）。
+    public static final String ENGINE_LSPOSED = "lsposed";
+    public static final String ENGINE_OVERLAY = "overlay";
+    public static final String KEY_ENGINE = "engine";
+
+    /** 未知值一律按 lsposed 解释：缺这个键的旧配置必须保持原行为。 */
+    public static String normEngine(String v) {
+        if (v == null) {
+            return ENGINE_LSPOSED;
+        }
+        String t = v.trim().toLowerCase(java.util.Locale.ROOT);
+        if (ENGINE_OVERLAY.equals(t) || "a11y".equals(t) || "accessibility".equals(t)
+                || "无障碍".equals(t) || "遮盖".equals(t)) {
+            return ENGINE_OVERLAY;
+        }
+        return ENGINE_LSPOSED;
+    }
+
     /** 一份配置里「模式 + 两份名单」的一次性解析结果。 */
     public static final class Lists {
         public String mode = MODE_WHITE;
@@ -943,14 +969,23 @@ public final class ConfStore {
      */
     public static boolean hasRoot() {
         long now = System.currentTimeMillis();
-        if (rootCheckedAt != 0L && now - rootCheckedAt < 60_000L) {
+        // 成功后缓存 60s（环境不会突变），失败只缓存 10s：root 授权是用户点弹窗的
+        // 异步动作，缓存 60s 会让他点完「允许」还要干等一分钟才看到状态变化。
+        long ttl = rootCached ? 60_000L : 10_000L;
+        if (rootCheckedAt != 0L && now - rootCheckedAt < ttl) {
             return rootCached;
         }
-        String uid = execSuCapture("id -u 2>/dev/null");
+        String uid = execSuCapture("id -u 2>/dev/null", 8_000L);
         boolean ok = uid != null && uid.trim().startsWith("0");
         rootCheckedAt = now;
         rootCached = ok;
         return ok;
+    }
+
+    /** 让界面上的「重新检测」能立刻作废缓存，不用等 TTL 到期。 */
+    public static void invalidateRootCache() {
+        rootCheckedAt = 0L;
+        rootCached = false;
     }
 
     /**
@@ -989,10 +1024,25 @@ public final class ConfStore {
      * 独立线程消费 stdout + stderr，避免未读流把 su 进程缓冲区塞满而卡死。
      */
     public static String execSuCapture(String cmd) {
-        return runSu("su", cmd, true);
+        return execSuCapture(cmd, 4_000L);
+    }
+
+    /**
+     * 带超时的 su 执行。
+     *
+     * <p>默认 4s 对「读一个文件」够用，但 root 授权弹窗要等人点，4s 常常不够 ——
+     * 超时后 destroy 会把 KernelSU/Magisk 的授权请求一起掐掉，用户点完「允许」
+     * 界面依旧是「无 root」。root 探测走 8s，就是为了让弹窗有时间被人看见。</p>
+     */
+    public static String execSuCapture(String cmd, long timeoutMs) {
+        return runSu("su", cmd, true, timeoutMs);
     }
 
     private static String runSu(String suPath, String cmd, boolean allowRetry) {
+        return runSu(suPath, cmd, allowRetry, 4_000L);
+    }
+
+    private static String runSu(String suPath, String cmd, boolean allowRetry, long timeoutMs) {
         Process p = null;
         final ByteArrayOutputStream out = new ByteArrayOutputStream();
         try {
@@ -1021,7 +1071,7 @@ public final class ConfStore {
             });
             se.setDaemon(true);
             se.start();
-            if (!p.waitFor(4, TimeUnit.SECONDS)) {
+            if (!p.waitFor(timeoutMs, TimeUnit.MILLISECONDS)) {
                 p.destroy();
                 return allowRetry ? tryAltSu(suPath, cmd) : null;
             }
@@ -1053,7 +1103,7 @@ public final class ConfStore {
         };
         for (String alt : alts) {
             if (new File(alt).exists()) {
-                String r = runSu(alt, cmd, false);
+                String r = runSu(alt, cmd, false, 8_000L);
                 if (r != null) {
                     return r;
                 }

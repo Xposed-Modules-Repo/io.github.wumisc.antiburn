@@ -140,6 +140,11 @@ public class UiContrastTest {
         int inkLight = colors(slice(palette, "private val InkLight", "fun accent")).get("InkLight");
         int accentDark = colors(slice(palette, "private val AccentDark", "private val AccentLight")).get("AccentDark");
         int accentLight = colors(slice(palette, "private val AccentLight", "private val InkDark")).get("AccentLight");
+        // 用 Integer 再接 0 兜底：解析不到时直接拆箱会 NPE，测试框架崩掉看起来像「代码坏了」
+        Integer warnDarkC = colors(slice(palette, "private val WarnDark", "private val WarnLight")).get("WarnDark");
+        Integer warnLightC = colors(slice(palette, "private val WarnLight", "fun accent")).get("WarnLight");
+        int warnDark = warnDarkC == null ? 0 : warnDarkC;
+        int warnLight = warnLightC == null ? 0 : warnLightC;
 
         // scheme 里 onBackground / onSurface 是常量引用（= InkDark），不是字面量，补进来
         darkC.putIfAbsent("onBackground", inkDark);
@@ -198,6 +203,15 @@ public class UiContrastTest {
                 String.format("%.2f", contrast(accentDark, darkBg)));
         check(contrast(accentLight, lightBg) >= 4.5, "T-04b 浅色强调色 vs 背景 ≥ 4.5:1",
                 String.format("%.2f", contrast(accentLight, lightBg)));
+
+        // 警示橙是「关功能前必须先开无障碍」那条提示专用色。它压在 12% 同色淡底上，
+        // 视觉上接近直接压在卡片面，所以按底面对比度判定。
+        check(warnDark != 0, "T-04c 解析到警示橙（深色档）", hex(warnDark));
+        check(warnLight != 0, "T-04d 解析到警示橙（浅色档）", hex(warnLight));
+        check(contrast(warnDark, darkBg) >= 4.5, "T-04e 警示橙 vs 深色底 ≥ 4.5:1",
+                String.format("%s on %s = %.2f", hex(warnDark), hex(darkBg), contrast(warnDark, darkBg)));
+        check(contrast(warnLight, lightBg) >= 4.5, "T-04f 警示橙 vs 浅色底 ≥ 4.5:1",
+                String.format("%s on %s = %.2f", hex(warnLight), hex(lightBg), contrast(warnLight, lightBg)));
 
         // ---------- T-05 色相统一（不紫不蓝不粉）----------
         System.out.println("== T-05 配色统一在同一色相区间 ==");
