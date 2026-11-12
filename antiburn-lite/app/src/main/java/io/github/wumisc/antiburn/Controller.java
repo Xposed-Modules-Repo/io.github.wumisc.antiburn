@@ -375,7 +375,6 @@ public final class Controller {
                 XposedInit.diag("SHIFT 停止：" + pauseReason(screenOn, intervene, top));
             }
             // 暂停期间古诗浮层同样必须移除（applyShow 只恢复系统栏，不清理 Overlay）
-            removePoemScroll();
             // 2 秒轮询，等恢复条件满足后继续周期
             handler.postDelayed(cycleRunnable, 2000);
             return;
@@ -421,249 +420,14 @@ public final class Controller {
             XposedInit.diag("SHIFT 已关闭，位移归零");
         }
 
-        // 古诗弹幕与隐藏期严格同步（只在隐藏窗口显示，显示窗口移除）
-        updatePoem();
-
         // 调度：优先切到下一相位边界保持同步，但最迟 2s 重读一次配置。
         // 旧版直接等到相位边界（最长 hideSec 秒），导致改了开关要等几十秒才生效。
         long remain = shouldHide ? (hideMs - pos) : (hideMs + showMs - pos);
         handler.postDelayed(cycleRunnable, Math.min(2000L, Math.max(100L, remain)));
     }
 
-    // ---------- 隐藏期间滚动励志古诗 ----------
-
     /** 上一次应用到 PixelShift 的 UI 方案，变化时才重设并打日志 */
     private static String lastShiftStyle = "";
-
-    private static View poemScroll; // 隐藏窗口时状态栏位置的滚动古诗 Overlay
-
-    private static void updatePoem() {
-        if (hidden && Config.enablePoem) {
-            addPoemScroll();
-        } else {
-            removePoemScroll();
-        }
-    }
-
-    private static void addPoemScroll() {
-        if (poemScroll != null) {
-            return;
-        }
-        try {
-            Context ctx = statusView.getContext();
-            // 缓存写到宿主可写目录，避免 /data/local/tmp 写不进去导致每次都联网
-            PoemProvider.init(ctx);
-            // 异步确保缓存为最新一批（每 3 天联网换一批）；同步读当前 5 首兜底显示
-            PoemProvider.ensureCacheAsync();
-            PoemScrollView v = new PoemScrollView(ctx, PoemProvider.loadCached());
-            WindowManager wm = (WindowManager) ctx.getSystemService(Context.WINDOW_SERVICE);
-            // 精确贴合状态栏：取状态栏在屏幕上的真实坐标与尺寸
-            int[] loc = new int[2];
-            statusView.getLocationOnScreen(loc);
-            int w = statusView.getWidth() > 0 ? statusView.getWidth()
-                    : ctx.getResources().getDisplayMetrics().widthPixels;
-            int h = statusView.getHeight() > 0 ? statusView.getHeight() : dp(ctx, 56);
-            WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
-                    w, h,
-                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                            | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-                            | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-                    PixelFormat.TRANSLUCENT);
-            lp.gravity = Gravity.TOP | Gravity.START;
-            lp.x = loc[0];
-            // 弹幕：一行横向滚动，显示在状态栏区域内（隐藏期替代状态栏内容），不遮挡 App 界面
-            lp.y = loc[1];
-            wm.addView(v, lp);
-            poemScroll = v;
-            Log.i(TAG, "poem scroll on statusbar x=" + loc[0] + " y=" + loc[1]
-                    + " w=" + w + " h=" + h);
-        } catch (Throwable t) {
-            Log.w(TAG, "add poem failed", t);
-            poemScroll = null;
-        }
-    }
-
-    /** 从 SystemUI 根视图取挖孔（灵动岛）中心 Y；拿不到返回 -1 走状态栏位置 */
-    private static int findCutoutCenterY() {
-        try {
-            View root = statusView.getRootView();
-            if (root == null) {
-                return -1;
-            }
-            android.view.WindowInsets insets = root.getRootWindowInsets();
-            if (insets == null) {
-                return -1;
-            }
-            android.view.DisplayCutout cutout = insets.getDisplayCutout();
-            if (cutout == null) {
-                return -1;
-            }
-            java.util.List<android.graphics.Rect> rects = cutout.getBoundingRects();
-            if (rects == null || rects.isEmpty()) {
-                return -1;
-            }
-            int sumY = 0;
-            for (android.graphics.Rect r : rects) {
-                sumY += r.centerY();
-            }
-            return sumY / rects.size();
-        } catch (Throwable t) {
-            Log.w(TAG, "cutout lookup failed", t);
-            return -1;
-        }
-    }
-
-    private static void removePoemScroll() {
-        if (poemScroll == null) {
-            return;
-        }
-        try {
-            // v2.5：wm.removeView 抛异常被吞后，View 仍 attach，onDetachedFromWindow
-            // 不触发，旧版 25fps 的 tickR 会永久泄漏并持有 View。先显式停循环。
-            if (poemScroll instanceof PoemScrollView) {
-                ((PoemScrollView) poemScroll).stop();
-            }
-            WindowManager wm = (WindowManager) poemScroll.getContext()
-                    .getSystemService(Context.WINDOW_SERVICE);
-            wm.removeView(poemScroll);
-        } catch (Throwable ignored) {
-        }
-        poemScroll = null;
-    }
-
-    private static int dp(Context ctx, float d) {
-        return (int) (d * ctx.getResources().getDisplayMetrics().density + 0.5f);
-    }
-
-    /** 状态栏隐藏时轮播励志古诗：一次显示一首，自动折行最多 3 行，
-     *  随机顺序播放（播完一轮重新洗牌），背景反色自适应（浅背景→深字，深背景→浅字）。 */
-    static class PoemScrollView extends View {
-        private static final long FRAME_MS = 40;    // 25fps（与弹幕版滚动一致，流畅省电）
-        private static final float SPEED_PX = 120f; // 每秒滚动像素（弹幕横向滚动，120px/s 明快）
-
-        private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Handler h = new Handler(Looper.getMainLooper());
-        private final java.util.List<String> playList = new ArrayList<>();
-        private int idx = 0;
-        private String text = "";
-        private float textW = 0f;
-        private float scrollX = 0f;   // 已累计滚动距离 px
-        private float startLeft = 0f; // 文字左缘起点：屏幕右端外（从右侧滚入），布局未就绪时兜底
-        private int fgColor = 0xFFFFFFFF;
-        private long lastColor = 0;
-        private long lastTick = 0;
-        /** v2.5：显式停止重绘循环，避免 removeView 失败时 25fps 任务永久泄漏 */
-        private volatile boolean stopped;
-
-        private final Runnable tickR = new Runnable() {
-            @Override
-            public void run() {
-                if (stopped) {
-                    return;
-                }
-                long now = System.currentTimeMillis();
-                if (now - lastColor > 5000) {
-                    lastColor = now;
-                    updateColor();
-                }
-                // 弹幕推进：从右向左滚动（dt 限幅，防止 SystemUI 卡顿恢复后跳变）
-                float dt = Math.min((now - lastTick) / 1000f, 0.25f);
-                lastTick = now;
-                scrollX += SPEED_PX * dt;
-                if (textW > 0 && scrollX > startLeft + textW + dp(getContext(), 16)) {
-                    nextPoem();
-                }
-                invalidate();
-                h.postDelayed(this, FRAME_MS);
-            }
-        };
-
-        PoemScrollView(Context c, java.util.List<String> list) {
-            super(c);
-            playList.addAll(list == null || list.isEmpty()
-                    ? java.util.Collections.singletonList("") : list);
-            textPaint.setTextSize(dp(c, 14));
-            textPaint.setFakeBoldText(true);
-        }
-
-        @Override
-        protected void onAttachedToWindow() {
-            super.onAttachedToWindow();
-            stopped = false;
-            lastColor = 0;
-            Collections.shuffle(playList, new Random());
-            idx = 0;
-            updateColor();
-            showPoem();
-            h.postDelayed(tickR, FRAME_MS);
-        }
-
-        @Override
-        protected void onDetachedFromWindow() {
-            super.onDetachedFromWindow();
-            stop();
-        }
-
-        void stop() {
-            stopped = true;
-            h.removeCallbacks(tickR);
-        }
-
-        @Override
-        protected void onDraw(Canvas canvas) {
-            super.onDraw(canvas);
-            if (text.isEmpty()) {
-                return;
-            }
-            textPaint.setColor(fgColor);
-            float cy = (getHeight() - (textPaint.ascent() + textPaint.descent())) / 2f;
-            // 文字从右侧屏外左移进入，整句完整滚过屏幕（startLeft = 屏幕右端）
-            canvas.drawText(text, startLeft - scrollX, cy, textPaint);
-        }
-
-        private void nextPoem() {
-            idx = (idx + 1) % playList.size();
-            if (idx == 0) {
-                // 一轮播完重新洗牌，保证下一轮顺序随机且不连续重复
-                Collections.shuffle(playList, new Random());
-            }
-            showPoem();
-        }
-
-        /** 载入下一首：弹幕从右端重新开始 */
-        private void showPoem() {
-            String t = playList.get(idx);
-            if (t == null) {
-                t = "";
-            }
-            text = t.trim();
-            textW = textPaint.measureText(text);
-            // 文字左缘起点=屏幕右端（从右侧屏外滚入）；布局未就绪时用 360dp 兜底
-            startLeft = getWidth() > 0 ? getWidth() : dp(getContext(), 360);
-            scrollX = 0f;
-            lastTick = System.currentTimeMillis();
-            invalidate();
-        }
-
-        /** 采样状态栏背景亮度：浅背景→深字，深背景→浅字 */
-        private void updateColor() {
-            int bg = sampleStatusBg();
-            boolean light = (Color.red(bg) * 299 + Color.green(bg) * 587 + Color.blue(bg) * 114) / 1000 >= 128;
-            fgColor = light ? 0xFF111111 : 0xFFFFFFFF;
-        }
-
-        private int sampleStatusBg() {
-            try {
-                android.graphics.drawable.Drawable d = statusView.getBackground();
-                if (d instanceof android.graphics.drawable.ColorDrawable) {
-                    return ((android.graphics.drawable.ColorDrawable) d).getColor();
-                }
-            } catch (Throwable ignored) {
-            }
-            return 0xFF1A1A1A; // 拿不到按深色背景，显示浅色文字
-        }
-    }
 
     private static void applyHide() {
         // 状态栏：用 alpha=0 透明化而非 GONE。
@@ -690,15 +454,6 @@ public final class Controller {
 
     /** 隐藏状态栏静态元素（时钟/信号/电池等），但保留通知图标区，通知照常可见 */
     private static void hideStatusKeepNotify() {
-        // 开启古诗弹幕：隐藏期整条状态栏全透明（含通知区），古诗作为替代显示，
-        // 不遮挡任何状态栏内容（否则古诗文字会盖住保留的通知图标，影响状态栏显示）
-        if (Config.enablePoem) {
-            if (statusView.getVisibility() != View.GONE && statusView.getAlpha() != 0f) {
-                statusView.setAlpha(0f);
-                Log.i(TAG, "status transparent (poem replaces)");
-            }
-            return;
-        }
         if (!(statusView instanceof android.view.ViewGroup) || notifyArea == null) {
             // 未识别出通知区：维持整窗透明（原行为）
             if (statusView.getVisibility() != View.GONE && statusView.getAlpha() != 0f) {

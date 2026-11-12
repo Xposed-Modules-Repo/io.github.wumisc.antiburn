@@ -41,20 +41,28 @@ public class FeatureAuditTest {
     /**
      * 已知「有 Hook 实现但无界面入口」的字段。
      *
-     * <p>enablePoem：v2.6 按用户要求删掉诗句卡片与古诗磁贴，Hook 侧的周期性显示诗句仍在，
-     * 默认 false；老用户若曾开启则仍生效但找不到关闭入口。属已知偏差，非本轮修复范围。</p>
-     *
      * <p>enableIcon：2.7 删掉错绑总闸的「状态栏图标」磁贴后彻底无入口，且 Hook 侧也无消费，
      * 本质是死字段。保留键只为兼容老 conf，不在界面暴露。</p>
      *
      * <p>enableDramaBottom：红果底部是「完整观看 / 选集」功能入口，必须常驻不隐藏，
      * 磁贴显式设为 enabled=false。字段保留是因为 Hook 侧 hideEnabled 仍按它分支。</p>
+     *
+     * <p>enablePoem：界面入口在 v2.6 已按要求删除，2.5.2 把 Hook 侧实现也移除了，
+     * 该字段永久不会再有入口，因此同时登记在本表与 KNOWN_NO_HOOK。</p>
      */
     private static final Set<String> KNOWN_NO_UI =
-            Set.of("enablePoem", "enableIcon", "enableDramaBottom");
+            Set.of("enableIcon", "enableDramaBottom", "enablePoem");
 
-    /** 已知「有界面/存储但无 Hook 消费」的字段（2.7 起即为死字段） */
-    private static final Set<String> KNOWN_NO_HOOK = Set.of("enableIcon");
+    /**
+     * 已知「有界面/存储但无 Hook 消费」的字段。
+     *
+     * <p>enableIcon：2.7 起即为死字段。</p>
+     *
+     * <p>enablePoem：2.5.2 起 Hook 侧的滚动古诗 Overlay 已整体移除（连同 PoemProvider），
+     * 界面在 v2.6 就没有入口了。字段与解析键保留只为向下兼容老 conf，
+     * App 侧固定写 0，不会再把「关不掉的行为」带进新版本。</p>
+     */
+    private static final Set<String> KNOWN_NO_HOOK = Set.of("enableIcon", "enablePoem");
 
     private static void check(boolean cond, String name, String detail) {
         if (cond) {

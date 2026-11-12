@@ -240,7 +240,9 @@ object AbConf {
             enableShift = b(map["enable_shift"], true),
             enableIcon = b(map["enable_icon"]),
             uiStyle = normUiStyle(map["ui_style"]),
-            enablePoem = b(map["enable_poem"]),
+            // 诗句功能已下线（Hook 侧实现同步移除）：界面无入口、消费端已删，
+            // 这里固定 false，避免老配置里的 enable_poem=1 被读进来再写回去。
+            enablePoem = false,
             enableBall = b(map["enable_ball"]),
             enableLog = b(map["enable_log"]),
             enableDouyinTop = b(map["enable_douyin_top"]),
@@ -256,7 +258,7 @@ object AbConf {
             enableDramaLt = b(map["enable_drama_left_top"]),
             hideSec = i(map["hide_duration"], 30),
             showSec = i(map["show_duration"], 10),
-            customPoems = ConfStore.decodeValue(map["custom_poems"] ?: ""),
+            customPoems = "",
             // 模式与两份名单统一由 ConfStore.readLists 解析：迁移规则（旧别名
             // blacklist 其实是白名单）只写一份，UI 与 Hook 不会各读各的。
             listMode = lists.mode,
@@ -293,6 +295,8 @@ object AbConf {
         lines["enable_icon"] = if (s.enableIcon) "1" else "0"
         lines["ui_style"] = normUiStyle(s.uiStyle)
         lines["enable_navigation"] = if (s.enableNav) "1" else "0"
+        // 字段恒为 false（load 已固定），因此这里恒写 0：老配置里的 1
+        // 在任意一次保存后即被清零，下游也已无消费者。
         lines["enable_poem"] = if (s.enablePoem) "1" else "0"
         lines["enable_ball"] = if (s.enableBall) "1" else "0"
         lines["enable_log"] = if (s.enableLog) "1" else "0"
@@ -349,6 +353,8 @@ object AbConf {
         putB("enable_icon", old.enableIcon, new.enableIcon)
         if (old.uiStyle != new.uiStyle) m["ui_style"] = normUiStyle(new.uiStyle)
         putB("enable_navigation", old.enableNav, new.enableNav)
+        // 诗句字段恒为 false（功能已下线），此行使字段与 conf 的写入路径保持完整，
+        // 实际不会产生 diff；删掉会让「字段→落盘」审计失去依据。
         putB("enable_poem", old.enablePoem, new.enablePoem)
         putB("enable_ball", old.enableBall, new.enableBall)
         putB("enable_log", old.enableLog, new.enableLog)
