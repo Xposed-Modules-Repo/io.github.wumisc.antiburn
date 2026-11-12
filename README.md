@@ -111,6 +111,8 @@ antiburn-lite/
 **v2.5.2（2026-11-12）**
 - 修复：隐藏期滚动古诗的 Overlay 仍在运行，但界面入口自 v2.6 起已删除，曾开启过的用户既关不掉也看不到开关。现移除 `Controller` 内的诗词实现、`PoemScrollView` 与 `PoemProvider`（-8.5 KB 代码），App 侧固定写 `enable_poem=0`，老配置的 `1` 在下次保存时自动清零
 - 版本号口径：对齐发布线为 2.5.2，versionCode 22（大于 2.9.2 的 21，可覆盖安装）
+- 测试：五套 JVM 测试共 192 项全过，两次 clean 构建 sha256 一致
+- 装包提示：装完执行 `su -c "killall com.android.systemui"`，否则新 Hook 不加载；重启后 `CONF apply` 应带 `ver=2.5.2`
 
 **v2.9.2（2026-11-12）**
 - 新增混装检测：App 写入配置时记录 `app_ver`，Hook 在诊断行输出自身版本；两者不一致时打 `HOOK-STALE`。用于识别「App 已升级、SystemUI 还跑着旧 dex」——此时新增配置键会被静默忽略，所有新开关都表现为无效，而两端单看都正常
