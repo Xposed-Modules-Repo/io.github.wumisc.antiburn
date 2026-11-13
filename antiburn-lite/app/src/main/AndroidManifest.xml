@@ -90,13 +90,16 @@
             android:authorities="io.github.wumisc.antiburn.config"
             android:exported="true" />
 
-        <!-- LSPosed 模块声明：功能在 SystemUI / 抖音 / 红果进程内 Hook 生效 -->
+        <!--
+          LSPosed 模块声明：隐藏功能在 SystemUI / 抖音 / 红果 / 快手 / B站 进程内 Hook 生效。
+          v2.6.8：快手 / B站 正式接入周期隐藏，xposeddescription 如实描述已支持的两个应用。
+        -->
         <meta-data
             android:name="xposedmodule"
             android:value="true" />
         <meta-data
             android:name="xposeddescription"
-            android:value="防 OLED 烧屏：周期性隐藏状态栏/导航栏与抖音、红果短剧各区域，像素微移内置常开。提供 LSPosed（需 root 与框架，真隐藏）与无障碍遮盖（免 root，盖黑系统栏、触摸穿透）两种运行方式，按小米 HyperOS、荣耀 MagicOS、OPPO ColorOS、vivo OriginOS、华为 HarmonyOS 与原生 AOSP 分别适配胶囊与导航栏结构。支持白名单、周期时长、感谢名单与支持捐赠；所有开关在 App 内即时保存。" />
+            android:value="防 OLED 烧屏：周期性隐藏状态栏/导航栏与抖音、红果短剧、快手、哔哩哔哩各区域，像素微移内置常开。提供 LSPosed（需 root 与框架，真隐藏）与无障碍遮盖（免 root，盖黑系统栏、触摸穿透）两种运行方式，按小米 HyperOS、荣耀 MagicOS、OPPO ColorOS、vivo OriginOS、华为 HarmonyOS、魅族 Flyme 与原生 AOSP 分别适配胶囊、环形电池与导航栏结构。支持白名单、周期时长、感谢名单与支持捐赠；所有开关在 App 内即时保存。" />
         <meta-data
             android:name="xposedminversion"
             android:value="82" />

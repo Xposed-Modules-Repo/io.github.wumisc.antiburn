@@ -39,8 +39,8 @@ public class UiStyleTest {
                 : "/tmp/v22/antiburn-lite/app/src/main/java/io/github/wumisc/antiburn";
         Path dir = Path.of(src);
 
-        System.out.println("== T-01 六个合法 id 原样归一 ==");
-        String[] ids = {"hyperos", "magicos", "coloros", "originos", "harmonyos", "aosp"};
+        System.out.println("== T-01 七个合法 id 原样归一 ==");
+        String[] ids = {"hyperos", "magicos", "coloros", "originos", "harmonyos", "flyme", "aosp"};
         for (String id : ids) {
             check(id.equals(io.github.wumisc.antiburn.UiStyle.norm(id)), "T-01 " + id,
                     "norm -> " + io.github.wumisc.antiburn.UiStyle.norm(id));
@@ -53,14 +53,14 @@ public class UiStyleTest {
                 "-> " + io.github.wumisc.antiburn.UiStyle.norm("\tHARMONYOS\n"));
 
         System.out.println("== T-03 脏值 / 空 / null 一律回退 aosp ==");
-        for (String bad : new String[]{null, "", "   ", "miui", "oneui", "flyme", "aosp1", "<script>"}) {
+        for (String bad : new String[]{null, "", "   ", "miui", "oneui", "flymeos", "aosp1", "<script>"}) {
             check("aosp".equals(io.github.wumisc.antiburn.UiStyle.norm(bad)), "T-03 " + String.valueOf(bad),
                     "-> " + io.github.wumisc.antiburn.UiStyle.norm(bad));
         }
 
         System.out.println("== T-04 aosp 不避让中置胶囊、其余五家避让 ==");
         check(!io.github.wumisc.antiburn.UiStyle.guardCenter("aosp"), "T-04a aosp guardCenter=false", "");
-        for (String id : new String[]{"hyperos", "magicos", "coloros", "originos", "harmonyos"}) {
+        for (String id : new String[]{"hyperos", "magicos", "coloros", "originos", "harmonyos", "flyme"}) {
             check(io.github.wumisc.antiburn.UiStyle.guardCenter(id), "T-04 " + id + " guardCenter=true", "");
         }
 
@@ -73,8 +73,8 @@ public class UiStyleTest {
             signatures.add(sig);
             System.out.println("        " + id + " -> " + sig);
         }
-        // 旧版只有 {false/0/0, true/8/55} 两种；新版六个 id 应各自不同（6 种组合）
-        check(signatures.size() == ids.length, "T-05 六个 id 参数互不相同",
+        // 旧版只有 {false/0/0, true/8/55} 两种；新版七个 id 应各自不同
+        check(signatures.size() == ids.length, "T-05 七个 id 参数互不相同",
                 "实际 " + signatures.size() + " 种：" + signatures);
 
         System.out.println("== T-06 describe 含归一 id 且参数落在合理区间 ==");
@@ -88,10 +88,10 @@ public class UiStyleTest {
         check(io.github.wumisc.antiburn.UiStyle.describe("脏值").contains("aosp"),
                 "T-06 脏值 describe 归一", io.github.wumisc.antiburn.UiStyle.describe("脏值"));
 
-        System.out.println("== T-07 源码级：IDS 与 UI_STYLE_LABELS 六个 id 一致 ==");
+        System.out.println("== T-07 源码级：IDS 与 UI_STYLE_LABELS 七个 id 一致 ==");
         String kt = Files.readString(dir.resolve("MainActivity.kt"));
         Matcher labelM = Pattern.compile("\"([a-z]+)\" to \"[^\"]+\"").matcher(
-                kt.substring(kt.indexOf("UI_STYLE_LABELS"), kt.indexOf("UI_STYLE_LABELS") + 600));
+                kt.substring(kt.indexOf("UI_STYLE_LABELS"), kt.indexOf("UI_STYLE_LABELS") + 1000));
         Set<String> labelIds = new LinkedHashSet<>();
         while (labelM.find()) labelIds.add(labelM.group(1));
         check(labelIds.equals(new LinkedHashSet<>(io.github.wumisc.antiburn.UiStyle.IDS)),
@@ -115,6 +115,26 @@ public class UiStyleTest {
         missing.removeAll(parseKeys);
         check(missing.isEmpty(), "T-09 App 写入的 enable_* 都被 Config.parse 识别",
                 "app=" + appKeys.size() + " parse=" + parseKeys.size() + " 未被解析=" + missing);
+
+        System.out.println("== T-10 机型自动识别（首次加载用）==");
+        check("flyme".equals(io.github.wumisc.antiburn.UiStyle.detect("Meizu", "meizu", "Flyme 11.2", "m2391")),
+                "T-10a 魅族 → flyme", io.github.wumisc.antiburn.UiStyle.detect("Meizu", "meizu", "Flyme 11.2", "m2391"));
+        check("flyme".equals(io.github.wumisc.antiburn.UiStyle.detect("meizu", "MEIZU", null, null)),
+                "T-10b 只有厂商字段也能认出", "");
+        check("hyperos".equals(io.github.wumisc.antiburn.UiStyle.detect("Xiaomi", "Redmi", "HyperOS 2.0", "2312")),
+                "T-10c 小米/红米 → hyperos", "");
+        check("magicos".equals(io.github.wumisc.antiburn.UiStyle.detect("HONOR", "HONOR", "MagicOS 9", "PGT-AN00")),
+                "T-10d 荣耀 → magicos", "");
+        check("coloros".equals(io.github.wumisc.antiburn.UiStyle.detect("OPPO", "OnePlus", "ColorOS 15", "PKH110")),
+                "T-10e 一加/OPPO → coloros", "");
+        check("originos".equals(io.github.wumisc.antiburn.UiStyle.detect("vivo", "iQOO", "OriginOS 5", "V2405A")),
+                "T-10f vivo/iQOO → originos", "");
+        check("harmonyos".equals(io.github.wumisc.antiburn.UiStyle.detect("HUAWEI", "HUAWEI", "HarmonyOS 5", "ALN-AL00")),
+                "T-10g 华为 → harmonyos", "");
+        check("aosp".equals(io.github.wumisc.antiburn.UiStyle.detect("Google", "google", "AP4A", "husky")),
+                "T-10h 原生/未知 → aosp", "");
+        check("aosp".equals(io.github.wumisc.antiburn.UiStyle.detect(null, null, null, null)),
+                "T-10i 全空 → aosp（JVM 下不 NPE）", "");
 
         System.out.println("\n== 结果：" + pass + " passed, " + fail + " failed ==");
         if (fail > 0) System.exit(1);

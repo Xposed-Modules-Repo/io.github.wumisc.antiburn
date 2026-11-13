@@ -92,7 +92,7 @@ public class FeatureAuditTest {
         return b < 0 ? text.substring(a) : text.substring(a, b);
     }
 
-    /** 统计匹配次数（Set 版会因匹配文本相同而去重，数量断言必须用这个） */
+    /** 统计匹配次数（Set 版会因匹配文本相同而去重，数量断言必须用这个）。参数是正则。 */
     private static int count(String text, String regex) {
         int n = 0;
         Matcher m = Pattern.compile(regex).matcher(text);
@@ -100,6 +100,29 @@ public class FeatureAuditTest {
             n++;
         }
         return n;
+    }
+
+    /**
+     * 字面量计数：用于含正则元字符（如 {@code init(lpparam)}、{@code catch (Throwable}）的串。
+     * 直接把它交给 {@link #count} 会被当成捕获组甚至抛 PatternSyntaxException。
+     */
+    private static int countLiteral(String text, String literal) {
+        int n = 0, from = 0;
+        while ((from = text.indexOf(literal, from)) >= 0) {
+            n++;
+            from += literal.length();
+        }
+        return n;
+    }
+
+    /**
+     * 去掉 Java 块注释与行注释，让「分支里到底有没有真的调用某方法」这类断言
+     * 只针对真实代码。说明性注释常写「不调用 DouyinHook.init」「不修改 setTranslation*」，
+     * 不去注释会把注释里的词误判成代码。
+     */
+    private static String stripComments(String s) {
+        String noBlock = s.replaceAll("(?s)/\\*.*?\\*/", " ");
+        return noBlock.replaceAll("(?m)//[^\\n]*", "");
     }
 
     private static Set<String> findAll(String text, String regex, int group) {
@@ -181,14 +204,40 @@ public class FeatureAuditTest {
         }
         check(unsavedKey.isEmpty(), "T-02b App 写入的每个 key 都有 parse 分支", "未识别=" + unsavedKey);
 
+        // v2.7.0：迁移键（load 里以 `|| b(map["k"])` 兼容分支出现的旧共用键）通过新键持久化，
+        // 豁免「写回同名键」，但其映射目标新键必须被写回，防止值真的丢失。
+        List<String> legacyKeys = new ArrayList<>();
+        for (String k : loadedKeys) {
+            if (main.contains("|| b(map[\"" + k + "\"])")) {
+                legacyKeys.add(k);
+            }
+        }
         List<String> neverSaved = new ArrayList<>();
         for (String k : loadedKeys) {
+            if (legacyKeys.contains(k)) {
+                continue; // 兼容读：值由同一行的新键写回
+            }
             if (!saved.containsKey(k)) {
                 neverSaved.add(k);
             }
         }
-        check(neverSaved.isEmpty(), "T-02c App 读的每个 key 也会被写回（不会读出空值）",
+        check(neverSaved.isEmpty(), "T-02c App 读的每个 key 也会被写回（迁移键除外，值由新键持久化）",
                 "只读不写=" + neverSaved);
+        List<String> legacyLost = new ArrayList<>();
+        for (String k : legacyKeys) {
+            boolean covered = false;
+            for (String nk : saved.keySet()) {
+                if (main.contains("b(map[\"" + nk + "\"]) || b(map[\"" + k + "\"])")) {
+                    covered = true;
+                    break;
+                }
+            }
+            if (!covered) {
+                legacyLost.add(k);
+            }
+        }
+        check(legacyLost.isEmpty(), "T-02c2 每个迁移键的值由同名新键写回（不丢值）",
+                "迁移无落点=" + legacyLost);
 
         // ---------- T-03 每个开关在 Hook 侧有消费者 ----------
         System.out.println("== T-03 开关 → Hook 消费 ==");
@@ -392,8 +441,8 @@ public class FeatureAuditTest {
         check(count(controller, "hookFail\\(") >= 5,
                 "T-11a 4 个 attach 回调 + 1 处定义，全部包住",
                 "出现=" + count(controller, "hookFail\\("));
-        check(count(controller, "protected void afterHookedMethod") == 4,
-                "T-11b 四个 attach 回调都在（数量没被重构弄丢）",
+        check(count(controller, "protected void afterHookedMethod") == 5,
+                "T-11b 五个 attach 回调都在（v2.7.4 新增 Flyme PhoneStatusBarView）",
                 "实际=" + count(controller, "protected void afterHookedMethod"));
         check(controller.contains("private static void hookFail(String where, Throwable t)"),
                 "T-11c hookFail 本身不抛（内部再包一层 try）", "");
@@ -418,10 +467,11 @@ public class FeatureAuditTest {
                 "T-12g 旧二级页路由已清理（不留进不去的死页面）", "");
         check(main.contains("private fun RoadmapCard(") && main.contains("RoadmapCard(dark)"),
                 "T-12h 适配计划卡片 1 定义 + 1 调用", "");
-        check(main.contains("快手") && main.contains("哔哩哔哩") && main.contains("当前版本尚未支持"),
-                "T-12i 占位卡片点名快手/B站且写明规划中", "");
-        check(main.contains("不提供开关"),
-                "T-12j 占位卡片明确不放假开关", "");
+        check(main.contains("快手") && main.contains("哔哩哔哩") && main.contains("已支持"),
+                "T-12i 说明卡点名快手/B站且写明已支持", "");
+        check(main.contains("切到「快手」「B站」子页开启对应开关")
+                        && !stripComments(main).contains("不提供开关"),
+                "T-12j 说明卡引导到真实子页（不再是「不提供开关」占位）", "");
         check(!main.contains("LSPosed + root 环境") && main.contains("免 root 无障碍两种运行方式"),
                 "T-12k 关于页不再把运行方式写死成单一环境", "");
         String overlayBlock = slice(main, "if (overlay) {", "闭合 if (overlay)");
@@ -429,6 +479,411 @@ public class FeatureAuditTest {
                 "T-12l 「可选 Shizuku 增强」位于 overlay 分支内", "");
         check(count(main, "\"可选：Shizuku 增强\"") == 1,
                 "T-12m Shizuku 增强文案全 App 只 1 处（LSPosed 模式不展示）", "");
+
+        // ---------- T-13 v2.6.6 红果「左滑查看详情」独立开关 ----------
+        System.out.println("== T-13 红果左滑查看详情开关 ==");
+        String douyin = read(dir.resolve("DouyinHook.java"));
+        check(main.contains("val enableDramaSwipe: Boolean = false"),
+                "T-13a AbState 新增 enableDramaSwipe（默认关闭）", "");
+        check(count(main, "enable_drama_swipe") >= 3,
+                "T-13b App 侧 load/save/diff 三处都带 enable_drama_swipe",
+                "次数=" + count(main, "enable_drama_swipe"));
+        check(config.contains("case \"enable_drama_swipe\""),
+                "T-13c Hook 侧 Config.parse 认识 enable_drama_swipe", "");
+        check(config.contains("enableDramaSwipe = drSwipe;"),
+                "T-13d Config.parse 提交该字段", "");
+        check(douyin.contains("Config.enableDramaSwipe"),
+                "T-13e Hook 侧消费该开关（真隐藏，不是死开关）", "");
+        check(douyin.contains("swipeTextMatch") && douyin.contains("查看详情"),
+                "T-13f 按文案识别引导条（含关键词）", "");
+        check(douyin.contains("swipePosOk"),
+                "T-13g 识别带位置约束（右侧中部），避免误伤别处「查看详情」按钮", "");
+        check(douyin.contains("containsVideoSurface"),
+                "T-13h 排除视频画面容器（不黑屏）", "");
+        check(douyin.contains("if (isDrama)") && douyin.contains("collectSwipeHintNode"),
+                "T-13i 只在红果进程收集，不影响抖音", "");
+        check(main.contains("TileItem(\"左滑查看详情\", \"滑\""),
+                "T-13j 红果页有该开关磁贴", "");
+        check(main.contains("state.enableDramaSwipe"),
+                "T-13k 磁贴绑定真实字段（用户看得见开/关）", "");
+        check(douyin.contains("\" | swipe=x\""),
+                "T-13l SCAN 诊断行输出命中数量，真机能确认识别是否成功", "");
+
+        // ---------- T-14 v2.6.8 快手 / 哔哩哔哩真功能全链路 ----------
+        // v2.6.7 是 Step 1 诊断骨架（零隐藏/零开关/零配置键）；本轮起正式接入真隐藏：
+        // 6 个新键走完整配置链路、两条分发真的调用 DouyinHook、复用已验证的几何识别、
+        // overlay 降级、红果 swipe 与抖音直播判定严格隔离。任何一条被破坏都意味着
+        // 又退回到「假开关 / 装了没效果」或误伤视频画面。
+        System.out.println("== T-14 快手/B站真功能全链路（v2.6.8）==");
+        String xposed = read(dir.resolve("XposedInit.java"));
+        String probe = read(dir.resolve("VideoAppProbe.java"));
+        String confStore = read(dir.resolve("ConfStore.java"));
+        String scope = read(dir.resolve("../../../../../res/values/arrays.xml"));
+        String manifest = read(dir.resolve("../../../../../AndroidManifest.xml"));
+        String gradle = read(dir.resolve("../../../../../../../build.gradle"));
+        String xposedCode = stripComments(xposed);
+        String probeCode = stripComments(probe);
+        String scopeCode = stripComments(scope);
+        String douyinCode = stripComments(douyin);   // douyin 由 T-13 读入
+
+        // 作用域沿用 Step 1 结论：两个日志确认过的主包，恰好 6 项，变体只登记不启用
+        check(scope.contains("<item>com.smile.gifmaker</item>")
+                        && scope.contains("<item>tv.danmaku.bili</item>"),
+                "T-14a 作用域含两个日志确认过的主包", "");
+        check(countLiteral(scope, "<item>") == 6,
+                "T-14b 作用域恰好 6 项", "item 数=" + countLiteral(scope, "<item>"));
+        check(!scopeCode.contains("<item>com.kuaishou")
+                        && !scopeCode.contains("<item>com.bilibili")
+                        && !scopeCode.contains("<item>tv.danmaku.bilibilihd"),
+                "T-14c 变体包仍未启用", "");
+
+        // 分发：抖音/红果/快手/B站 四路都进 DouyinHook（真隐藏），快手/B站 另保留诊断探针
+        check(countLiteral(xposedCode, "DouyinHook.init(lpparam)") == 4,
+                "T-14d 四条分发都接入 DouyinHook 真隐藏（复用已验证几何骨架）",
+                "次数=" + countLiteral(xposedCode, "DouyinHook.init(lpparam)"));
+        check(countLiteral(xposedCode, "VideoAppProbe.init(lpparam,") == 2,
+                "T-14e 快手/B站保留 View 树诊断探针供真机精调", "");
+        check(xposed.contains("INJECTED Kuaishou") && xposed.contains("INJECTED Bilibili")
+                        && xposed.contains("stage=2 hide-ready"),
+                "T-14f 新分发出注入日志并标明已接入隐藏", "");
+        String ksBlock = slice(xposedCode, "\"com.smile.gifmaker\".equals(pkg)", "tv.danmaku.bili");
+        String biliBlock = slice(xposedCode, "\"tv.danmaku.bili\".equals(pkg)", "\n    }\n}");
+        check(ksBlock.contains("DouyinHook.init") && ksBlock.contains("VideoAppProbe.init")
+                        && !ksBlock.contains("Controller.init"),
+                "T-14g 快手分支真隐藏 + 诊断并存，且不动 SystemUI 逻辑", "");
+        check(biliBlock.contains("DouyinHook.init") && biliBlock.contains("VideoAppProbe.init")
+                        && !biliBlock.contains("Controller.init"),
+                "T-14h B站分支真隐藏 + 诊断并存，且不动 SystemUI 逻辑", "");
+        check(xposedCode.contains("Controller.init(lpparam)"),
+                "T-14i SystemUI 分发保持不变", "");
+
+        // 6 个新键全链路：AbState 字段 / Saver / load / save / diff / default / parse / Hook / UI
+        String[] ksKeys = {"enable_kuaishou", "enable_bilibili",
+                "enable_ks_right", "enable_ks_top", "enable_ks_bottom", "enable_ks_corner",
+                "enable_bili_right", "enable_bili_top", "enable_bili_bottom", "enable_bili_corner"};
+        String[] ksFlds = {"enableKuaishou", "enableBilibili",
+                "enableKsRight", "enableKsTop", "enableKsBottom", "enableKsCorner",
+                "enableBiliRight", "enableBiliTop", "enableBiliBottom", "enableBiliCorner"};
+        boolean chainOk = true;
+        StringBuilder miss = new StringBuilder();
+        for (int i = 0; i < ksKeys.length; i++) {
+            String k = ksKeys[i], f = ksFlds[i];
+            if (!main.contains("val " + f + ": Boolean = false")) { chainOk = false; miss.append(" field:").append(k); }
+            if (!main.contains("map[\"" + k + "\"]") && !main.contains("migratedB(map, \"" + k + "\",")) {
+                chainOk = false; miss.append(" load:").append(k);
+            }
+            if (!main.contains("lines[\"" + k + "\"]")) { chainOk = false; miss.append(" save:").append(k); }
+            if (!main.contains("putB(\"" + k + "\"")) { chainOk = false; miss.append(" diff:").append(k); }
+            if (!confStore.contains("\"" + k + "=0")) { chainOk = false; miss.append(" default:").append(k); }
+            if (!config.contains("case \"" + k + "\":")) { chainOk = false; miss.append(" parse:").append(k); }
+            if (!config.contains("public static volatile boolean " + f)) { chainOk = false; miss.append(" cfgField:").append(k); }
+            if (!douyinCode.contains("Config." + f)) { chainOk = false; miss.append(" hook:").append(k); }
+            if (!main.contains("state." + f)) { chainOk = false; miss.append(" ui:").append(k); }
+        }
+        check(chainOk, "T-14j v2.7.0 十个键全链路一致（字段/load/save/diff/default/parse/cfg/hook/ui）",
+                miss.toString());
+        // Saver 新索引追加在末尾（28..37），不插队
+        check(main.contains("Bool(28)") && main.contains("Bool(29)") && main.contains("Bool(30)")
+                        && main.contains("Bool(34)") && main.contains("Bool(36)") && main.contains("Bool(37)"),
+                "T-14k Saver 新索引 28..37 追加在末尾（老 Bundle 不串位）", "");
+
+        // Hook 隔离：快手/B站 用 isVideoApp 分支复用几何容器，不写新识别规则、不串红果/抖音专属逻辑
+        check(douyinCode.contains("isVideoApp") && douyinCode.contains("isKuaishou"),
+                "T-14l DouyinHook 用目标标识分派（复用几何识别，非每 App 新写阈值）", "");
+        check(douyinCode.contains("!isVideoApp"),
+                "T-14m 直播判定与直播隐藏排除快手/B站（未标定 App 不串直播三区）", "");
+        check(douyinCode.contains("isDrama && Config.enableDramaSwipe"),
+                "T-14n 红果「左滑查看详情」仍在 isDrama 门控内", "");
+        check(douyinCode.contains("ConfStore.ENGINE_OVERLAY.equals(Config.engine)"),
+                "T-14o 遮盖引擎下 Hook 整体让位（overlay 用户不误隐藏）", "");
+        check(douyinCode.contains("\" | app=\""),
+                "T-14p SCAN 诊断带 app= 标识，真机可区分四个进程", "");
+
+        // UI：两个真子页 + 总开关/共用区域开关 + overlay 降级
+        check(main.contains("private fun VideoAppSubPage(") && countLiteral(main, "VideoAppSubPage(") == 3,
+                "T-14q 功能页有快手/B站独立子页（1 定义 + 2 调用）",
+                "次数=" + countLiteral(main, "VideoAppSubPage("));
+        check(main.contains("\"通用\", \"抖音\", \"红果\", \"快手\", \"B站\""),
+                "T-14r 子页 tab 扩到 5 个（快手/B站 可进入）", "");
+        check(main.contains("val overlay = state.isOverlay") && main.contains("enabled = !overlay"),
+                "T-14s overlay 引擎下整页磁贴置灰（不放假开关）", "");
+        check(main.contains("快手、哔哩哔哩已支持") && main.contains("切到「快手」「B站」子页"),
+                "T-14t 说明卡改为「已支持 + 引导子页」，不再是占位", "");
+
+        // 探针仍只读（隐藏由 DouyinHook 负责），沿用 Step 1 的零隐藏边界
+        check(!probeCode.contains("setAlpha(") && !probeCode.contains("setVisibility(")
+                        && !probeCode.contains("transparentDeep") && !probeCode.contains("setTranslation"),
+                "T-14u 探针只读，不修改任何 View 属性（零隐藏）", "");
+        check(probeCode.contains("if (!Config.enableLog)") && probeCode.contains("Config.reload()"),
+                "T-14v 探针受诊断日志开关控制，关闭时零开销", "");
+        check(countLiteral(probeCode, "catch (Throwable") >= 5,
+                "T-14w 全链路异常兜底，异常不冒到宿主主线程",
+                "catch 数=" + countLiteral(probeCode, "catch (Throwable"));
+
+        check(gradle.contains("versionCode 37") && gradle.contains("versionName \"2.7.4\""),
+                "T-14x 版本号升到 vc37 / 2.7.4", "");
+        check(manifest.contains("xposedscope") && manifest.contains("快手、哔哩哔哩各区域"),
+                "T-14y 模块描述如实写明已支持快手/B站", "");
+
+        // ---------- T-15 v2.6.9 真机反馈三项修复 ----------
+        System.out.println("== T-15 v2.6.9 真机反馈修复 ==");
+        check(douyinCode.contains("private static boolean safeToHide(View v, String what)"),
+                "T-15a 隐藏前有内容安全校验（v2.7.0 升级为按区域形状限定）", "");
+        check(douyinCode.contains("containsVideoSurface(v, 0)") && douyinCode.contains("rw < 0.30f")
+                        && douyinCode.contains("rh < 0.18f") && !douyinCode.contains("countDescendants"),
+                "T-15b 安全校验 = 视频画面排除 + 形状限定（v2.6.9 误杀源 countDescendants 已删）", "");
+        check(countLiteral(douyinCode, "hideSafe(") >= 6,
+                "T-15c 视频 App 五区 + 加号都走安全隐藏",
+                "次数=" + countLiteral(douyinCode, "hideSafe("));
+        check(douyinCode.contains("isVideoApp && !safeToHide(v, what)"),
+                "T-15d 安全校验只对视频 App 生效（抖音 / 红果行为不变）", "");
+        check(douyinCode.contains("collectCenterPlusNode") && douyinCode.contains("centerPlusList"),
+                "T-15e 底部中央「+」有专用收集器", "");
+        check(douyinCode.contains("PLUS x") && douyinCode.contains(" | plus=x"),
+                "T-15f 加号命中数进诊断，真机可验证", "");
+        check(douyinCode.contains("Config.shouldIntervene(selfPkg)"),
+                "T-15g App 内隐藏补齐白名单 / 总开关 / 引擎豁免", "");
+        check(douyinCode.contains("!videoLivePage") && douyinCode.contains("isLiveTextPage"),
+                "T-15h 直播特征页整页跳过 App 内区域隐藏", "");
+        check(douyinCode.contains("hideSafe(v, \"plus\")") && douyinCode.contains("isVideoApp && hideBottom"),
+                "T-15i 加号归入底部开关，关掉立即恢复", "");
+        check(countLiteral(douyinCode, "videoLivePage = isLiveTextPage(root, 0)") == 1,
+                "T-15j 直播判定只在 rescan 提交一次", "");
+        check(gradle.contains("versionCode 37") && gradle.contains("versionName \"2.7.4\""),
+                "T-15k 版本号升到 vc37 / 2.7.4", "");
+
+        // ---------- T-16 v2.7.0 正式版 ----------
+        System.out.println("== T-16 v2.7.0 正式版 ==");
+        check(!stripComments(main).contains("enableVideo"),
+                "T-16a 共用开关字段已删除（快手 / B站配置完全独立）", "");
+        check(main.contains("migratedB(map, \"enable_ks_right\", \"enable_video_right\")")
+                        && config.contains("case \"enable_video_right\""),
+                "T-16b 旧共用键仅作新键缺失时的迁移兜底（老用户升级行为不变）", "");
+        check(douyinCode.contains("Config.enableKsRight : Config.enableBiliRight")
+                        && douyinCode.contains("Config.enableKsBottom : Config.enableBiliBottom"),
+                "T-16c Hook 按 App 分派各自开关（互不影响）", "");
+        check(main.contains("各一套独立开关，互不影响"),
+                "T-16d UI 如实写明两应用开关独立", "");
+        check(main.contains("为人民服务") && main.contains("为天地立心")
+                        && main.contains("为生民立命") && main.contains("为往圣继绝学")
+                        && main.contains("为万世开太平"),
+                "T-16e 张载四句 + 为人民服务已展示在三个页面标题旁", "");
+        check(main.contains("护眼防烧屏") && main.contains("第一目标"),
+                "T-16f 护眼防烧屏核心价值观入首页与关于页", "");
+        check(!main.contains("lines[\"enable_video") && !main.contains("putB(\"enable_video"),
+                "T-16g 落盘只写新键，不再写旧共用键", "");
+        check(countLiteral(douyinCode, "hideSafe(") >= 6,
+                "T-16h 六处隐藏调用仍全部走安全校验",
+                "次数=" + countLiteral(douyinCode, "hideSafe("));
+        // v2.7.2：角落阈值从 0.20 放宽到 0.35 —— 自绘页的角落按钮是一条竖排工具条，
+        // 高度会超过 20%。仍远小于内容容器，误伤面不变。
+        check(douyinCode.contains("rw < 0.35f && rh < 0.35f"),
+                "T-16i 角落按钮按小控件形状限定（大块内容容器不误伤）", "");
+
+        // ---------- T-17 v2.7.1 新旧配置迁移回弹修复 ----------
+        System.out.println("== T-17 v2.7.1 新旧配置迁移回弹修复 ==");
+        check(main.contains("private fun migratedB(map: Map<String, String>, key: String, legacy: String)")
+                        && main.contains("if (map.containsKey(key)) b(map[key]) else b(map[legacy])"),
+                "T-17a App 迁移规则为新键存在即优先，不再使用新值 OR 旧值", "");
+        String[] independentKeys = {"enable_ks_right", "enable_ks_top", "enable_ks_bottom", "enable_ks_corner",
+                "enable_bili_right", "enable_bili_top", "enable_bili_bottom", "enable_bili_corner"};
+        String[] migrationLegacyKeys = {"enable_video_right", "enable_video_top", "enable_video_bottom", "enable_video_corner",
+                "enable_video_right", "enable_video_top", "enable_video_bottom", "enable_video_corner"};
+        boolean migrationCalls = true;
+        for (int i = 0; i < independentKeys.length; i++) {
+            migrationCalls &= main.contains("migratedB(map, \"" + independentKeys[i] + "\", \"" + migrationLegacyKeys[i] + "\")");
+        }
+        check(migrationCalls, "T-17b 快手/B站八个区域键全部使用同一迁移优先级", "");
+        check(!stripComments(main).contains("|| b(map[\"enable_video_"),
+                "T-17c 根除旧值 1 让新开关无法关闭的 OR 读取", "");
+        check(config.contains("Set<String> presentKeys = new HashSet<>()")
+                        && config.contains("presentKeys.add(k)"),
+                "T-17d Hook 解析记录本次快照实际包含的键", "");
+        boolean hookPriority = true;
+        for (String key : independentKeys) {
+            hookPriority &= config.contains("!presentKeys.contains(\"" + key + "\")");
+        }
+        check(hookPriority, "T-17e Hook 八个独立键存在时均忽略旧共用键", "");
+        check(gradle.contains("versionCode 37") && gradle.contains("versionName \"2.7.4\""),
+                "T-17f 版本号升到 vc37 / 2.7.4", "");
+
+        // ---------- T-18 v2.7.2 快手右侧列 / 角落按钮 / 直播全暂停 ----------
+        System.out.println("== T-18 v2.7.2 快手右侧列 / 角落按钮 / 直播全暂停 ==");
+        String ctrlCode = stripComments(controller);
+
+        // 右侧互动列：高度下限从 0.25 放到 0.08（快手只有三个按钮），宽度仍限 0.30
+        check(douyinCode.contains("rw < 0.30f && rh > 0.08f"),
+                "T-18a 右侧互动列高度下限适配三按钮布局（快手不再整列被恢复）", "");
+        check(!douyinCode.contains("rh > 0.25f"),
+                "T-18b 旧 25% 高度阈值已移除（真机快手右侧失效的直接原因）", "");
+        // 收集环节的同一根因：scoreRight / scoreRightEdge 也硬依赖 ImageView
+        check(douyinCode.contains("int minChild = isVideoApp ? 2 : 3"),
+                "T-18b1 右侧列子项数下限对视频 App 降到 2（分享按钮会折叠）", "");
+        check(douyinCode.contains("if (iconCount(g) == 0 && !(isVideoApp && hasIconSignal(g, 0)))"),
+                "T-18b3 贴右缘兜底收集不再被 ImageView 硬门槛排除", "");
+
+        // 角落按钮：通用图标信号替代 ImageView 硬依赖，且只在视频 App 生效
+        check(douyinCode.contains("private static boolean hasIconSignal(View v, int depth)"),
+                "T-18c 新增与绘制方式无关的图标信号判定", "");
+        check(countLiteral(douyinCode, "isVideoApp && hasIconSignal(g, 0)") == 4,
+                "T-18d 右上搜索、左上三横线、右侧列、贴右缘兜底四处都接受图标信号",
+                "次数=" + countLiteral(douyinCode, "isVideoApp && hasIconSignal(g, 0)"));
+        check(douyinCode.contains("v.getContentDescription()")
+                        && douyinCode.contains("v.getWidth() <= 200 && v.getHeight() <= 200"),
+                "T-18e 图标信号覆盖无障碍描述与小尺寸可点击控件", "");
+        check(!douyinCode.contains("if (!containsImageView(g, 0)) {\n            return -1;"),
+                "T-18f 角落按钮不再被 ImageView 硬门槛整块排除", "");
+
+        // 直播暂停：字段 + 提交 + 两处短路 + 信号发布
+        check(douyinCode.contains("private static volatile boolean livePaused = false"),
+                "T-18g 新增直播间暂停状态", "");
+        check(douyinCode.contains("boolean pausedNow = !isVideoApp && (videoLivePage || liveStrongHit)"),
+                "T-18h 抖音按结构判定、红果按文案特征，均触发整体暂停", "");
+        check(douyinCode.contains("LivePause.publish(selfPkg, paused)"),
+                "T-18i 暂停状态按包名与时间戳发布给 SystemUI", "");
+        int anyIdx = douyinCode.indexOf("boolean anyEnabled;");
+        int pauseIdx = douyinCode.indexOf("if (livePaused) {");
+        check(pauseIdx > 0 && anyIdx > 0 && pauseIdx < anyIdx,
+                "T-18j 暂停判定先于任何开关 OR 条件（不会被区域开关重新拉起）", "");
+        check(countLiteral(douyinCode, "if (livePaused) {") >= 2,
+                "T-18k 周期入口与布局监听入口都拦截（恢复后不被布局变化压回）",
+                "次数=" + countLiteral(douyinCode, "if (livePaused) {"));
+
+        // 文本特征对所有进程统一计算（红果此前拿不到直播信号）
+        check(douyinCode.contains("nowProbe - lastLiveProbe >= 1500L"),
+                "T-18l 直播文案特征统一计算并 1.5 秒节流（含红果，省 IO）", "");
+        check(douyinCode.contains(".append(\" | pause=\")"),
+                "T-18m SCAN 诊断输出 pause 字段（真机可直接核对）", "");
+
+        // SystemUI 侧
+        check(ctrlCode.contains("LivePause.readCached(top)"),
+                "T-18n SystemUI 只读内存缓存，包名不匹配即视为无信号", "");
+        check(ctrlCode.contains("if (!screenOn || !intervene || livePause)"),
+                "T-18o 直播暂停与灭屏 / 名单豁免同级（状态栏导航栏同步恢复）", "");
+        check(ctrlCode.contains("+ \" lp=\" + livePause"),
+                "T-18p 系统栏心跳日志输出 lp 字段", "");
+        check(ctrlCode.contains("return \"直播中暂停 top=\" + top"),
+                "T-18q 像素偏移停止原因可区分直播暂停", "");
+
+        // LivePause 自身约束：临时状态，不写用户配置
+        String liveCode = stripComments(read(dir.resolve("LivePause.java")));
+        check(liveCode.contains("TTL_MS = 15000L"),
+                "T-18r 暂停信号 15 秒过期（宿主异常退出不会永久停摆）", "");
+        check(!liveCode.contains("AbConf") && !liveCode.contains("Config.enable"),
+                "T-18s 暂停状态不写入用户配置（退出直播后原开关自然继续）", "");
+        check(gradle.contains("versionCode 37") && gradle.contains("versionName \"2.7.4\""),
+                "T-18t 版本号升到 vc37 / 2.7.4", "");
+
+        // ---------- T-19 v2.7.3 周期循环永不因异常停摆 ----------
+        // 真机现象：抖音进直播间正常暂停，退出后 App 内隐藏全部失效且不再恢复。
+        // 根因是 cycleRunnable 只在 tick() 末尾 postDelayed，tick 中途抛异常时
+        // catch 吞掉后直接返回，下一次调度永远不会发生 —— 整个周期循环死亡。
+        System.out.println("== T-19 v2.7.3 周期循环存活 / 主线程零 IO ==");
+        check(countLiteral(douyinCode, "private static volatile boolean cycleScheduled") == 1,
+                "T-19a 抖音进程登记本轮是否已排调度", "");
+        check(countLiteral(ctrlCode, "private static volatile boolean cycleScheduled") == 1,
+                "T-19b SystemUI 进程同样登记", "");
+        check(countLiteral(douyinCode, "scheduleCycle(") >= 5,
+                "T-19c 抖音所有调度统一走 scheduleCycle（含兜底）",
+                "次数=" + countLiteral(douyinCode, "scheduleCycle("));
+        check(countLiteral(ctrlCode, "scheduleCycle(") >= 4,
+                "T-19d SystemUI 所有调度统一走 scheduleCycle",
+                "次数=" + countLiteral(ctrlCode, "scheduleCycle("));
+        check(countLiteral(douyinCode, "handler.postDelayed(cycleRunnable") == 1,
+                "T-19e 抖音不再有绕过登记的直接调度",
+                "次数=" + countLiteral(douyinCode, "handler.postDelayed(cycleRunnable"));
+        check(countLiteral(ctrlCode, "handler.postDelayed(cycleRunnable") == 1,
+                "T-19f SystemUI 不再有绕过登记的直接调度",
+                "次数=" + countLiteral(ctrlCode, "handler.postDelayed(cycleRunnable"));
+        check(countLiteral(douyinCode, "if (!cycleScheduled && handler != null)") == 1,
+                "T-19g 抖音 tick 异常后由 finally 兜底重排（本轮根因修复）", "");
+        check(countLiteral(ctrlCode, "if (!cycleScheduled && handler != null)") == 1,
+                "T-19h SystemUI tick 异常后同样兜底重排", "");
+        check(douyinCode.contains("if (livePaused && !liveStrongHit && !videoLivePage)"),
+                "T-19i 退出直播即时解除暂停（不依赖 2 秒节流重扫）", "");
+        check(douyinCode.contains("Log.e(TAG, \"hide failed: \" + what, t)"),
+                "T-19j 单个区域隐藏失败不中断整轮", "");
+        check(douyinCode.contains("Log.e(TAG, \"show failed\", t)"),
+                "T-19k 单个区域恢复失败不中断整轮", "");
+        check(!liveCode.contains("writeSharedFile") && !liveCode.contains("execSu"),
+                "T-19l 暂停信号不再走 su 兜底（宿主进程未授权，主线程会卡死）", "");
+        check(liveCode.contains("newSingleThreadExecutor") && liveCode.contains("setDaemon(true)"),
+                "T-19m 信号读写放到后台守护线程", "");
+        check(liveCode.contains("static boolean readCached(String topPkg)"),
+                "T-19n SystemUI 只读内存缓存，主线程零 IO", "");
+        check(liveCode.contains("writeBroken"),
+                "T-19o 共享路径写不进去就停止重试，不每 5 秒空转", "");
+        check(countLiteral(douyinCode, "liveStrongHit") >= 4,
+                "T-19p 直播暂停改用「直播专属节点 + 无首页 Tab」精确判据",
+                "次数=" + countLiteral(douyinCode, "liveStrongHit"));
+        check(douyinCode.contains("boolean pausedNow = !isVideoApp && (videoLivePage || liveStrongHit)"),
+                "T-19q 整体暂停不再由 strongCorner 单独成立（普通页误判会锁死进程）", "");
+        check(douyinCode.contains("liveStreak >= 2"),
+                "T-19r 进入需连续命中、解除只需一次不命中（退出即时恢复）", "");
+
+
+        // ---------- T-20 v2.7.4 魅族 Flyme 适配 / 感谢名单 / 视图自愈 ----------
+        // Flyme 10/11 仍是 AOSP 结构，但状态栏容器、时钟 id（mz_clock）、
+        // 窗口重建时机都与小米 / 荣耀不同。这一组守的是「适配真的接上」，
+        // 以及本轮修掉的三个真 bug（通知区嵌套、恢复时误点亮、窗口重建后失效）。
+        System.out.println("== T-20 v2.7.4 Flyme 适配与视图自愈 ==");
+        String ui = read(dir.resolve("UiStyle.java"));
+        check(ui.contains("public static final String FLYME = \"flyme\""),
+                "T-20a UiStyle 新增 flyme id", "");
+        check(ui.contains("FLYME, AOSP"), "T-20b IDS 含 flyme 且顺序与 UI 标签一致", "");
+        check(ui.contains("m.put(FLYME, new Profile(true,"),
+                "T-20c Flyme 避让中置（环形电池 / 挖孔）", "");
+        check(ui.contains("public static String detect(String manufacturer"),
+                "T-20d 首次加载按机型识别（魅族 → flyme）", "");
+        check(main.contains("\"flyme\" to \"魅族 Flyme\""),
+                "T-20e 首页适配按钮有 Flyme 入口", "");
+        check(main.contains("UiStyle.detect(") && main.contains("Build.MANUFACTURER"),
+                "T-20f App 侧把 Build 字段交给 detect", "");
+        check(ctrlCode.contains("FLYME_ROM") && ctrlCode.contains("detectFlyme()"),
+                "T-20g Hook 侧按厂商判定 Flyme", "");
+        check(ctrlCode.contains("\"status_bar\", \"mz_status_bar\", \"status_bar_contents\""),
+                "T-20h Flyme 优先整条 status_bar（时钟 mz_clock 不在 contents 里）", "");
+        check(ctrlCode.contains("PhoneStatusBarView"),
+                "T-20i Flyme 状态栏本体有独立 attach 钩子", "");
+        check(ctrlCode.contains("isAttachedToWindow()") && ctrlCode.contains("re-acquire"),
+                "T-20j 窗口被重建后自动重抓（不再永久失效）", "");
+        check(ctrlCode.contains("WindowManagerGlobal") && ctrlCode.contains("mViews"),
+                "T-20k 注入较晚时枚举窗口根兜底", "");
+        check(ctrlCode.contains("pathTo(") && ctrlCode.contains("dimAlong("),
+                "T-20l 通知区按路径逐层保留（嵌套通知不再被一起隐藏）", "");
+        check(ctrlCode.contains("private static final List<View> dimmed"),
+                "T-20m 只记录我们改过的子视图", "");
+        check(ctrlCode.contains("for (int i = 0; i < dimmed.size(); i++)"),
+                "T-20n 恢复时只点亮自己改过的视图（不覆盖 ROM 的 alpha）", "");
+        check(main.contains("Thanks(\"酷安\"") && main.contains("Thanks(\"心之所及\""),
+                "T-20o 感谢名单新增酷安 / 心之所及", "");
+        check(manifest.contains("魅族 Flyme"),
+                "T-20p 模块描述如实写明已适配 Flyme", "");
+
+        // ---------- T-21 v2.7.4 全面体检修掉的五个真 bug ----------
+        // 这一组守的是「用户真实会遇到、但静态看代码很容易漏」的五处：
+        // 加载窗口点击冲掉配置、遮盖周期长短写反、名单归一化误报 + 写坏 conf、
+        // 覆盖层丢失后不重建、横屏侧栏不复位。
+        System.out.println("== T-21 v2.7.4 全面体检修复 ==");
+        String mask = read(dir.resolve("BurnInMaskService.java"));
+        check(main.contains("val pendingOps = remember") && main.contains("pendingOps.add(update)"),
+                "T-21a 加载窗口内的点击按增量记录，不再整份回写默认值", "");
+        check(main.contains("for (op in pendingOps.toList()) merged = op(merged)"),
+                "T-21b 加载完成后在磁盘状态上重放增量", "");
+        check(main.contains("fun canonList(text: String)") && main.contains("parseWhitelist"),
+                "T-21c 名单文本与 Hook 侧同一套归一规则", "");
+        check(main.contains("m[\"whitelist\"] = canonList(new.whiteList)"),
+                "T-21d 只写归一后的名单（结尾逗号 / 换行不进 conf）", "");
+        check(main.contains("state = disk.copy(whiteList = target.whiteList, blackList = target.blackList)"),
+                "T-21e 保存后不把输入框里的名单文本吞掉", "");
+        check(mask.contains("(masked ? c.hideSec : c.showSec)"),
+                "T-21f 遮盖周期方向修正（盖 hideSec、露 showSec）", "");
+        check(mask.contains("boolean statusBarOn") && mask.contains("c.masterOn && c.statusBarOn"),
+                "T-21g 遮盖引擎认「状态栏」独立开关（与 Hook 语义一致）", "");
+        check(mask.contains("private void ensureWindow()") && mask.contains("maskView.isAttachedToWindow()"),
+                "T-21h 覆盖层被移除 / 首次失败后自动重建", "");
+        check(mask.contains("navSide = OverlayGeometry.NAV_BOTTOM;") && mask.contains("statusBarH = 0;"),
+                "T-21i 旋转重算前复位旧尺寸与导航栏方向", "");
 
         System.out.println();
         System.out.println("结果：" + pass + " 通过 / " + fail + " 失败");

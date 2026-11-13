@@ -121,6 +121,13 @@ public class BurnInMaskService extends AccessibilityService {
         boolean masterOn = true;
         boolean navOn = false;
         /**
+         * 「状态栏」独立开关（enable_status_bar）。
+         *
+         * <p>旧版遮盖引擎只认总闸，用户在功能页把状态栏关掉、只留导航栏，
+         * 顶部照样被盖黑 —— 同一个开关在两套引擎下行为不一致，用户只能认为它坏了。</p>
+         */
+        boolean statusBarOn = true;
+        /**
          * 配置里的运行引擎是不是 overlay。
          *
          * <p>默认 false（不遮）：配置读不到、或用户还停在 lsposed 引擎时，遮盖必须停手。
@@ -198,6 +205,33 @@ public class BurnInMaskService extends AccessibilityService {
     }
 
     // ---- 窗口 ----
+
+    /** 上次尝试添加覆盖层的时间，失败后按 3s 节流重试，避免每帧刷日志 */
+    private long lastAttachTry = 0L;
+
+    /**
+     * 确保覆盖层仍在窗口上：被系统移除 / 首次 addView 失败时自动重建。
+     *
+     * <p>不重建的后果比「没效果」更糟：{@link #connected} 仍是 true、界面看起来一切正常，
+     * 但 applyMask 因为 maskView 为空直接 return，用户等一整晚也看不到任何遮盖。</p>
+     */
+    private void ensureWindow() {
+        if (windowAttached && maskView != null && maskView.isAttachedToWindow()) {
+            return;
+        }
+        if (maskView != null) {
+            detachWindow();
+        }
+        long now = SystemClock.uptimeMillis();
+        if (now - lastAttachTry < 3000L) {
+            return;
+        }
+        lastAttachTry = now;
+        attachWindow();
+        if (windowAttached) {
+            Log.i(TAG, "overlay window (re)attached");
+        }
+    }
 
     private void attachWindow() {
         if (wm == null) {
@@ -279,6 +313,11 @@ public class BurnInMaskService extends AccessibilityService {
     private void step() {
         long now = SystemClock.uptimeMillis();
 
+        // v2.7.4：覆盖层可能被系统撤掉（旋转 / 低内存 / 开机早期 addView 被拒）。
+        // 旧版一辈子只 addView 一次，失败后 connected=true 但永远盖不上，
+        // 用户只能去系统设置里把无障碍关开一次。这里每帧轻量校验并自动重建。
+        ensureWindow();
+
         // 预览优先：用户点了「预览遮盖」，无条件盖住 5 秒
         if (previewUntil > now) {
             masked = true;
@@ -311,7 +350,10 @@ public class BurnInMaskService extends AccessibilityService {
             return;
         }
 
-        long dur = (masked ? c.showSec : c.hideSec) * 1000L;
+        // masked = 正在遮盖（系统栏被盖住）。遮盖中要等「隐藏时长」结束才恢复，
+        // 未遮盖时要等「显示时长」结束才盖 —— 旧版写反，实际变成了露 30s、盖 10s，
+        // 防护时长只有设计值的 1/3，刚进应用还先裸奔一整个隐藏周期。
+        long dur = (masked ? c.hideSec : c.showSec) * 1000L;
         if (now - phaseStart >= dur) {
             masked = !masked;
             phaseStart = now;
@@ -345,6 +387,8 @@ public class BurnInMaskService extends AccessibilityService {
                         c.maskAllowed = ConfStore.ENGINE_OVERLAY.equals(ConfStore.normEngine(v));
                     } else if ("enable_navigation".equals(k)) {
                         c.navOn = "1".equals(v);
+                    } else if ("enable_status_bar".equals(k)) {
+                        c.statusBarOn = "1".equals(v);
                     } else if ("hide_duration".equals(k)) {
                         c.hideSec = clampDur(v, c.hideSec, 5);
                     } else if ("show_duration".equals(k)) {
@@ -392,7 +436,7 @@ public class BurnInMaskService extends AccessibilityService {
         // 真实存在但透明显示的状态栏判成「不可见」而漏遮。宁可多遮一条，也不要
         // 在用户以为已生效时静默失效 —— 漏遮的代价是烧屏，多遮的代价只是看视频时
         // 顶部有黑边，且用户可以自己关掉状态栏那一项。
-        if (c.masterOn) {
+        if (c.masterOn && c.statusBarOn) {
             top = OverlayGeometry.statusBar(screenW, screenH, statusBarH);
         }
         if (c.navOn) {
@@ -426,6 +470,13 @@ public class BurnInMaskService extends AccessibilityService {
         }
 
         boolean landscape = screenW > screenH;
+
+        // v2.7.4：每次重算前先复位。
+        // 横屏三键导航会把 navSide 设成 RIGHT；转回竖屏若不清零，会继续按「右侧栏」
+        // 绘制，把竖屏右侧整条内容区涂黑（用户看到的是「屏幕右边突然黑了一条」）。
+        statusBarH = 0;
+        navBarSize = 0;
+        navSide = OverlayGeometry.NAV_BOTTOM;
 
         // 1) 先试着读系统栏真实 bounds（最准，能正确处理刘海、横屏侧边三键）
         try {

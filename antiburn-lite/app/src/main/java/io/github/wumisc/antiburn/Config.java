@@ -47,6 +47,22 @@ public final class Config {
     public static volatile boolean enableDramaLike = false;
     public static volatile boolean enableDramaRt = false;
     public static volatile boolean enableDramaLt = false;
+    /** 红果「左滑查看详情」竖排引导条开关（按文案识别，默认关闭） */
+    public static volatile boolean enableDramaSwipe = false;
+    /** v2.6.8 快手 / 哔哩哔哩：每个 App 一个总开关，门控本进程所有区域隐藏 */
+    public static volatile boolean enableKuaishou = false;
+    public static volatile boolean enableBilibili = false;
+    /** v2.6.8 快手 / B站 共用的四区域开关（对应 DouyinHook 已验证的四类几何容器） */
+    /** v2.7.0：快手独立区域开关（与 B站完全独立，互不影响） */
+    public static volatile boolean enableKsRight = false;
+    public static volatile boolean enableKsTop = false;
+    public static volatile boolean enableKsBottom = false;
+    public static volatile boolean enableKsCorner = false;
+    /** v2.7.0：哔哩哔哩独立区域开关 */
+    public static volatile boolean enableBiliRight = false;
+    public static volatile boolean enableBiliTop = false;
+    public static volatile boolean enableBiliBottom = false;
+    public static volatile boolean enableBiliCorner = false;
     public static volatile boolean enableLive = true;
     public static volatile boolean enablePoem = false;
     public static volatile boolean enableBall = false;
@@ -61,8 +77,10 @@ public final class Config {
      */
     public static volatile boolean enableStatusBar = true;
     public static volatile boolean enableLog = false;
-    /** 目标 UI 适配方案（conf 里的 ui_style，与 profiles/*.json 对应） */
-    public static volatile String uiStyle = "aosp";
+    /** 目标 UI 适配方案（conf 里的 ui_style，与 profiles/*.json 对应）。默认按机型识别。 */
+    public static volatile String uiStyle = UiStyle.detect(
+            android.os.Build.MANUFACTURER, android.os.Build.BRAND,
+            android.os.Build.DISPLAY, android.os.Build.PRODUCT);
     public static volatile int hideSec = 30;
     public static volatile int showSec = 10;
     /**
@@ -600,7 +618,10 @@ public final class Config {
         boolean dtop = enableDouyinTop, dbot = enableDouyinBottom, dlike = enableDouyinLike;
         boolean drt = enableDouyinRt, dlt = enableDouyinLt;
         boolean drTop = enableDramaTop, drBot = enableDramaBottom, drLike = enableDramaLike;
-        boolean drRt = enableDramaRt, drLt = enableDramaLt;
+        boolean drRt = enableDramaRt, drLt = enableDramaLt, drSwipe = enableDramaSwipe;
+        boolean ks = enableKuaishou, bili = enableBilibili;
+        boolean ksR = enableKsRight, ksT = enableKsTop, ksB = enableKsBottom, ksC = enableKsCorner;
+        boolean biR = enableBiliRight, biT = enableBiliTop, biB = enableBiliBottom, biC = enableBiliCorner;
         boolean live = enableLive, poem = enablePoem, ball = enableBall;
         boolean ic = enableIcon, lg = enableLog;
         boolean sb = enableStatusBar;
@@ -623,6 +644,9 @@ public final class Config {
         // 兼容旧版：custom_poems 曾被直接写成多行，后续行没有 '='，这里回收成诗句
         StringBuilder orphan = new StringBuilder();
         String customDecoded = null;
+        // v2.7.1：记录本次快照实际包含的键。旧共用键只在新独立键缺失时生效，
+        // 防止遗留 enable_video_bottom=1 覆盖用户刚写入的 enable_*_bottom=0。
+        Set<String> presentKeys = new HashSet<>();
 
         for (String raw : text.split("\n")) {
             String line = raw.trim();
@@ -641,6 +665,7 @@ public final class Config {
             }
             String k = line.substring(0, i).trim();
             String v = line.substring(i + 1).trim();
+            presentKeys.add(k);
             switch (k) {
                 case "enable_status": es = "1".equals(v); break;
                 // v2.6.5：像素微移内置常开。界面已无开关，这里即使读到老配置里
@@ -659,6 +684,35 @@ public final class Config {
                 case "enable_drama_like": drLike = "1".equals(v); break;
                 case "enable_drama_right_top": drRt = "1".equals(v); break;
                 case "enable_drama_left_top": drLt = "1".equals(v); break;
+                case "enable_drama_swipe": drSwipe = "1".equals(v); break;
+                case "enable_kuaishou": ks = "1".equals(v); break;
+                case "enable_bilibili": bili = "1".equals(v); break;
+                case "enable_ks_right": ksR = "1".equals(v); break;
+                case "enable_ks_top": ksT = "1".equals(v); break;
+                case "enable_ks_bottom": ksB = "1".equals(v); break;
+                case "enable_ks_corner": ksC = "1".equals(v); break;
+                case "enable_bili_right": biR = "1".equals(v); break;
+                case "enable_bili_top": biT = "1".equals(v); break;
+                case "enable_bili_bottom": biB = "1".equals(v); break;
+                case "enable_bili_corner": biC = "1".equals(v); break;
+                // v2.7.1 旧键迁移：新独立键存在时一律优先，与键在文件中的先后顺序无关。
+                // 旧键先于新键出现时由后面的新键覆盖；旧键后出现时在这里跳过。
+                case "enable_video_right":
+                    if (!presentKeys.contains("enable_ks_right")) ksR = "1".equals(v);
+                    if (!presentKeys.contains("enable_bili_right")) biR = "1".equals(v);
+                    break;
+                case "enable_video_top":
+                    if (!presentKeys.contains("enable_ks_top")) ksT = "1".equals(v);
+                    if (!presentKeys.contains("enable_bili_top")) biT = "1".equals(v);
+                    break;
+                case "enable_video_bottom":
+                    if (!presentKeys.contains("enable_ks_bottom")) ksB = "1".equals(v);
+                    if (!presentKeys.contains("enable_bili_bottom")) biB = "1".equals(v);
+                    break;
+                case "enable_video_corner":
+                    if (!presentKeys.contains("enable_ks_corner")) ksC = "1".equals(v);
+                    if (!presentKeys.contains("enable_bili_corner")) biC = "1".equals(v);
+                    break;
                 case "enable_live": live = "1".equals(v); break;
                 case "enable_poem": poem = "1".equals(v); break;
                 case "enable_ball": ball = "1".equals(v); break;
@@ -724,6 +778,17 @@ public final class Config {
         enableDramaLike = drLike;
         enableDramaRt = drRt;
         enableDramaLt = drLt;
+        enableDramaSwipe = drSwipe;
+        enableKuaishou = ks;
+        enableBilibili = bili;
+        enableKsRight = ksR;
+        enableKsTop = ksT;
+        enableKsBottom = ksB;
+        enableKsCorner = ksC;
+        enableBiliRight = biR;
+        enableBiliTop = biT;
+        enableBiliBottom = biB;
+        enableBiliCorner = biC;
         enableLive = live;
         enablePoem = poem;
         enableBall = ball;

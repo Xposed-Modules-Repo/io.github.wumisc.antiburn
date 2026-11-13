@@ -286,13 +286,38 @@ public class EngineTest {
         check(xml.contains("flagRetrieveInteractiveWindows"), "声明可读交互窗口", "getWindows() 生效前提");
         check(xml.contains("canRetrieveWindowContent=\"true\""), "声明可读窗口内容", "");
 
-        // v2.6.5：快手 / 哔哩哔哩只做「适配计划占位」，不得偷偷扩 Hook 作用域，
-        // 也不能放假开关。守住这两条，占位才不会变成「装了没效果」。
+        // v2.6.5 占位 -> v2.6.7 Step 1 诊断 -> v2.6.8 正式接入真隐藏。
+        // 作用域仍是两个日志确认过的主包（共 6 项），变体只登记不启用；
+        // 功能页改为两个真子页，6 个新键全链路接通，overlay 引擎下置灰。
         String scope = read(moduleDir.resolve("res/values/arrays.xml").toString());
-        check(!scope.contains("com.smile.gifmaker") && !scope.contains("tv.danmaku.bili"),
-                "适配计划占位不扩 xposed_scope（快手/B站未加入）", "");
+        int sa = scope.indexOf("<string-array name=\"xposed_scope\">");
+        int sb = scope.indexOf("</string-array>", sa + 1);
+        String scopeBlock = (sa >= 0 && sb > sa) ? scope.substring(sa, sb) : "";
+        int itemCount = 0;
+        int ix = 0;
+        while ((ix = scopeBlock.indexOf("<item>", ix)) >= 0) {
+            itemCount++;
+            ix += "<item>".length();
+        }
+        check(scopeBlock.contains("<item>com.smile.gifmaker</item>")
+                        && scopeBlock.contains("<item>tv.danmaku.bili</item>"),
+                "作用域含快手/B站两个主包（真隐藏已接入）", "");
+        check(itemCount == 6 && !scopeBlock.contains("nebula")
+                        && !scopeBlock.contains("bilibilihd") && !scopeBlock.contains("app.blue"),
+                "作用域恰好 6 项，变体包未启用", "item 数=" + itemCount);
         check(main.contains("RoadmapCard(dark)") && main.contains("快手") && main.contains("哔哩哔哩"),
-                "功能区有适配计划占位卡片并点名两个应用", "");
+                "功能页说明卡点名两个应用", "");
+        check(main.contains("VideoAppSubPage(") && main.contains("state.enableKuaishou")
+                        && main.contains("state.enableBilibili")
+                        && main.contains("state.enableKsRight") && main.contains("state.enableBiliRight"),
+                "快手/B站各有真实开关子页（v2.7.0 区域开关完全独立）", "");
+        check(main.contains("val overlay = state.isOverlay") && main.contains("enabled = !overlay"),
+                "遮盖引擎下子页磁贴置灰（能力边界如实呈现）", "");
+        check(!stripComments(main).contains("当前版本尚未支持")
+                        && !stripComments(main).contains("不提供开关"),
+                "旧占位文案已清除（不放假开关、不写「尚未支持」）", "");
+        check(main.contains("直播页与白名单应用自动跳过") && main.contains("内容区不误伤"),
+                "功能页如实写明直播 / 白名单豁免与内容区保护", "");
     }
 
     /**
@@ -394,6 +419,15 @@ public class EngineTest {
         String main = read(src + "/MainActivity.kt");
         check(main.contains("系统界面里跑的还是旧版"), "提示文案直指原因", "");
         check(main.contains("重启系统界面"), "提示里带一键重启", "只告诉原因不给按钮等于把事推回给用户");
+    }
+
+    /**
+     * 去掉 Java / Kotlin 块注释与行注释。负向断言只针对真实代码与界面文案：
+     * 说明性注释常写历史措辞（如早期「规划中」），不去注释会被误判成仍在占位。
+     */
+    private static String stripComments(String s) {
+        String noBlock = s.replaceAll("(?s)/\\*.*?\\*/", " ");
+        return noBlock.replaceAll("(?m)//[^\\n]*", "");
     }
 
     private static String read(String p) throws Exception {

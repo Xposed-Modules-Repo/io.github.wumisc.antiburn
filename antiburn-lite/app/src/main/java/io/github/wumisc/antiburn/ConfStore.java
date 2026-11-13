@@ -179,7 +179,11 @@ public final class ConfStore {
         sb.append("enable_ball=0\n");
         sb.append("enable_log=0\n");
         sb.append("enable_icon=0\n");
-        sb.append("ui_style=aosp\n");
+        // v2.7.4：默认界面方案按机型识别（魅族 → flyme）。配置文件里已有 ui_style 时
+        // 一律以用户保存的值为准，这里只决定「全新安装、还没保存过」的初始值。
+        sb.append("ui_style=").append(UiStyle.detect(
+                android.os.Build.MANUFACTURER, android.os.Build.BRAND,
+                android.os.Build.DISPLAY, android.os.Build.PRODUCT)).append("\n");
         sb.append("enable_douyin_top=0\n");
         sb.append("enable_douyin_bottom=0\n");
         sb.append("enable_douyin_like=0\n");
@@ -191,6 +195,19 @@ public final class ConfStore {
         sb.append("enable_drama_like=0\n");
         sb.append("enable_drama_right_top=0\n");
         sb.append("enable_drama_left_top=0\n");
+        sb.append("enable_drama_swipe=0\n");
+        // v2.6.8：快手 / 哔哩哔哩正式接入。两个总开关 + 四个共用区域开关，
+        // 一律默认关闭 —— 新功能不改变用户升级后看到的界面。
+        sb.append("enable_kuaishou=0\n");
+        sb.append("enable_bilibili=0\n");
+        sb.append("enable_ks_right=0\n");
+        sb.append("enable_ks_top=0\n");
+        sb.append("enable_ks_bottom=0\n");
+        sb.append("enable_ks_corner=0\n");
+        sb.append("enable_bili_right=0\n");
+        sb.append("enable_bili_top=0\n");
+        sb.append("enable_bili_bottom=0\n");
+        sb.append("enable_bili_corner=0\n");
         sb.append("hide_duration=30\n");
         sb.append("show_duration=10\n");
         // v2.8：名单分黑白两种解释，模式与两份名单都是独立键。

@@ -15,6 +15,10 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
  * LSPosed 模块入口
  *  - com.android.systemui：状态栏 / 导航栏周期透明化
  *  - com.ss.android.ugc.aweme（抖音）：视频页各区域周期透明化
+ *  - com.phoenix.read*（红果短剧）：复用抖音区域逻辑，另含「左滑查看详情」文本识别
+ *  - com.smile.gifmaker（快手）、tv.danmaku.bili（B站）：v2.6.8 正式接入，
+ *    由 DouyinHook 复用几何识别做周期隐藏（受各自总开关 + 共用区域开关门控），
+ *    同时保留 VideoAppProbe 在诊断日志开启时导出 View 树，供真机阈值精调
  *
  * v2.0.1 日志修复：
  *  1. 旧版 diag() 第一行就是 `if (!Config.enableLog) return;`，而 Config.enableLog 默认 false、
@@ -274,6 +278,41 @@ public class XposedInit implements IXposedHookLoadPackage {
             } catch (Throwable t) {
                 Log.e(TAG, "drama init failed", t);
                 diagForce("INIT FAILED Drama: " + Log.getStackTraceString(t));
+            }
+        } else if ("com.smile.gifmaker".equals(pkg)) {
+            // 快手（v2.6.8）：正式接入周期隐藏。复用 DouyinHook 已验证的几何识别
+            // （右侧列 / 顶部 / 底部 / 角落），不写快手专属阈值、不误伤视频画面；
+            // 由快手总开关 + 共用区域开关门控，遮盖引擎下整体让位。
+            // 探针保留：诊断日志开启时导出 View 树，供真机把几何阈值精调到实际坐标。
+            diagForce("INJECTED Kuaishou process=" + proc + " stage=2 hide-ready");
+            Log.i(TAG, "loaded into Kuaishou, hiding enabled (stage 2)...");
+            try {
+                DouyinHook.init(lpparam);
+            } catch (Throwable t) {
+                Log.e(TAG, "kuaishou hook init failed", t);
+                diagForce("INIT FAILED Kuaishou: " + Log.getStackTraceString(t));
+            }
+            try {
+                VideoAppProbe.init(lpparam, "kuaishou");
+            } catch (Throwable t) {
+                Log.e(TAG, "kuaishou probe init failed", t);
+                diagForce("PROBE FAILED Kuaishou: " + Log.getStackTraceString(t));
+            }
+        } else if ("tv.danmaku.bili".equals(pkg)) {
+            // 哔哩哔哩（v2.6.8）：与快手同一套路径，几何识别 + 周期隐藏 + 诊断探针。
+            diagForce("INJECTED Bilibili process=" + proc + " stage=2 hide-ready");
+            Log.i(TAG, "loaded into Bilibili, hiding enabled (stage 2)...");
+            try {
+                DouyinHook.init(lpparam);
+            } catch (Throwable t) {
+                Log.e(TAG, "bilibili hook init failed", t);
+                diagForce("INIT FAILED Bilibili: " + Log.getStackTraceString(t));
+            }
+            try {
+                VideoAppProbe.init(lpparam, "bilibili");
+            } catch (Throwable t) {
+                Log.e(TAG, "bilibili probe init failed", t);
+                diagForce("PROBE FAILED Bilibili: " + Log.getStackTraceString(t));
             }
         }
     }

@@ -8,6 +8,7 @@ import java.util.regex.Pattern;
 
 import io.github.wumisc.antiburn.Config;
 import io.github.wumisc.antiburn.ConfStore;
+import io.github.wumisc.antiburn.LivePause;
 
 /**
  * v2.8 黑白名单模式回归测试（纯 JVM，直接调用真实字节码，不复制逻辑）。
@@ -221,6 +222,81 @@ public class ListModeTest {
         String damped = read(javaRoot.resolve("com/kyant/backdrop/catalog/utils/DampedDragAnimation.kt"));
         check(tabs.contains("snapToValue"), "T-15h 导航栏用 snap 驱动指示器（非弹簧插值）", "");
         check(damped.contains("suspend fun snapToValue"), "T-15i 动画引擎暴露连续置位入口", "");
+
+        // ---------- T-16：v2.7.1 真实 parse 回归（新旧键优先级）----------
+        // 直接执行 Hook 侧真实字节码，覆盖真机日志中的 enable_video_bottom=1 残留。
+        System.out.println("== T-16 真实 parse：快手/B站新旧键迁移优先级 ==");
+        parse("enable_video_bottom=1\n");
+        check(Config.enableKsBottom && Config.enableBiliBottom,
+                "T-16a 仅旧键存在时仍迁移为两个应用开启", "ks=" + Config.enableKsBottom + " bili=" + Config.enableBiliBottom);
+
+        parse("enable_ks_bottom=0\nenable_bili_bottom=0\nenable_video_bottom=1\n");
+        check(!Config.enableKsBottom && !Config.enableBiliBottom,
+                "T-16b 新键 0 在前、旧键 1 在后：两个开关均保持关闭",
+                "ks=" + Config.enableKsBottom + " bili=" + Config.enableBiliBottom);
+
+        parse("enable_video_bottom=1\nenable_ks_bottom=0\nenable_bili_bottom=0\n");
+        check(!Config.enableKsBottom && !Config.enableBiliBottom,
+                "T-16c 旧键 1 在前、新键 0 在后：结果与顺序无关",
+                "ks=" + Config.enableKsBottom + " bili=" + Config.enableBiliBottom);
+
+        parse("enable_ks_bottom=0\nenable_bili_bottom=1\nenable_video_bottom=1\n");
+        check(!Config.enableKsBottom && Config.enableBiliBottom,
+                "T-16d 快手关闭、B站开启：旧键不再把两边绑在一起",
+                "ks=" + Config.enableKsBottom + " bili=" + Config.enableBiliBottom);
+
+        parse("enable_video_bottom=0\nenable_ks_bottom=1\nenable_bili_bottom=0\n");
+        check(Config.enableKsBottom && !Config.enableBiliBottom,
+                "T-16e 快手开启、B站关闭：独立状态双向成立",
+                "ks=" + Config.enableKsBottom + " bili=" + Config.enableBiliBottom);
+
+        parse("enable_ks_right=0\nenable_bili_right=1\nenable_video_right=1\n"
+                + "enable_ks_top=1\nenable_bili_top=0\nenable_video_top=0\n"
+                + "enable_ks_corner=0\nenable_bili_corner=1\nenable_video_corner=1\n");
+        check(!Config.enableKsRight && Config.enableBiliRight
+                        && Config.enableKsTop && !Config.enableBiliTop
+                        && !Config.enableKsCorner && Config.enableBiliCorner,
+                "T-16f 其余区域同样按独立键优先，八键语义一致", "right/top/corner 均符合预期");
+
+        // ---------- T-17：v2.7.2 直播暂停信号真实逻辑 ----------
+        // 直接调用 LivePause 的纯函数，验证「只有当前前台包匹配、未过期、且属于
+        // 抖音 / 红果 的信号才暂停」。源码字符串匹配无法覆盖这些边界。
+        System.out.println("== T-17 直播暂停信号真实逻辑 ==");
+        java.lang.reflect.Method enc = LivePause.class.getDeclaredMethod(
+                "encode", String.class, boolean.class, long.class);
+        enc.setAccessible(true);
+        java.lang.reflect.Method act = LivePause.class.getDeclaredMethod(
+                "isActive", String.class, String.class, long.class);
+        act.setAccessible(true);
+
+        long t0 = 1_700_000_000_000L;
+        String douyin = "com.ss.android.ugc.aweme";
+        String hongguo = "com.phoenix.read.oversea.gp";
+        String other = "com.smile.gifmaker";
+
+        String onDouyin = (String) enc.invoke(null, douyin, true, t0);
+        check((Boolean) act.invoke(null, onDouyin, douyin, t0 + 3000),
+                "T-17a 当前前台包匹配且在有效期内：暂停成立", "");
+        check(!((Boolean) act.invoke(null, onDouyin, other, t0 + 3000)),
+                "T-17b 前台包不同（快手等）：不暂停", "");
+        check(!((Boolean) act.invoke(null, onDouyin, douyin, t0 + 16000)),
+                "T-17c 超过 15 秒未心跳：自动失效", "");
+        check(!((Boolean) act.invoke(null, onDouyin, douyin, t0 - 1000)),
+                "T-17d 时间戳晚于当前时刻（时钟异常）：不暂停", "");
+
+        String onHongguo = (String) enc.invoke(null, hongguo, true, t0);
+        check((Boolean) act.invoke(null, onHongguo, hongguo, t0 + 1000),
+                "T-17e 红果直播间同样生效（用户明确要求两应用一致）", "");
+
+        String off = (String) enc.invoke(null, douyin, false, t0);
+        check(!((Boolean) act.invoke(null, off, douyin, t0 + 1000)),
+                "T-17f 退出直播写入 0：立即恢复，不等过期", "");
+
+        String garbage = (String) enc.invoke(null, "", true, t0);
+        check(!((Boolean) act.invoke(null, garbage, douyin, t0)),
+                "T-17g 空包名 / 损坏内容：按无信号处理（不误停）", "");
+        check(!((Boolean) act.invoke(null, null, douyin, t0)),
+                "T-17h 文件不存在：按无信号处理", "");
 
         System.out.println();
         System.out.println("结果：" + pass + " 通过 / " + fail + " 失败");

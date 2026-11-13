@@ -3,6 +3,7 @@ package io.github.wumisc.antiburn;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.res.Resources;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
@@ -15,9 +16,11 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.WindowManager;
 
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.Random;
 
 import de.robv.android.xposed.XC_MethodHook;
@@ -44,6 +47,21 @@ public final class Controller {
     private static boolean started = false;
     private static long lastWlDiag = 0; // 白名单诊断日志节流
 
+    /**
+     * v2.7.4：本模块亲手改成透明的子视图。
+     *
+     * <p>旧版恢复时把父容器的所有子视图一律 setAlpha(1)，会把 ROM 自己设成透明的
+     * 装饰（如 Flyme 的挖孔黑边、HyperOS 的瞬时隐藏层）也一并点亮，看起来像
+     * 「状态栏闪一下」。改成只还原我们改过的那批，别人的 alpha 不碰。</p>
+     */
+    private static final List<View> dimmed = new ArrayList<>();
+
+    /** 窗口视图被 SystemUI 重建后，重新抓取的节流时间戳 */
+    private static long lastRescanAt = 0;
+
+    /** 魅族 Flyme：状态栏布局与 AOSP 差异最大的一家，容器 id 优先级单独一套 */
+    private static final boolean FLYME_ROM = detectFlyme();
+
     private Controller() {
     }
 
@@ -52,6 +70,7 @@ public final class Controller {
         XposedInit.diag("SYSINIT sdk=" + android.os.Build.VERSION.SDK_INT
                 + " release=" + android.os.Build.VERSION.RELEASE
                 + " brand=" + android.os.Build.BRAND + " device=" + android.os.Build.DEVICE
+                + " flyme=" + FLYME_ROM
                 + " base.os=" + (android.os.Build.VERSION.BASE_OS == null ? "?" : android.os.Build.VERSION.BASE_OS));
 
         // ---- 状态栏窗口 ----
@@ -86,6 +105,43 @@ public final class Controller {
                     });
         } else {
             Log.e(TAG, "StatusBarWindowView not found");
+        }
+
+        // ---- 状态栏本体（Flyme 专用补充）----
+        // Flyme 10/11 的状态栏布局仍源自 AOSP，但窗口类不一定叫 StatusBarWindowView；
+        // PhoneStatusBarView 才是它真正的状态栏容器（魅族在它内部画时钟 mz_clock、
+        // 环形电池与挖孔黑边）。抓到它以后整条栏的子视图才能逐个透明，
+        // 而不是退化成「整窗透明、连下拉面板一起没了」。
+        if (FLYME_ROM) {
+            Class<?> psbCls = XposedHelpers.findClassIfExists(
+                    "com.android.systemui.statusbar.phone.PhoneStatusBarView", cl);
+            if (psbCls != null) {
+                try {
+                    XposedHelpers.findAndHookMethod(psbCls, "onAttachedToWindow",
+                            new XC_MethodHook() {
+                                @Override
+                                protected void afterHookedMethod(MethodHookParam param) {
+                                    try {
+                                        View v = (View) param.thisObject;
+                                        // 用「整条栏」替换掉更外层的窗口根；若当前抓到的
+                                        // 已经是栏内更精确的容器（contents），则保留它。
+                                        if (statusView == null || isDescendant(v, statusView)) {
+                                            statusView = v;
+                                            findNotifyArea(v);
+                                            Log.i(TAG, "flyme status bar: " + desc(v));
+                                            startCycle();
+                                        }
+                                    } catch (Throwable t) {
+                                        hookFail("PhoneStatusBarView.attach", t);
+                                    }
+                                }
+                            });
+                } catch (Throwable t) {
+                    Log.w(TAG, "hook PhoneStatusBarView failed", t);
+                }
+            } else {
+                Log.w(TAG, "PhoneStatusBarView not found (flyme)");
+            }
         }
 
         // ---- 导航栏（多候选，澎湃 4.0 类名可能不同）----
@@ -182,12 +238,17 @@ public final class Controller {
             Log.w(TAG, "hook View.onAttachedToWindow failed", t);
         }
 
-        // 保险：5 秒后若状态栏还没抓到，尝试按 id 在系统窗口里扫一遍
+        // 保险：5 秒后若状态栏 / 导航栏还没抓全，主动枚举窗口根再试一次
         handler.postDelayed(new Runnable() {
             @Override
             public void run() {
-                if (statusView == null) {
-                    Log.w(TAG, "status view still null after 5s");
+                if (statusView == null || navView == null) {
+                    Log.w(TAG, "views missing after 5s, rescan: status=" + (statusView != null)
+                            + " nav=" + (navView != null));
+                    XposedInit.diagForce("SYS RESCAN 5s status=" + (statusView != null)
+                            + " nav=" + (navView != null));
+                    lastRescanAt = 0;
+                    checkViewsAlive();
                 }
             }
         }, 5000);
@@ -201,36 +262,64 @@ public final class Controller {
      */
     private static View findStatusBarView(View root) {
         try {
-            android.content.res.Resources r = root.getResources();
-            String[] iconIds = {
-                    "status_bar_contents",
-                    "status_bar_icons",
-                    "notification_icon_area"
-            };
+            // v2.7.4：Flyme 优先整条 PhoneStatusBarView（id=status_bar）。
+            // 魅族把时钟（mz_clock）、环形电池放在 status_bar_contents 之外，
+            // 只抓 contents 会剩下半条栏继续烧屏；抓整条再按「通知区路径」保留通知，
+            // 既不误伤通知，又能把时钟 / 电量 / 信号一起透明掉。
+            // 不再把 notification_icon_area 当状态栏候选：它是通知图标区本身，
+            // 选中它等于「只隐藏通知、留下时钟」，与设计意图正好相反。
+            String[] iconIds = FLYME_ROM
+                    ? new String[]{"status_bar", "mz_status_bar", "status_bar_contents",
+                    "status_bar_icons"}
+                    : new String[]{"status_bar_contents", "status_bar_icons", "status_bar",
+                    "mz_status_bar"};
             for (String id : iconIds) {
-                int rid = r.getIdentifier(id, "id", "com.android.systemui");
+                int rid = idOf(root, id);
                 Log.i(TAG, "probe id " + id + " -> " + rid);
                 if (rid != 0) {
                     View v = root.findViewById(rid);
                     if (v != null) {
-                        Log.i(TAG, "icon container: " + desc(v) + " children=" + vChildNames(v));
+                        Log.i(TAG, "status container " + id + ": " + desc(v)
+                                + " children=" + vChildNames(v));
                         return v;
                     }
-                }
-            }
-            // 次选：状态栏内容层（仍保留窗口根的下拉区域）
-            int rid = r.getIdentifier("status_bar", "id", "com.android.systemui");
-            Log.i(TAG, "probe id status_bar -> " + rid);
-            if (rid != 0) {
-                View v = root.findViewById(rid);
-                if (v != null) {
-                    return v;
                 }
             }
         } catch (Throwable t) {
             Log.w(TAG, "find by id error", t);
         }
         return null;
+    }
+
+    /**
+     * 按 id 名解析资源，兼容自定义 ROM 换包名。
+     *
+     * <p>旧版只查 {@code com.android.systemui}。多数 ROM 没问题，但主题 / 换肤后的
+     * SystemUI 可能把资源代理到自己的包，Flyme 的部分组件（com.flyme.systemuitools）
+     * 也是独立包。多试几个包名比「找不到就退化成整窗透明」稳妥。</p>
+     */
+    private static int idOf(View root, String name) {
+        Resources r = root.getResources();
+        String own = null;
+        try {
+            Context c = root.getContext();
+            own = c == null ? null : c.getPackageName();
+        } catch (Throwable ignored) {
+        }
+        String[] pkgs = {"com.android.systemui", own, "com.meizu.flyme.systemui"};
+        for (String p : pkgs) {
+            if (p == null || p.isEmpty()) {
+                continue;
+            }
+            try {
+                int rid = r.getIdentifier(name, "id", p);
+                if (rid != 0) {
+                    return rid;
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        return 0;
     }
 
     /** 打印子视图 id/类名，便于定位灵动岛等特殊视图 */
@@ -251,8 +340,7 @@ public final class Controller {
     /** 按 id 在导航栏容器里找 navigation_bar 视图 */
     private static View findNavById(View root) {
         try {
-            int rid = root.getResources().getIdentifier(
-                    "navigation_bar", "id", "com.android.systemui");
+            int rid = idOf(root, "navigation_bar");
             if (rid != 0) {
                 View v = root.findViewById(rid);
                 if (v != null) {
@@ -273,8 +361,7 @@ public final class Controller {
             return true;
         }
         try {
-            int rid = v.getResources().getIdentifier(
-                    "navigation_bar", "id", "com.android.systemui");
+            int rid = idOf(v, "navigation_bar");
             if (rid != 0 && v.getId() == rid) {
                 return true;
             }
@@ -297,33 +384,47 @@ public final class Controller {
     /** 查找状态栏内"通知图标区"（隐藏状态栏静态元素时保留它，让通知照常可见） */
     private static void findNotifyArea(View root) {
         notifyArea = null;
-        if (!(root instanceof android.view.ViewGroup)) {
+        if (root == null) {
             return;
         }
-        android.view.ViewGroup g = (android.view.ViewGroup) root;
-        for (int i = 0; i < g.getChildCount(); i++) {
-            View c = g.getChildAt(i);
-            String n = c.getClass().getName();
-            // Android 12+ 通知图标容器：NotificationIconAreaView / NotificationIconContainer
-            if (n.contains("Notification") || n.contains("notification")) {
-                notifyArea = c;
-                Log.i(TAG, "notify area: " + desc(c));
-                return;
-            }
-        }
-        // 兜底：按 id notification_icon_area
-        try {
-            int rid = root.getResources().getIdentifier(
-                    "notification_icon_area", "id", "com.android.systemui");
+        // 优先按 id 找：AOSP 的 notification_icon_area 常常嵌在 left_side 里，
+        // 只扫直接子节点永远扫不到，于是「保留通知」实际变成了「整条栏全隐藏」。
+        for (String id : new String[]{"notification_icon_area", "notificationIcons",
+                "status_bar_notification_icons"}) {
+            int rid = idOf(root, id);
             if (rid != 0) {
                 View v = root.findViewById(rid);
                 if (v != null) {
                     notifyArea = v;
-                    Log.i(TAG, "notify area by id: " + desc(v));
+                    Log.i(TAG, "notify area by id " + id + ": " + desc(v));
+                    return;
                 }
             }
-        } catch (Throwable ignored) {
         }
+        // 次选：按类名递归找（限制深度，避免把下拉面板里的通知行当成图标区）
+        notifyArea = findNotificationNode(root, 0);
+        if (notifyArea != null) {
+            Log.i(TAG, "notify area by class: " + desc(notifyArea));
+        }
+    }
+
+    private static View findNotificationNode(View v, int depth) {
+        if (depth > 3 || !(v instanceof android.view.ViewGroup)) {
+            return null;
+        }
+        android.view.ViewGroup g = (android.view.ViewGroup) v;
+        for (int i = 0; i < g.getChildCount(); i++) {
+            View c = g.getChildAt(i);
+            String n = c.getClass().getName();
+            if (n.contains("Notification") || n.contains("notification")) {
+                return c;
+            }
+            View deep = findNotificationNode(c, depth + 1);
+            if (deep != null) {
+                return deep;
+            }
+        }
+        return null;
     }
 
     private static String desc(View v) {
@@ -358,29 +459,155 @@ public final class Controller {
         started = true;
         Log.i(TAG, "cycle started");
         handler.removeCallbacks(cycleRunnable);
-        handler.postDelayed(cycleRunnable, 1000);
+        scheduleCycle(1000);
+    }
+
+    /** v2.7.3：本轮是否已排下一次，供 finally 判断要不要兜底重排。 */
+    private static volatile boolean cycleScheduled = false;
+
+    /** 唯一周期调度入口，避免多路径重复排队。 */
+    private static void scheduleCycle(long delayMs) {
+        cycleScheduled = true;
+        handler.postDelayed(cycleRunnable, delayMs);
     }
 
     private static final Runnable cycleRunnable = new Runnable() {
         @Override
         public void run() {
+            cycleScheduled = false;
             try {
                 tick();
             } catch (Throwable t) {
                 Log.e(TAG, "tick error", t);
+                XposedInit.diag("SYS TICK ERROR " + t);
+            } finally {
+                // v2.7.3 核心修复：SystemUI 侧同样不能让一次异常停掉整个周期，
+                // 否则状态栏 / 导航栏的隐藏与像素微移会永久静止。
+                if (!cycleScheduled && handler != null) {
+                    scheduleCycle(2000);
+                }
             }
         }
     };
 
+    /**
+     * v2.7.4：视图存活检查 + 失效重抓。
+     *
+     * <p>SystemUI 在切换深色模式、改分辨率 / 字体、Flyme 换主题、折叠屏展开等场景
+     * 会整棵重建状态栏窗口，旧引用变成一个已经 detach 的 View：alpha 改得再勤，
+     * 屏幕上也毫无变化，用户看到的是「设置还开着，但完全没有效果」。
+     * 旧版从 startCycle 之后再也不更新引用，只能重启 SystemUI 才能恢复。
+     * 这里每轮校验一次 attach 状态，掉了就丢掉旧引用并主动重扫。</p>
+     */
+    private static void checkViewsAlive() {
+        if (statusView != null && !statusView.isAttachedToWindow()) {
+            XposedInit.diag("SYS STATUS VIEW DETACHED, re-acquire");
+            statusView = null;
+            notifyArea = null;
+            dimmed.clear();
+            // 新窗口是可见的，旧 hidden=true 会让下一轮跳过 applyHide，
+            // 表现为「重抓到了但一直不隐藏」。复位后按当前相位重新施加。
+            hidden = false;
+        }
+        if (navView != null && !navView.isAttachedToWindow()) {
+            XposedInit.diag("SYS NAV VIEW DETACHED, re-acquire");
+            navView = null;
+            hidden = false;
+        }
+        if (statusView != null && navView != null) {
+            return;
+        }
+        long now = SystemClock.elapsedRealtime();
+        if (now - lastRescanAt < 3000) {
+            return;
+        }
+        lastRescanAt = now;
+        rescanWindows();
+    }
+
+    /**
+     * 从 SystemUI 自己的 WindowManagerGlobal 里找窗口根。
+     *
+     * <p>为什么需要这层：View.onAttachedToWindow 的兜底扫描只能抓到「钩子装好之后」
+     * 才 attach 的视图。LSPosed 在某些 ROM 上注入较晚（Flyme 的系统界面启动更早），
+     * 状态栏早已 attach 完毕，扫描永远等不到第二次，最终退化成「整窗透明」或完全无效。
+     * 直接枚举当前进程的窗口根，不依赖任何厂商类名，也不依赖 attach 时序。</p>
+     */
+    private static void rescanWindows() {
+        try {
+            Class<?> wmg = Class.forName("android.view.WindowManagerGlobal");
+            Object inst = wmg.getMethod("getInstance").invoke(null);
+            Field f = wmg.getDeclaredField("mViews");
+            f.setAccessible(true);
+            Object raw = f.get(inst);
+            if (!(raw instanceof List)) {
+                return;
+            }
+            List<?> views = new ArrayList<>((List<?>) raw);
+            for (Object o : views) {
+                if (!(o instanceof View)) {
+                    continue;
+                }
+                View root = (View) o;
+                String n = root.getClass().getName();
+                if (statusView == null && n.contains("StatusBar")) {
+                    View bar = findStatusBarView(root);
+                    statusView = bar != null ? bar : root;
+                    findNotifyArea(statusView);
+                    XposedInit.diagForce("SYS rescan status=" + desc(statusView));
+                    startCycle();
+                } else if (navView == null && n.contains("NavigationBar")) {
+                    navView = root;
+                    XposedInit.diagForce("SYS rescan nav=" + desc(root));
+                    startCycle();
+                }
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "rescan windows failed: " + t);
+        }
+    }
+
+    /** child 是否在 ancestor 这棵子树里（含自身）。 */
+    private static boolean isDescendant(View child, View ancestor) {
+        View cur = child;
+        while (cur != null) {
+            if (cur == ancestor) {
+                return true;
+            }
+            android.view.ViewParent p = cur.getParent();
+            cur = (p instanceof View) ? (View) p : null;
+        }
+        return false;
+    }
+
+    /** 魅族 Flyme 判定：厂商 / 品牌 / 版本串任一命中即可。 */
+    private static boolean detectFlyme() {
+        try {
+            String s = (android.os.Build.MANUFACTURER + " " + android.os.Build.BRAND + " "
+                    + android.os.Build.DISPLAY + " " + android.os.Build.PRODUCT)
+                    .toLowerCase(Locale.ROOT);
+            return s.contains("meizu") || s.contains("flyme");
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
     private static void tick() {
+        checkViewsAlive();
         // 拿到宿主 Context 才能经 ConfigProvider 跨进程读配置（SELinux 挡住直接读 /data/local/tmp）
-        if (statusView != null) {
-            Config.attach(statusView.getContext());
+        View ctxView = statusView != null ? statusView : navView;
+        if (ctxView != null) {
+            Config.attach(ctxView.getContext());
         }
         Config.reload();
 
         boolean screenOn = isScreenOn();
         String top = currentTopPackage();
+        // v2.7.2：抖音 / 红果 直播间暂停信号。由 App 进程在识别到直播页时写文件
+        // （带包名 + 15 秒有效期），这里只读不写，包名不匹配或过期即视为无信号。
+        // v2.7.3：改为读内存缓存（后台线程刷新）。原实现每轮在主线程同步读三个路径的文件，
+        // 任一 IO 阻塞都会拖慢甚至打断 tick —— 与「退出直播后彻底不工作」是同一类风险。
+        boolean livePause = LivePause.readCached(top);
         // v2.8：名单模式（白/黑/关闭）的解释权全部收进 shouldIntervene，
         // 这里不再出现 inWhitelist 这类把某一种模式写死的变量。
         boolean intervene = Config.shouldIntervene(top);
@@ -401,6 +628,7 @@ public final class Controller {
                     // eng：哪条引擎在跑。升级期最容易出现的怪象就是「用户切了 overlay，
                     // SystemUI 里还是旧 Hook 在动手」，没有这个字段只能靠版本号猜。
                     + " eng=" + Config.engine
+                    + " lp=" + livePause
                     + " ver=" + BuildConfig.VERSION_NAME);
         }
 
@@ -409,18 +637,20 @@ public final class Controller {
         // v2.5：总开关（防烧屏保护）是总闸。旧版条件是 (!status && !nav)，
         // 只要导航栏开关开着，总开关关了隐藏动作照跑；enableShift 更是完全不看总开关，
         // 真机日志里 status=false 时 SHIFT 仍连续跑了 25 分钟。现在关掉即全部停止。
-        if (!screenOn || !intervene) {
+        // v2.7.2：直播间暂停与灭屏 / 名单豁免同级 —— 命中即恢复系统栏并停掉像素偏移。
+        if (!screenOn || !intervene || livePause) {
             if (hidden) {
                 applyShow();
                 hidden = false;
             }
             if (PixelShift.isActive()) {
                 PixelShift.shutdown();
-                XposedInit.diag("SHIFT 停止：" + pauseReason(screenOn, intervene, top));
+                // v2.7.2：直播暂停时 pauseReason 会返回「直播中」，便于日志直接区分原因
+                XposedInit.diag("SHIFT 停止：" + pauseReason(screenOn, intervene, top, livePause));
             }
             // 暂停期间古诗浮层同样必须移除（applyShow 只恢复系统栏，不清理 Overlay）
             // 2 秒轮询，等恢复条件满足后继续周期
-            handler.postDelayed(cycleRunnable, 2000);
+            scheduleCycle(2000);
             return;
         }
 
@@ -471,7 +701,7 @@ public final class Controller {
         // 调度：优先切到下一相位边界保持同步，但最迟 2s 重读一次配置。
         // 旧版直接等到相位边界（最长 hideSec 秒），导致改了开关要等几十秒才生效。
         long remain = shouldHide ? (hideMs - pos) : (hideMs + showMs - pos);
-        handler.postDelayed(cycleRunnable, Math.min(2000L, Math.max(100L, remain)));
+        scheduleCycle(Math.min(2000L, Math.max(100L, remain)));
     }
 
     /** 上一次应用到 PixelShift 的 UI 方案，变化时才重设并打日志 */
@@ -517,31 +747,100 @@ public final class Controller {
 
     /** 隐藏状态栏静态元素（时钟/信号/电池等），但保留通知图标区，通知照常可见 */
     private static void hideStatusKeepNotify() {
-        if (!(statusView instanceof android.view.ViewGroup) || notifyArea == null) {
+        View sv = statusView;
+        if (sv == null) {
+            return;
+        }
+        if (!(sv instanceof android.view.ViewGroup) || notifyArea == null) {
             // 未识别出通知区：维持整窗透明（原行为）
-            if (statusView.getVisibility() != View.GONE && statusView.getAlpha() != 0f) {
-                statusView.setAlpha(0f);
+            if (sv.getVisibility() != View.GONE && sv.getAlpha() != 0f) {
+                sv.setAlpha(0f);
                 Log.i(TAG, "status transparent (no notify area)");
             }
             return;
         }
-        // 父容器恢复为可见，逐子容器透明（通知区除外）
-        if (statusView.getAlpha() != 1f) {
-            statusView.setAlpha(1f);
+        // 父容器恢复为可见，再沿「通知区路径」逐层只隐藏兄弟节点
+        if (sv.getAlpha() != 1f) {
+            sv.setAlpha(1f);
         }
-        android.view.ViewGroup g = (android.view.ViewGroup) statusView;
+        List<View> path = pathTo(sv, notifyArea);
+        if (path == null) {
+            // 通知区已经不在当前视图树里（SystemUI 重建过窗口 / 换了主题）。
+            // 旧版此时会把整条栏全隐藏，用户表现为「通知图标也没了」。
+            // 先就地重找一次，还找不到才退化成整条透明，下一轮 checkViewsAlive 再兜底。
+            Log.w(TAG, "notify area detached, re-resolve");
+            findNotifyArea(sv);
+            path = (notifyArea != null) ? pathTo(sv, notifyArea) : null;
+        }
+        if (path == null || path.size() < 2) {
+            notifyArea = null;
+            if (sv.getAlpha() != 0f) {
+                sv.setAlpha(0f);
+                Log.i(TAG, "status transparent (notify path missing)");
+            }
+            return;
+        }
+        dimAlong(path, 0);
+        setAlphaTracked(notifyArea, 1f, false);
+    }
+
+    /** 从 root 到 target 的完整路径（root → … → target）；target 不在 root 下返回 null。 */
+    private static List<View> pathTo(View root, View target) {
+        List<View> path = new ArrayList<>();
+        View cur = target;
+        while (cur != null) {
+            path.add(0, cur);
+            if (cur == root) {
+                return path;
+            }
+            android.view.ViewParent p = cur.getParent();
+            if (!(p instanceof View)) {
+                return null;
+            }
+            cur = (View) p;
+        }
+        return null;
+    }
+
+    /**
+     * 沿路径隐藏：路径上的容器保持 alpha=1，其余兄弟节点透明。
+     *
+     * <p>只「保留通知区的直接父容器」会把同容器里的时钟一起留下（Flyme 的
+     * mz_clock 就在左侧容器里）；只隐藏直接子节点又会让通知跟着消失。
+     * 正确做法是沿路径逐层剥：每一层保留通往通知区的那一支，其余全部透明。</p>
+     */
+    private static void dimAlong(List<View> path, int idx) {
+        View parent = path.get(idx);
+        if (!(parent instanceof android.view.ViewGroup)) {
+            return;
+        }
+        View keep = (idx + 1 < path.size()) ? path.get(idx + 1) : null;
+        android.view.ViewGroup g = (android.view.ViewGroup) parent;
         for (int i = 0; i < g.getChildCount(); i++) {
             View c = g.getChildAt(i);
-            if (c == notifyArea) {
-                if (c.getAlpha() != 1f) {
-                    c.setAlpha(1f);
-                    Log.i(TAG, "notify area kept visible");
+            if (c == null || c.getVisibility() == View.GONE) {
+                continue;
+            }
+            if (c == keep) {
+                setAlphaTracked(c, 1f, false);
+                // 只在「中间容器」上继续下钻；通知区本身要整棵保留，
+                // 再往下走会把通知图标自己 setAlpha(0)，等于没保住通知。
+                if (c != notifyArea) {
+                    dimAlong(path, idx + 1);
                 }
             } else {
-                if (c.getVisibility() != View.GONE && c.getAlpha() != 0f) {
-                    c.setAlpha(0f);
-                }
+                setAlphaTracked(c, 0f, true);
             }
+        }
+    }
+
+    /** 改 alpha 并记账：只有我们改过的视图才会在恢复时被点亮。 */
+    private static void setAlphaTracked(View v, float alpha, boolean track) {
+        if (v.getAlpha() != alpha) {
+            v.setAlpha(alpha);
+        }
+        if (track && !dimmed.contains(v)) {
+            dimmed.add(v);
         }
     }
 
@@ -556,41 +855,35 @@ public final class Controller {
     /**
      * 状态栏里是否有子容器仍处于透明态。
      *
-     * <p>父容器 alpha 恢复不等于子容器恢复：hideStatusKeepNotify 是逐个 setAlpha(0) 的，
+     * <p>父容器 alpha 恢复不等于子容器恢复：隐藏是逐个 setAlpha(0) 的，
      * 关掉「状态栏」开关时必须同样逐个还原。只看父容器会漏判，
      * 导致关了开关图标还是不见。</p>
      */
     private static boolean statusChildrenHidden() {
-        if (!(statusView instanceof android.view.ViewGroup)) {
-            return false;
-        }
-        android.view.ViewGroup g = (android.view.ViewGroup) statusView;
-        for (int i = 0; i < g.getChildCount(); i++) {
-            View c = g.getChildAt(i);
-            if (c != notifyArea && c.getAlpha() != 1f) {
-                return true;
-            }
-        }
-        return false;
+        return !dimmed.isEmpty() || (statusView != null && statusView.getAlpha() != 1f);
     }
 
-    /** 恢复状态栏父容器与被透明化的子容器（父恢复不等于子恢复，须逐个还原） */
+    /**
+     * 恢复状态栏父容器与「被我们透明化」的子容器。
+     *
+     * <p>v2.7.4：不再无差别把所有子视图 alpha 设回 1。ROM 自己管理的装饰
+     * （Flyme 挖孔黑边、HyperOS 的瞬时隐藏层）本来就不是我们改的，
+     * 一律点亮会让状态栏在恢复瞬间闪一下。</p>
+     */
     private static void restoreStatusChildren() {
-        if (statusView == null) {
-            return;
+        for (int i = 0; i < dimmed.size(); i++) {
+            View v = dimmed.get(i);
+            try {
+                if (v != null && v.getAlpha() != 1f) {
+                    v.setAlpha(1f);
+                }
+            } catch (Throwable ignored) {
+            }
         }
-        if (statusView.getAlpha() != 1f) {
+        dimmed.clear();
+        if (statusView != null && statusView.getAlpha() != 1f) {
             statusView.setAlpha(1f);
             Log.i(TAG, "status shown");
-        }
-        if (statusView instanceof android.view.ViewGroup) {
-            android.view.ViewGroup g = (android.view.ViewGroup) statusView;
-            for (int i = 0; i < g.getChildCount(); i++) {
-                View c = g.getChildAt(i);
-                if (c.getAlpha() != 1f) {
-                    c.setAlpha(1f);
-                }
-            }
         }
     }
 
@@ -599,12 +892,16 @@ public final class Controller {
      * 真机日志里会出现「status=true 却报总开关关闭」这类自相矛盾的记录，
      * 排障时把人引向错误方向。三种原因必须分开写。
      */
-    private static String pauseReason(boolean screenOn, boolean intervene, String top) {
+    private static String pauseReason(boolean screenOn, boolean intervene, String top,
+                                      boolean livePause) {
         if (!screenOn) {
             return "灭屏";
         }
         if (!Config.enableStatus) {
             return "总开关关闭";
+        }
+        if (livePause) {
+            return "直播中暂停 top=" + top;
         }
         if (!intervene) {
             return "当前模式不干预该前台包 mode=" + Config.listMode + " top=" + top;

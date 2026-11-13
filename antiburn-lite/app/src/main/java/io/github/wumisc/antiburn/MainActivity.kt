@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.widget.Toast
@@ -56,6 +57,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -107,14 +109,27 @@ import kotlinx.coroutines.withContext
  *  - custom_poems 多行文本编码为单行，不再把 conf 切成非法行；新增可编辑输入框；
  *  - 白名单支持直接填包名（选择页失败时仍可保存），切换 Tab 不再丢弃未保存的改动。
  */
-/** 界面适配可选方案：五大厂商 + 原生（id 与 conf 里的 ui_style 一一对应） */
+/**
+ * 界面适配可选方案：六大厂商 + 原生（id 与 conf 里的 ui_style 一一对应）。
+ * v2.7.4：新增魅族 Flyme —— 魅族 20/21 等中置挖孔机型会在正中绘制环形电池，
+ * 不避让会跟着像素微移一起抖。
+ */
 private val UI_STYLE_LABELS = listOf(
     "hyperos" to "小米 HyperOS",
     "magicos" to "荣耀 MagicOS",
     "coloros" to "OPPO ColorOS",
     "originos" to "vivo OriginOS",
     "harmonyos" to "华为 HarmonyOS",
+    "flyme" to "魅族 Flyme",
     "aosp" to "原生 AOSP",
+)
+
+/**
+ * 首次加载时的界面方案：按机型自动识别，用户改过之后一律以配置为准。
+ * 识别错了也没有副作用 —— 首页的适配按钮点一下就会覆盖并落盘。
+ */
+private fun detectedUiStyle(): String = UiStyle.detect(
+    Build.MANUFACTURER, Build.BRAND, Build.DISPLAY, Build.PRODUCT,
 )
 
 data class AbState(
@@ -139,10 +154,11 @@ data class AbState(
      */
     val enableStatusBar: Boolean = true,
     /**
-     * 目标 UI 适配方案：hyperos / magicos / coloros / originos / harmonyos / aosp。
+     * 目标 UI 适配方案：hyperos / magicos / coloros / originos / harmonyos / flyme / aosp。
      * 决定 Hook 侧用哪套「胶囊保护区 + 导航栏结构」配置，见 profiles/ 与 Config.uiStyle。
+     * 默认值改为按机型识别（v2.7.4）：魅族机器首次打开就是 Flyme，不必自己找。
      */
-    val uiStyle: String = "aosp",
+    val uiStyle: String = detectedUiStyle(),
     val enablePoem: Boolean = false,
     val enableBall: Boolean = false,
     val enableLog: Boolean = false,
@@ -157,6 +173,25 @@ data class AbState(
     val enableDramaLike: Boolean = false,
     val enableDramaRt: Boolean = false,
     val enableDramaLt: Boolean = false,
+    /**
+     * 红果短剧播放页右侧中部那条竖排「左滑查看详情 «」引导文字。
+     * 它是长期静止的半透明白字，容易烧屏；与顶部/底部/右侧按钮列/角落按钮
+     * 都不重合，只能按文案识别后单独隐藏。默认关闭，老配置缺键行为不变。
+     */
+    val enableDramaSwipe: Boolean = false,
+    /** v2.6.8 快手 / 哔哩哔哩：每个 App 一个总开关，默认关 */
+    val enableKuaishou: Boolean = false,
+    val enableBilibili: Boolean = false,
+    /** v2.7.0 快手独立四区域开关（与 B站完全独立，互不影响），默认关 */
+    val enableKsRight: Boolean = false,
+    val enableKsTop: Boolean = false,
+    val enableKsBottom: Boolean = false,
+    val enableKsCorner: Boolean = false,
+    /** v2.7.0 哔哩哔哩独立四区域开关，默认关 */
+    val enableBiliRight: Boolean = false,
+    val enableBiliTop: Boolean = false,
+    val enableBiliBottom: Boolean = false,
+    val enableBiliCorner: Boolean = false,
     val hideSec: Int = 30,
     val showSec: Int = 10,
     val customPoems: String = "",
@@ -202,6 +237,14 @@ private val AbStateSaver = listSaver(
             s.engine,
             // v2.6.4：状态栏独立开关。索引 26。
             s.enableStatusBar,
+            // v2.6.6：红果「左滑查看详情」引导条开关。索引 27（追加在末尾，不动旧索引）。
+            s.enableDramaSwipe,
+            // v2.6.8：快手 / B站 六个开关。索引 28..33 追加在末尾，旧索引一律不动。
+            s.enableKuaishou, s.enableBilibili,
+            s.enableKsRight, s.enableKsTop,
+            s.enableKsBottom, s.enableKsCorner,
+            s.enableBiliRight, s.enableBiliTop,
+            s.enableBiliBottom, s.enableBiliCorner,
         )
     },
     restore = { l: List<Any> ->
@@ -240,13 +283,27 @@ private val AbStateSaver = listSaver(
                 whiteList = Str(19),
                 enableShift = Bool(20, true),
                 enableIcon = Bool(21),
-                uiStyle = Str(22, "aosp"),
+                uiStyle = Str(22, detectedUiStyle()),
                 listMode = ConfStore.normMode(Str(23)),
                 blackList = Str(24),
                 // v2.6 新增：旧 Bundle 只有 25 项，getOrNull 会返回 null → 取默认值
                 engine = ConfStore.normEngine(Str(25, ConfStore.ENGINE_LSPOSED)),
                 // v2.6.4 新增：默认 true，与「总闸开则状态栏隐藏」的历史行为一致
                 enableStatusBar = Bool(26, true),
+                // v2.6.6 新增：默认 false，旧 Bundle 只有 27 项时 getOrNull 取默认值
+                enableDramaSwipe = Bool(27),
+                // v2.6.8 新增：六个开关默认 false；旧 Bundle 缺项由 getOrNull 兜底，
+                // 不插队、不改旧索引，升级后旋转屏幕不会串位。
+                enableKuaishou = Bool(28),
+                enableBilibili = Bool(29),
+                enableKsRight = Bool(30),
+                enableKsTop = Bool(31),
+                enableKsBottom = Bool(32),
+                enableKsCorner = Bool(33),
+                enableBiliRight = Bool(34),
+                enableBiliTop = Bool(35),
+                enableBiliBottom = Bool(36),
+                enableBiliCorner = Bool(37),
             )
         }
     },
@@ -257,11 +314,27 @@ object AbConf {
     private fun i(v: String?, def: Int): Int = v?.trim()?.toIntOrNull() ?: def
     private fun b(v: String?, def: Boolean = false): Boolean = if (v == null) def else v.trim() == "1"
 
+    /**
+     * v2.7.1 迁移优先级：独立键一旦存在就以其为准，旧共用键仅在新键缺失时兜底。
+     * 不能用「新值 || 旧值」：旧值 1 会让用户永远无法把新开关关成 0，并在保存回读时
+     * 被误报成「已被其它入口改写」。
+     */
+    private fun migratedB(map: Map<String, String>, key: String, legacy: String): Boolean =
+        if (map.containsKey(key)) b(map[key]) else b(map[legacy])
+
     /** 已知的 UI 适配方案 id（与 Hook 侧 UiStyle.IDS 同一份真源） */
     val UI_STYLE_IDS: List<String> = UiStyle.IDS
 
     /** 未知 / 空值一律归到 aosp。归一逻辑与 Config/UiStyle 共用，避免跨进程不一致 */
     fun normUiStyle(v: String?): String = UiStyle.norm(v)
+
+    /**
+     * 名单文本归一：换行 / 中英文逗号 / 分号都当分隔符，去空白去重后按英文逗号拼回。
+     * 与 ConfStore.parseWhitelist 同一套规则。直接拿输入框原文做 diff / 落盘会出两个真问题：
+     *  - 用户敲一个结尾逗号，回读被归一化 → 误报「已被其它入口改写」，逗号还会被吞掉；
+     *  - 粘贴多行时换行被原样写进 conf，整行变成没有 '=' 的非法行，此后每次保存都失败。
+     */
+    fun canonList(text: String): String = ConfStore.parseWhitelist(text).joinToString(",")
 
     fun load(): AbState {
         // conf 与镜像都读不到 → 用类默认值（enableStatus/enableLive 为 true），
@@ -286,7 +359,8 @@ object AbConf {
             enableIcon = b(map["enable_icon"]),
             // 缺失键按 true：v2.6.3 及以前的配置没有这个键，升级后行为必须保持不变
             enableStatusBar = b(map["enable_status_bar"], true),
-            uiStyle = normUiStyle(map["ui_style"]),
+            // v2.7.4：缺键时按机型识别（魅族 → flyme），已有键一律以用户选择为准
+            uiStyle = if (map.containsKey("ui_style")) normUiStyle(map["ui_style"]) else detectedUiStyle(),
             // 诗句功能已下线（Hook 侧实现同步移除）：界面无入口、消费端已删，
             // 这里固定 false，避免老配置里的 enable_poem=1 被读进来再写回去。
             enablePoem = false,
@@ -303,6 +377,18 @@ object AbConf {
             enableDramaLike = b(map["enable_drama_like"]),
             enableDramaRt = b(map["enable_drama_right_top"]),
             enableDramaLt = b(map["enable_drama_left_top"]),
+            enableDramaSwipe = b(map["enable_drama_swipe"]),
+            enableKuaishou = b(map["enable_kuaishou"]),
+            enableBilibili = b(map["enable_bilibili"]),
+            // v2.7.1：新独立键优先；只有新键缺失时才迁移旧共用键，允许用户正常关闭
+            enableKsRight = migratedB(map, "enable_ks_right", "enable_video_right"),
+            enableKsTop = migratedB(map, "enable_ks_top", "enable_video_top"),
+            enableKsBottom = migratedB(map, "enable_ks_bottom", "enable_video_bottom"),
+            enableKsCorner = migratedB(map, "enable_ks_corner", "enable_video_corner"),
+            enableBiliRight = migratedB(map, "enable_bili_right", "enable_video_right"),
+            enableBiliTop = migratedB(map, "enable_bili_top", "enable_video_top"),
+            enableBiliBottom = migratedB(map, "enable_bili_bottom", "enable_video_bottom"),
+            enableBiliCorner = migratedB(map, "enable_bili_corner", "enable_video_corner"),
             hideSec = i(map["hide_duration"], 30),
             showSec = i(map["show_duration"], 10),
             customPoems = "",
@@ -363,13 +449,24 @@ object AbConf {
         lines["enable_drama_like"] = if (s.enableDramaLike) "1" else "0"
         lines["enable_drama_right_top"] = if (s.enableDramaRt) "1" else "0"
         lines["enable_drama_left_top"] = if (s.enableDramaLt) "1" else "0"
+        lines["enable_drama_swipe"] = if (s.enableDramaSwipe) "1" else "0"
+        lines["enable_kuaishou"] = if (s.enableKuaishou) "1" else "0"
+        lines["enable_bilibili"] = if (s.enableBilibili) "1" else "0"
+        lines["enable_ks_right"] = if (s.enableKsRight) "1" else "0"
+        lines["enable_ks_top"] = if (s.enableKsTop) "1" else "0"
+        lines["enable_ks_bottom"] = if (s.enableKsBottom) "1" else "0"
+        lines["enable_ks_corner"] = if (s.enableKsCorner) "1" else "0"
+        lines["enable_bili_right"] = if (s.enableBiliRight) "1" else "0"
+        lines["enable_bili_top"] = if (s.enableBiliTop) "1" else "0"
+        lines["enable_bili_bottom"] = if (s.enableBiliBottom) "1" else "0"
+        lines["enable_bili_corner"] = if (s.enableBiliCorner) "1" else "0"
         lines["hide_duration"] = s.hideSec.coerceIn(5, 3600).toString()
         lines["show_duration"] = s.showSec.coerceIn(1, 3600).toString()
         // 多行文本必须编码成单行，否则后面的 key 会被挤成非法行、配置解析错乱
         lines["custom_poems"] = ConfStore.encodeValue(s.customPoems)
         lines["list_mode"] = s.listMode
-        lines["whitelist"] = s.whiteList.trim()
-        lines["blacklist"] = s.blackList.trim()
+        lines["whitelist"] = canonList(s.whiteList)
+        lines["blacklist"] = canonList(s.blackList)
         lines["engine"] = ConfStore.normEngine(s.engine)
         // 供 Hook 侧识别混装（App 已升级、SystemUI 仍跑旧 dex）
         lines["app_ver"] = BuildConfig.VERSION_NAME
@@ -424,19 +521,35 @@ object AbConf {
         putB("enable_drama_like", old.enableDramaLike, new.enableDramaLike)
         putB("enable_drama_right_top", old.enableDramaRt, new.enableDramaRt)
         putB("enable_drama_left_top", old.enableDramaLt, new.enableDramaLt)
+        putB("enable_drama_swipe", old.enableDramaSwipe, new.enableDramaSwipe)
+        putB("enable_kuaishou", old.enableKuaishou, new.enableKuaishou)
+        putB("enable_bilibili", old.enableBilibili, new.enableBilibili)
+        putB("enable_ks_right", old.enableKsRight, new.enableKsRight)
+        putB("enable_ks_top", old.enableKsTop, new.enableKsTop)
+        putB("enable_ks_bottom", old.enableKsBottom, new.enableKsBottom)
+        putB("enable_ks_corner", old.enableKsCorner, new.enableKsCorner)
+        putB("enable_bili_right", old.enableBiliRight, new.enableBiliRight)
+        putB("enable_bili_top", old.enableBiliTop, new.enableBiliTop)
+        putB("enable_bili_bottom", old.enableBiliBottom, new.enableBiliBottom)
+        putB("enable_bili_corner", old.enableBiliCorner, new.enableBiliCorner)
         if (old.hideSec != new.hideSec) m["hide_duration"] = new.hideSec.coerceIn(5, 3600).toString()
         if (old.showSec != new.showSec) m["show_duration"] = new.showSec.coerceIn(1, 3600).toString()
         if (old.customPoems != new.customPoems) {
             m["custom_poems"] = ConfStore.encodeValue(new.customPoems)
         }
-        if (old.whiteList != new.whiteList) m["whitelist"] = new.whiteList.trim()
-        if (old.blackList != new.blackList) m["blacklist"] = new.blackList.trim()
+        // 按归一后的集合比较：只差一个结尾逗号 / 一个换行不算改动，也不写脏值
+        if (canonList(old.whiteList) != canonList(new.whiteList)) {
+            m["whitelist"] = canonList(new.whiteList)
+        }
+        if (canonList(old.blackList) != canonList(new.blackList)) {
+            m["blacklist"] = canonList(new.blackList)
+        }
         if (old.listMode != new.listMode) {
             m["list_mode"] = ConfStore.normMode(new.listMode)
             // 切模式必须与两份名单同批落盘：Hook 侧一旦看到 list_mode 就把它当成
             // 完整快照（目标名单缺键即视为空），只写模式键会把当前名单清空。
-            m["whitelist"] = new.whiteList.trim()
-            m["blacklist"] = new.blackList.trim()
+            m["whitelist"] = canonList(new.whiteList)
+            m["blacklist"] = canonList(new.blackList)
         }
         // 引擎切换是「开关语义级」的改动：Hook 侧看到 overlay 就整体让位，
         // 遮盖引擎看到 lsposed 就不接管，因此必须单独落盘，不能和别的键合并省略。
@@ -515,6 +628,11 @@ private fun BurnInProtectApp() {
     var restarting by remember { mutableStateOf(false) }
     // 尚未落盘的最新状态；Activity onStop 时用它补一次
     var pendingSave by remember { mutableStateOf<AbState?>(null) }
+    // v2.7.4：配置还没加载完时用户点过的改动，按「增量」记录。
+    // 旧版把「默认值 + 这一处改动」整份塞进 pendingSave，加载完成后按全字段 diff 回写，
+    // 等于用默认值把用户磁盘上的配置全部冲掉（ui_style、名单、周期、各开关一起没）。
+    // 这里只记函数，加载完在磁盘状态上重放，用户点哪改哪。
+    val pendingOps = remember { mutableStateListOf<(AbState) -> AbState>() }
     // loaded 不能用 rememberSaveable：进程被系统回收后重建时，saveable 会把 loaded 恢复成 true，
     // 于是永远不再读盘，界面展示的是被杀之前的内存快照（可能根本没保存成功）。
     var loaded by remember { mutableStateOf(false) }
@@ -554,8 +672,16 @@ private fun BurnInProtectApp() {
             pendingSave = null
             return
         }
-        saving = true
         val diff = AbConf.diffOf(savedState, target)
+        if (diff.isEmpty()) {
+            // 只有名单文本的写法差异（结尾逗号、空格、换行）不算改动：不必重写文件。
+            // 旧版这里会照写一次 + 回读一次，用户每敲一个字符就 fsync 一遍。
+            savedState = target
+            pendingSave = null
+            status = "已保存 · " + clock()
+            return
+        }
+        saving = true
         var result = ConfStore.WRITE_FAILED
         var bad: Set<String> = diff.keys
         try {
@@ -589,7 +715,10 @@ private fun BurnInProtectApp() {
                 // 按整份状态比较会误报「已被其它入口改写」。其它入口改的键也不该报警，
                 // 直接以磁盘为准刷新界面即可。
                 val drift = AbConf.diffOf(disk, target).keys.filter { it in diff.keys }
-                state = disk
+                // 名单文本以输入框为准，不做整体回灌：磁盘上是归一化后的值，
+                // 回灌会把用户刚敲的逗号 / 换行吞掉，多包名根本敲不完。
+                // 其余字段仍以磁盘为准，保证「界面显示的就是真值」。
+                state = disk.copy(whiteList = target.whiteList, blackList = target.blackList)
                 savedState = disk
                 pendingSave = null
                 if (drift.isNotEmpty()) {
@@ -655,7 +784,13 @@ private fun BurnInProtectApp() {
     val onStateChange: ((AbState) -> AbState) -> Unit = { update ->
         val newState = update(state)
         state = newState
-        commit(newState)
+        if (!loaded) {
+            // 还没读到磁盘：只记录这一处改动，绝不能拿默认值整份回写
+            pendingOps.add(update)
+            pendingSave = newState
+        } else {
+            commit(newState)
+        }
     }
 
     val listLauncher = rememberLauncherForActivityResult(
@@ -694,16 +829,22 @@ private fun BurnInProtectApp() {
             ConfStore.prepareSharedDirs()
             AbConf.load() to ConfStore.hasRoot()
         }
-        state = pair.first
+        // 加载窗口内用户点过的开关：在磁盘状态上按顺序重放，再一次性落盘。
+        // 这样既不会丢用户的点击，也不会用默认值覆盖已有配置。
+        var merged = pair.first
+        for (op in pendingOps.toList()) merged = op(merged)
+        pendingOps.clear()
+        state = merged
         savedState = pair.first
         rootOk = pair.second
         status = if (pair.second) "配置已读取 · root 已授权"
         else "配置已读取 · 未检测到 root（仍可保存到应用内配置）"
         loaded = true
-        // 加载窗口内用户点过的开关，在这里补写一次，不再被丢弃
-        val pending = pendingSave
-        if (pending != null && pending != state) {
-            commit(pending)
+        if (merged != pair.first) {
+            pendingSave = merged
+            commit(merged)
+        } else {
+            pendingSave = null
         }
     }
 
@@ -1610,12 +1751,23 @@ private fun HomeTilePage(
             .padding(horizontal = 20.dp)
             .padding(top = 24.dp, bottom = 96.dp),
     ) {
-        Text("防止烧屏", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold,
-            color = UiPalette.ink(dark))
-        // 不再写死「LSPosed 模块」：应用同时支持免 root 的无障碍遮盖引擎，
-        // 无 root 用户看到旧文案会以为这个软件自己用不了。
-        Text("支持 LSPosed / 无障碍遮盖双引擎", style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.Bottom) {
+            Column(Modifier.weight(1f)) {
+                Text("护眼防烧屏", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold,
+                    color = UiPalette.ink(dark))
+                // 不再写死「LSPosed 模块」：应用同时支持免 root 的无障碍遮盖引擎，
+                // 无 root 用户看到旧文案会以为自己用不了。
+                Text("支持 LSPosed / 无障碍遮盖双引擎", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            // v2.7.0：用户点名的首页标语；「护眼防烧屏」是项目第一目标（核心价值观）
+            Text("为人民服务", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold,
+                color = UiPalette.accent(dark))
+        }
+        Text("为天地立心", style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.outline,
+            modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.End)
 
         saveBar()
 
@@ -1775,8 +1927,13 @@ private fun FeaturesPage(
             .padding(horizontal = 20.dp)
             .padding(top = 24.dp, bottom = 96.dp),
     ) {
-        Text("功能磁贴", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold,
-            color = UiPalette.ink(dark))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.Bottom) {
+            Text("功能磁贴", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold,
+                color = UiPalette.ink(dark))
+            Text("为生民立命", style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.outline)
+        }
         Text("点击磁贴即可开关；带 › 的磁贴会打开设置小窗",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -1784,10 +1941,11 @@ private fun FeaturesPage(
         saveBar()
         Spacer(Modifier.height(10.dp))
 
-        // 子页切换：通用 / 抖音 / 红果，其中抖音与红果是两张独立磁贴页
-        Row(Modifier.fillMaxWidth()) {
-            listOf("通用", "抖音", "红果").forEachIndexed { index, label ->
-                Box(Modifier.weight(1f).padding(horizontal = 4.dp)) {
+        // 子页切换：通用 / 抖音 / 红果 / 快手 / B站。五个 tab 一行放不下，
+        // 改用横向滚动；weight 在 infinite width 的滚动容器里会失效，故用固定宽度。
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+            listOf("通用", "抖音", "红果", "快手", "B站").forEachIndexed { index, label ->
+                Box(Modifier.width(76.dp).padding(horizontal = 4.dp)) {
                     if (index == featurePage) {
                         Button(onClick = { onFeaturePageChange(index) }, modifier = Modifier.fillMaxWidth()) {
                             Text(label)
@@ -1891,10 +2049,53 @@ private fun FeaturesPage(
                         TileItem("左上角", "左", "左上角菜单按钮", state.enableDramaLt) {
                             onStateChange { s -> s.copy(enableDramaLt = !s.enableDramaLt) }
                         },
+                        // v2.6.6：右侧中部竖排「左滑查看详情 «」引导条，按文案识别单独隐藏。
+                        TileItem("左滑查看详情", "滑", "右侧竖排引导文字", state.enableDramaSwipe) {
+                            onStateChange { s -> s.copy(enableDramaSwipe = !s.enableDramaSwipe) }
+                        },
                         TileItem("底部入口", "底", "剧集/选集入口，始终常驻", false, enabled = false) { },
                     )
                 )
                 HintText("红果底部是「完整观看 / 选集」等功能入口，模块刻意不隐藏，避免点不进去。")
+                HintText("「左滑查看详情」按文案识别引导条，仅 LSPosed 引擎下生效；免 root 遮盖引擎只能盖系统栏，无法隐藏 App 内控件。")
+            }
+            3 -> {
+                VideoAppSubPage(
+                    state = state,
+                    onStateChange = onStateChange,
+                    dark = dark,
+                    appLabel = "快手",
+                    glyph = "快",
+                    master = state.enableKuaishou,
+                    onMaster = { on -> onStateChange { s -> s.copy(enableKuaishou = on) } },
+                    right = state.enableKsRight,
+                    top = state.enableKsTop,
+                    bottom = state.enableKsBottom,
+                    corner = state.enableKsCorner,
+                    onRight = { onStateChange { s -> s.copy(enableKsRight = !s.enableKsRight) } },
+                    onTop = { onStateChange { s -> s.copy(enableKsTop = !s.enableKsTop) } },
+                    onBottom = { onStateChange { s -> s.copy(enableKsBottom = !s.enableKsBottom) } },
+                    onCorner = { onStateChange { s -> s.copy(enableKsCorner = !s.enableKsCorner) } },
+                )
+            }
+            4 -> {
+                VideoAppSubPage(
+                    state = state,
+                    onStateChange = onStateChange,
+                    dark = dark,
+                    appLabel = "哔哩哔哩",
+                    glyph = "B",
+                    master = state.enableBilibili,
+                    onMaster = { on -> onStateChange { s -> s.copy(enableBilibili = on) } },
+                    right = state.enableBiliRight,
+                    top = state.enableBiliTop,
+                    bottom = state.enableBiliBottom,
+                    corner = state.enableBiliCorner,
+                    onRight = { onStateChange { s -> s.copy(enableBiliRight = !s.enableBiliRight) } },
+                    onTop = { onStateChange { s -> s.copy(enableBiliTop = !s.enableBiliTop) } },
+                    onBottom = { onStateChange { s -> s.copy(enableBiliBottom = !s.enableBiliBottom) } },
+                    onCorner = { onStateChange { s -> s.copy(enableBiliCorner = !s.enableBiliCorner) } },
+                )
             }
         }
         Spacer(Modifier.height(8.dp))
@@ -1909,6 +2110,63 @@ private fun FeaturesPage(
             )
         }
     }
+}
+
+/**
+ * 快手 / 哔哩哔哩共用子页（v2.6.8）。
+ *
+ * <p>四个区域开关两 App 共用一份配置，总开关各自独立。免 root 遮盖引擎下整页置灰：
+ * 它只能按周期盖黑系统栏，无法隐藏 App 内固定控件 —— 不放假开关是硬规矩
+ * （v2.6.3 status=false、v2.6.5 占位卡都踩过「装了没效果」的坑）。</p>
+ */
+@Composable
+private fun VideoAppSubPage(
+    state: AbState,
+    onStateChange: ((AbState) -> AbState) -> Unit,
+    dark: Boolean,
+    appLabel: String,
+    glyph: String,
+    master: Boolean,
+    onMaster: (Boolean) -> Unit,
+    right: Boolean,
+    top: Boolean,
+    bottom: Boolean,
+    corner: Boolean,
+    onRight: () -> Unit,
+    onTop: () -> Unit,
+    onBottom: () -> Unit,
+    onCorner: () -> Unit,
+) {
+    val overlay = state.isOverlay
+    GroupTitle("$appLabel · 视频页区域")
+    if (overlay) {
+        Card(
+            Modifier.fillMaxWidth().padding(bottom = 8.dp),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = UiPalette.warn(dark).copy(alpha = 0.12f)),
+        ) {
+            Text("当前是免 root 遮盖引擎，只能按周期盖黑系统栏，无法隐藏 $appLabel 内固定控件。请在首页「运行方式」切换到 LSPosed 模块后使用。",
+                style = MaterialTheme.typography.bodySmall,
+                color = UiPalette.warn(dark),
+                modifier = Modifier.padding(14.dp))
+        }
+    }
+    TileGrid(
+        listOf(
+            TileItem("$appLabel 总开关", glyph, "关则本应用所有区域都不隐藏", master,
+                enabled = !overlay) { onMaster(!master) },
+            TileItem("右侧互动列", "赞", "点赞/评论/投币/收藏/分享", right,
+                enabled = !overlay) { onRight() },
+            TileItem("顶部工具栏", "顶", "返回/搜索/更多/台标", top,
+                enabled = !overlay) { onTop() },
+            TileItem("底部操作栏", "底", "标签栏/进度条/弹幕输入框", bottom,
+                enabled = !overlay) { onBottom() },
+            TileItem("角落按钮", "角", "右上/左上角常驻按钮", corner,
+                enabled = !overlay) { onCorner() },
+        )
+    )
+    HintText("快手与哔哩哔哩各一套独立开关，互不影响。仅 LSPosed 引擎（root + 框架）下生效。")
+    HintText("升级后需在 LSPosed 管理器重新勾选「快手」「哔哩哔哩」作用域并重启，否则不会注入。打开诊断日志可查 SCAN app= 命中数。")
 }
 
 @Composable
@@ -2061,6 +2319,9 @@ private val THANKS = listOf(
     Thanks("酷安@专属的小哈基米", "哈", "提供悬浮球思路"),
     Thanks(".哥", "哥", "资金支持"),
     Thanks("酷安@酷安总作践自己", "酷", "资金支持"),
+    // v2.7.4 新增
+    Thanks("酷安", "酷", "社区支持与反馈"),
+    Thanks("心之所及", "心", "支持与建议"),
 )
 
 /** 项目仓库地址（GitHub）——关于页「项目地址」点击跳转。 */
@@ -2097,12 +2358,26 @@ private fun AboutPage(onOpen: (String) -> Unit, onOpenUrl: (String) -> Unit) {
             .padding(horizontal = 20.dp)
             .padding(top = 24.dp, bottom = 96.dp),
     ) {
-        Text("关于", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold,
-            color = UiPalette.ink(dark))
-        Text("防止烧屏 · 精简磁贴版 v" + BuildConfig.VERSION_NAME,
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.Bottom) {
+            Text("关于", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold,
+                color = UiPalette.ink(dark))
+            Column(horizontalAlignment = Alignment.End) {
+                Text("为往圣继绝学", style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline)
+                Text("为万世开太平", style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline)
+            }
+        }
+        Text("护眼防烧屏 · 精简磁贴版 v" + BuildConfig.VERSION_NAME,
             style = MaterialTheme.typography.titleMedium,
             color = UiPalette.accent(dark), fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(top = 12.dp))
+        // v2.7.0：核心价值观 —— 护眼防烧屏是项目第一目标
+        Text("护眼防烧屏是本项目的第一目标：让屏幕上的静止元素周期歇息，延长屏幕寿命，也保护眼睛。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
         Spacer(Modifier.height(8.dp))
 
         ListRow("感谢名单", "${THANKS.size} 位朋友的支持与建议", { onOpen("thanks") }, dark)
@@ -2303,11 +2578,10 @@ private fun CreditPage(dark: Boolean, onOpenUrl: (String) -> Unit) {
 }
 
 /**
- * 适配计划占位卡片（v2.6.5）。
+ * 短视频应用适配说明卡（v2.6.5 计划说明 → v2.6.8 已上线）。
  *
- * <p>用户提出「功能区计划增加对快手和哔哩哔哩的支持」，本版选择先放计划说明，
- * 不动 Hook、不改 xposed_scope、也不放假开关。必须写清楚「规划中、不生效」，
- * 否则用户会在功能区找开关却找不到，又变成一次「装了没效果」。</p>
+ * <p>早期版本这里只列适配计划、尚无开关入口。v2.6.8 起快手 / 哔哩哔哩
+ * 已在功能页开通真开关，本卡改为能力边界与作用域勾选提示，不再误导用户。</p>
  */
 @Composable
 private fun RoadmapCard(dark: Boolean) {
@@ -2318,13 +2592,17 @@ private fun RoadmapCard(dark: Boolean) {
         colors = CardDefaults.cardColors(containerColor = UiPalette.surface(dark, 0.55f)),
     ) {
         Column(Modifier.padding(16.dp)) {
-            Text("适配计划", style = MaterialTheme.typography.titleSmall,
+            Text("短视频应用适配", style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.Bold, color = UiPalette.ink(dark))
-            Text("快手、哔哩哔哩的视频页区域隐藏已列入计划，当前版本尚未支持。",
+            Text("快手、哔哩哔哩已支持：在功能页切到「快手」「B站」子页开启对应开关。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 6.dp))
-            Text("本版仅作计划说明，不提供开关；状态栏、导航栏与抖音 / 红果短剧的现有功能不受影响。",
+            Text("仅 LSPosed 引擎可隐藏 App 内固定控件；免 root 遮盖引擎只能盖黑系统栏。升级后需在 LSPosed 管理器重新勾选两个作用域并重启。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.padding(top = 6.dp))
+            Text("直播页与白名单应用自动跳过；只隐藏可确认的固定控件，内容区不误伤。底部「+」随「底部操作栏」开关一起隐藏。",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.outline,
                 modifier = Modifier.padding(top = 6.dp))
