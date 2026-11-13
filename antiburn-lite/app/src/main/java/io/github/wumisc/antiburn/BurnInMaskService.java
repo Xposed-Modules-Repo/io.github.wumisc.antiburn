@@ -54,10 +54,19 @@ public class BurnInMaskService extends AccessibilityService {
 
     private static final String TAG = "AntiburnMask";
 
-    /** 配置重读间隔：遮盖每 200ms 走一帧，但没必要每帧都读盘 */
-    private static final long CONFIG_TTL_MS = 2000L;
-    /** 状态机步进间隔。200ms 足够让周期切换误差落在人眼不可感的范围内，功耗可忽略 */
-    private static final long TICK_MS = 200L;
+    /** 配置重读间隔：遮盖每秒走一帧，没必要每帧都读盘 */
+    private static final long CONFIG_TTL_MS = 3000L;
+    /**
+     * 状态机步进间隔。
+     *
+     * <p><b>v2.7.5 功耗修复</b>：旧版 200ms，即主线程每秒醒 5 次，2.7.4 又给每帧加了
+     * {@code ensureWindow()} 与一次配置判定。真机耗电统计里本模块 AVG 4.91W，
+     * 与「常驻每秒 5 帧」完全吻合 —— 遮盖周期本来就是按秒计的，
+     * 相位切换误差 1 秒人眼完全看不出，没必要为此常驻 5Hz。现在降到 1 秒。</p>
+     */
+    private static final long TICK_MS = 1000L;
+    /** 空转间隔：灭屏 / 锁屏 / 没开总开关 / 当前不是遮盖引擎时，只做低频确认。 */
+    private static final long IDLE_TICK_MS = 5000L;
     /** 预览遮盖时长：给用户验证「到底盖没盖住」用 */
     public static final long PREVIEW_MS = 5000L;
 
@@ -98,9 +107,19 @@ public class BurnInMaskService extends AccessibilityService {
      */
     private static volatile long previewUntil = 0L;
 
+    /** 服务实例引用：预览要把周期从「等待下一帧」提前到「立刻画一帧」。 */
+    private static volatile BurnInMaskService instance;
+
     /** 界面点「预览遮盖」时调用：强制遮盖 5 秒，用来验证这台机器到底盖不盖得住。 */
     public static void requestPreview() {
         previewUntil = SystemClock.uptimeMillis() + PREVIEW_MS;
+        // v2.7.5：步进从 200ms 放宽到 1s 后，预览若只等下一帧最多要白等 1 秒，
+        // 用户会以为按钮没反应。这里直接插一次 tick，体验与旧版一致。
+        BurnInMaskService s = instance;
+        if (s != null) {
+            s.handler.removeCallbacks(s.tick);
+            s.handler.post(s.tick);
+        }
     }
 
     /** 配置缓存 */
@@ -151,11 +170,13 @@ public class BurnInMaskService extends AccessibilityService {
         keyguard = (KeyguardManager) getSystemService(KEYGUARD_SERVICE);
         ConfStore.init(getApplicationContext());
         metricsDirty = true;
-        attachWindow();
+        instance = this;
+        // v2.7.5：不再一连接就把全屏覆盖层挂上去。旧版无论用户选哪条引擎都先 addView，
+        // LSPosed 用户等于白多一层全屏合成；现在由第一帧 step 判定「真的需要画」才建窗。
         handler.removeCallbacks(tick);
         phaseStart = SystemClock.uptimeMillis();
         handler.post(tick);
-        Log.i(TAG, "service connected, windowAttached=" + windowAttached);
+        Log.i(TAG, "service connected");
     }
 
     @Override
@@ -176,7 +197,13 @@ public class BurnInMaskService extends AccessibilityService {
         if (pkg.endsWith("permissioncontroller") || pkg.equals("com.android.settings")) {
             return;
         }
-        foregroundPkg = pkg;
+        if (!pkg.equals(foregroundPkg)) {
+            foregroundPkg = pkg;
+            // v2.7.5：空转期间是 5 秒一帧，若只等下一帧，切进目标应用后要 5 秒才盖上，
+            // 用户会当成「没生效」。这里立刻插一帧，响应仍是一次事件驱动，不增加常驻唤醒。
+            handler.removeCallbacks(tick);
+            handler.post(tick);
+        }
     }
 
     @Override
@@ -187,9 +214,12 @@ public class BurnInMaskService extends AccessibilityService {
     @Override
     public void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
-        // 旋转后状态栏高度 / 导航栏位置全变了，必须重算，否则会露边或盖住内容
+        // 旋转后状态栏高度 / 导航栏位置全变了，必须重算，否则会露边或盖住内容。
+        // v2.7.5：覆盖层可能因空闲被撤掉（maskView 为空），applyMask 会直接返回，
+        // 因此这里改成主动排一帧，由 step 决定要不要重建窗口并重算尺寸。
         metricsDirty = true;
-        applyMask();
+        handler.removeCallbacks(tick);
+        handler.post(tick);
     }
 
     @Override
@@ -200,6 +230,9 @@ public class BurnInMaskService extends AccessibilityService {
 
     @Override
     public void onDestroy() {
+        if (instance == this) {
+            instance = null;
+        }
         teardown();
         super.onDestroy();
     }
@@ -300,33 +333,52 @@ public class BurnInMaskService extends AccessibilityService {
     private final Runnable tick = new Runnable() {
         @Override
         public void run() {
+            long next = TICK_MS;
             try {
-                step();
+                next = step();
             } catch (Throwable t) {
                 // 状态机里任何异常都不许把服务打死：吞掉但记日志，下一帧继续
                 Log.w(TAG, "tick error", t);
             }
-            handler.postDelayed(this, TICK_MS);
+            handler.postDelayed(this, Math.max(200L, next));
         }
     };
 
-    private void step() {
+    /**
+     * 走一帧状态机，返回「下一帧建议间隔」。
+     *
+     * <p>v2.7.5：返回值代替固定 200ms，让空转场景自动降频 —— 这也是本版功耗修复的主体。
+     * 灭屏、锁屏、总开关关闭、当前引擎不是遮盖（例如 root 用户选了 LSPosed）时，
+     * 遮盖层根本不需要存在，每秒醒 5 次纯属白烧电。</p>
+     */
+    private long step() {
         long now = SystemClock.uptimeMillis();
-
-        // v2.7.4：覆盖层可能被系统撤掉（旋转 / 低内存 / 开机早期 addView 被拒）。
-        // 旧版一辈子只 addView 一次，失败后 connected=true 但永远盖不上，
-        // 用户只能去系统设置里把无障碍关开一次。这里每帧轻量校验并自动重建。
-        ensureWindow();
-
-        // 预览优先：用户点了「预览遮盖」，无条件盖住 5 秒
-        if (previewUntil > now) {
-            masked = true;
-            applyMask();
-            return;
-        }
-
+        boolean preview = previewUntil > now;
         boolean screenOn = power == null || power.isInteractive();
         boolean locked = keyguard != null && keyguard.isKeyguardLocked();
+        Cfg c = config(now);
+
+        // 「这一帧有没有可能真的要画」——决定是否维持覆盖层窗口。
+        // 旧版无论什么引擎都先把全屏覆盖层 addView 上去（INVISIBLE 也是一层），
+        // LSPosed 用户等于白搭一层全屏合成，还会让系统认为本应用在持续绘制。
+        boolean mayDraw = screenOn && !locked && c.masterOn && c.maskAllowed
+                && ListRules.shouldIntervene(c.mode, c.list, foregroundPkg);
+        if (preview || mayDraw) {
+            // v2.7.4：覆盖层可能被系统撤掉（旋转 / 低内存 / 开机早期 addView 被拒）。
+            // 旧版一辈子只 addView 一次，失败后 connected=true 但永远盖不上，
+            // 用户只能去系统设置里把无障碍关开一次。这里轻量校验并自动重建。
+            ensureWindow();
+        } else if (windowAttached) {
+            detachWindow();
+        }
+
+        // 预览优先：用户点了「预览遮盖」，无条件盖住 5 秒
+        if (preview) {
+            masked = true;
+            applyMask();
+            return 500L;
+        }
+
         if (!screenOn || locked) {
             // 灭屏 / 锁屏：撤掉遮盖，省电也避免锁屏界面出现黑边
             if (masked) {
@@ -334,20 +386,16 @@ public class BurnInMaskService extends AccessibilityService {
             }
             phaseStart = now;
             applyMask();
-            return;
+            return IDLE_TICK_MS;
         }
 
-        Cfg c = config(now);
-        boolean want = c.maskAllowed
-                && c.masterOn
-                && ListRules.shouldIntervene(c.mode, c.list, foregroundPkg);
-        if (!want) {
+        if (!mayDraw) {
             if (masked) {
                 masked = false;
             }
             phaseStart = now;
             applyMask();
-            return;
+            return IDLE_TICK_MS;
         }
 
         // masked = 正在遮盖（系统栏被盖住）。遮盖中要等「隐藏时长」结束才恢复，
@@ -359,6 +407,9 @@ public class BurnInMaskService extends AccessibilityService {
             phaseStart = now;
         }
         applyMask();
+        // 尽量睡到相位边界，减少无意义唤醒；上限 1 秒保证响应开关变化。
+        long remain = dur - (now - phaseStart);
+        return Math.min(TICK_MS, Math.max(250L, remain));
     }
 
     private Cfg config(long now) {
@@ -576,8 +627,25 @@ public class BurnInMaskService extends AccessibilityService {
         }
 
         void setRects(OverlayGeometry.Rect top, OverlayGeometry.Rect bottom) {
+            // v2.7.5：矩形没变就不动。旧版每秒重算一次并直接覆盖字段，
+            // 一旦给 setRects 补 invalidate（本版必需，否则改尺寸不重绘），
+            // 就会变成每秒一次无意义全屏重绘。
+            if (same(this.top, top) && same(this.bottom, bottom)) {
+                return;
+            }
             this.top = top;
             this.bottom = bottom;
+            if (masked) {
+                invalidate();
+            }
+        }
+
+        private static boolean same(OverlayGeometry.Rect a, OverlayGeometry.Rect b) {
+            if (a == null || b == null) {
+                return a == b;
+            }
+            return a.left == b.left && a.top == b.top
+                    && a.right == b.right && a.bottom == b.bottom;
         }
 
         void setMasked(boolean on) {

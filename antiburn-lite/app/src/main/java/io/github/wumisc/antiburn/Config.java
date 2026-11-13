@@ -150,6 +150,8 @@ public final class Config {
     /** 上次尝试读快照的时间：读失败要允许重试，不能像旧版 cacheLoaded 一次性闭锁 */
     private static volatile long lastCacheRead;
     private static volatile File cacheFile;
+    /** 上次真正去读文件通道的时间：读不到就退避 15 秒，别每轮 stat 一遍 */
+    private static volatile long lastDirectTry = 0L;
     /** 上次打印「拒绝过期配置」的时间，避免每 2 秒刷一条 */
     private static volatile long lastRejectLog;
     /** 当前生效配置来自哪个通道：provider / cache / conf */
@@ -214,6 +216,52 @@ public final class Config {
         }
     }
 
+    /**
+     * v2.7.5：后台预取的自适应间隔。
+     *
+     * <p><b>为什么必须自适应</b>：真机耗电统计里本模块 AVG 4.91W，位列前茅，而模块平时
+     * 只画一条遮盖、改几个 alpha，本身不该耗电。真正的开销在预取线程：旧版固定 1.5 秒
+     * 一轮，每轮都 {@code ContentResolver.call} 一次 ConfigProvider ——
+     * 这是<strong>跨进程调用本模块 App</strong>，App 进程因此被持续唤醒，耗电自然全记在
+     * 本模块头上（SystemUI 里的 Hook 记在 system_server / systemui，不在这一栏）。
+     * 36 秒采样 4.91W，与「每 1.5 秒唤醒一次」完全对得上。</p>
+     *
+     * <p>配置不是实时数据：用户改完开关，两秒内生效就够。因此分三档：
+     * 刚改过配置的 90 秒内保持 2 秒（调参手感不变）；稳定后 20 秒；灭屏 60 秒
+     * （没人看屏幕，没有必须及时的理由）。待机功耗约降到原来的 1/13。</p>
+     */
+    private static long fetchInterval() {
+        long now = System.currentTimeMillis();
+        if (!screenOn) {
+            return 60000L;
+        }
+        if (lastChangeAt > 0L && now - lastChangeAt < 90000L) {
+            return 2000L;
+        }
+        return 20000L;
+    }
+
+    /** 屏幕是否亮着。由 Controller 每轮 tick 同步，灭屏时预取线程大幅降频。 */
+    private static volatile boolean screenOn = true;
+
+    /** Controller 侧同步屏幕状态；变化时立即唤醒预取线程，避免恢复亮屏后还要等一个周期。 */
+    public static void setScreenOn(boolean on) {
+        if (screenOn == on) {
+            return;
+        }
+        screenOn = on;
+        if (on) {
+            synchronized (fetchLock) {
+                fetchLock.notifyAll();
+            }
+        }
+    }
+
+    /** 最近一次配置版本变化的时间，用于判断「用户是否正在调参」。 */
+    private static volatile long lastChangeAt = 0L;
+
+    private static final Object fetchLock = new Object();
+
     /** 后台预取：provider 读取与 su 兜底都不放在主线程执行。 */
     private static void ensureFetcher() {
         if (fetcherStarted) {
@@ -226,12 +274,23 @@ public final class Config {
             fetcherStarted = true;
             Thread t = new Thread(() -> {
                 while (true) {
+                    long wait = 60000L;
                     try {
                         fetchRemote();
                     } catch (Throwable ignored) {
                     }
+                    // 间隔在每轮结束后重算：灭屏 / 刚改动 / 稳定三种状态随时切换。
+                    wait = fetchInterval();
                     try {
-                        Thread.sleep(1500);
+                        synchronized (fetchLock) {
+                            fetchLock.wait(wait);
+                        }
+                    } catch (InterruptedException ie) {
+                        try {
+                            Thread.sleep(wait);
+                        } catch (Throwable ignored) {
+                            return;
+                        }
                     } catch (Throwable ignored) {
                         return;
                     }
@@ -317,7 +376,9 @@ public final class Config {
             state += "+direct";
         } else {
             // 低频尝试 su cat（避免每 1.5s fork 一次 su）
-            if (now - lastSuTry > 30000L) {
+            // v2.7.5：30 秒 → 5 分钟。su 是 fork + exec，单次代价远超一次 Binder，
+            // 而这条分支只在 provider 与本地副本都拿不到时才走，不该按分钟级重试。
+            if (now - lastSuTry > 300000L) {
                 lastSuTry = now;
                 String s = ConfStore.execSuCapture("cat " + CONF + " 2>/dev/null");
                 if (s == null || s.trim().isEmpty()) {
@@ -399,7 +460,9 @@ public final class Config {
      */
     public static synchronized void reload() {
         long now = System.currentTimeMillis();
-        if (now - lastRead < 700) {
+        // v2.7.5：700 → 1200ms。tick 最短 2 秒一轮，1.2 秒的节流已经足够让每轮都读到最新值，
+        // 又挡住了「同一轮里多个调用点各查一次」的重复解析。
+        if (now - lastRead < 1200) {
             return;
         }
         lastRead = now;
@@ -417,7 +480,14 @@ public final class Config {
         // 更小，会被下面 rev < appliedRev 的门槛挡掉，不会把配置回滚。
         String direct = directText;
         if (direct == null || direct.trim().isEmpty()) {
-            direct = readDirect();
+            // v2.7.5：15 秒退避。三个路径在多数进程里根本读不到（SELinux 限制），
+            // 旧版每轮 reload 都去 stat 一遍，注入进程越多越是白耗 ——
+            // 而「读不到」这个结论在 15 秒内不会变。
+            long t = System.currentTimeMillis();
+            if (t - lastDirectTry > 15000L) {
+                lastDirectTry = t;
+                direct = readDirect();
+            }
         }
         String best = null;
         String src = null;
@@ -469,6 +539,10 @@ public final class Config {
         appliedRev = rev;
         lastSource = src;
         lastRev = rev;
+        if (newVersion) {
+            // 用户刚改过配置：接下来 90 秒内预取保持 2 秒一轮，调参手感不变。
+            lastChangeAt = System.currentTimeMillis();
+        }
         writePersistedRev(rev);
         // v2.6：快照刷新不再只认 provider。旧逻辑在 provider 通道变空、conf 副本
         // 持续胜出时会让快照永远停在旧版本，冷启动多绕一次文件 IO。

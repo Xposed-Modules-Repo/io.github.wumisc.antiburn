@@ -25,8 +25,14 @@ public final class LivePause {
     static final String FILE_NAME = "antiburn_live.state";
     static final long TTL_MS = 15000L;
     private static final long HEARTBEAT_MS = 5000L;
-    /** 读缓存刷新间隔：SystemUI 每轮 tick 只读内存，最多每秒回源一次。 */
-    private static final long REFRESH_MS = 1000L;
+    /**
+     * 读缓存刷新间隔：SystemUI 每轮 tick 只读内存，最多每 3 秒回源一次。
+     *
+     * <p>v2.7.5：1 秒 → 3 秒。信号本身带 15 秒有效期、App 侧 5 秒一次心跳，
+     * 3 秒回源足够及时；原来每秒扫三个路径的文件，在「亮屏 8 小时」的使用场景里
+     * 是纯粹的白耗电。只在当前前台是抖音/红果时才会触发，不影响其它应用。</p>
+     */
+    private static final long REFRESH_MS = 3000L;
     private static final int MAX_BYTES = 256;
 
     /** 共享路径：宿主进程能写、SystemUI 能读的交集，按可靠性排序。 */

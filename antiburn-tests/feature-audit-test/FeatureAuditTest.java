@@ -620,8 +620,8 @@ public class FeatureAuditTest {
                 "T-14w 全链路异常兜底，异常不冒到宿主主线程",
                 "catch 数=" + countLiteral(probeCode, "catch (Throwable"));
 
-        check(gradle.contains("versionCode 37") && gradle.contains("versionName \"2.7.4\""),
-                "T-14x 版本号升到 vc37 / 2.7.4", "");
+        check(gradle.contains("versionCode 38") && gradle.contains("versionName \"2.7.5\""),
+                "T-14x 版本号升到 vc38 / 2.7.5", "");
         check(manifest.contains("xposedscope") && manifest.contains("快手、哔哩哔哩各区域"),
                 "T-14y 模块描述如实写明已支持快手/B站", "");
 
@@ -649,8 +649,8 @@ public class FeatureAuditTest {
                 "T-15i 加号归入底部开关，关掉立即恢复", "");
         check(countLiteral(douyinCode, "videoLivePage = isLiveTextPage(root, 0)") == 1,
                 "T-15j 直播判定只在 rescan 提交一次", "");
-        check(gradle.contains("versionCode 37") && gradle.contains("versionName \"2.7.4\""),
-                "T-15k 版本号升到 vc37 / 2.7.4", "");
+        check(gradle.contains("versionCode 38") && gradle.contains("versionName \"2.7.5\""),
+                "T-15k 版本号升到 vc38 / 2.7.5", "");
 
         // ---------- T-16 v2.7.0 正式版 ----------
         System.out.println("== T-16 v2.7.0 正式版 ==");
@@ -704,8 +704,8 @@ public class FeatureAuditTest {
             hookPriority &= config.contains("!presentKeys.contains(\"" + key + "\")");
         }
         check(hookPriority, "T-17e Hook 八个独立键存在时均忽略旧共用键", "");
-        check(gradle.contains("versionCode 37") && gradle.contains("versionName \"2.7.4\""),
-                "T-17f 版本号升到 vc37 / 2.7.4", "");
+        check(gradle.contains("versionCode 38") && gradle.contains("versionName \"2.7.5\""),
+                "T-17f 版本号升到 vc38 / 2.7.5", "");
 
         // ---------- T-18 v2.7.2 快手右侧列 / 角落按钮 / 直播全暂停 ----------
         System.out.println("== T-18 v2.7.2 快手右侧列 / 角落按钮 / 直播全暂停 ==");
@@ -758,8 +758,9 @@ public class FeatureAuditTest {
         // SystemUI 侧
         check(ctrlCode.contains("LivePause.readCached(top)"),
                 "T-18n SystemUI 只读内存缓存，包名不匹配即视为无信号", "");
-        check(ctrlCode.contains("if (!screenOn || !intervene || livePause)"),
-                "T-18o 直播暂停与灭屏 / 名单豁免同级（状态栏导航栏同步恢复）", "");
+        // v2.7.5：灭屏已在更早的快路径里 return，这里只剩名单豁免与直播暂停两种条件。
+        check(ctrlCode.contains("if (!intervene || livePause)"),
+                "T-18o 直播暂停与名单豁免同级（状态栏导航栏同步恢复）", "");
         check(ctrlCode.contains("+ \" lp=\" + livePause"),
                 "T-18p 系统栏心跳日志输出 lp 字段", "");
         check(ctrlCode.contains("return \"直播中暂停 top=\" + top"),
@@ -771,8 +772,8 @@ public class FeatureAuditTest {
                 "T-18r 暂停信号 15 秒过期（宿主异常退出不会永久停摆）", "");
         check(!liveCode.contains("AbConf") && !liveCode.contains("Config.enable"),
                 "T-18s 暂停状态不写入用户配置（退出直播后原开关自然继续）", "");
-        check(gradle.contains("versionCode 37") && gradle.contains("versionName \"2.7.4\""),
-                "T-18t 版本号升到 vc37 / 2.7.4", "");
+        check(gradle.contains("versionCode 38") && gradle.contains("versionName \"2.7.5\""),
+                "T-18t 版本号升到 vc38 / 2.7.5", "");
 
         // ---------- T-19 v2.7.3 周期循环永不因异常停摆 ----------
         // 真机现象：抖音进直播间正常暂停，退出后 App 内隐藏全部失效且不再恢复。
@@ -884,6 +885,59 @@ public class FeatureAuditTest {
                 "T-21h 覆盖层被移除 / 首次失败后自动重建", "");
         check(mask.contains("navSide = OverlayGeometry.NAV_BOTTOM;") && mask.contains("statusBarH = 0;"),
                 "T-21i 旋转重算前复位旧尺寸与导航栏方向", "");
+
+        // ---------- T-22 v2.7.5 功耗专项 ----------
+        // 真机耗电统计：本模块 AVG 4.91W、MAX 40℃，位列前茅，而它平时只改几个 alpha。
+        // 根因全是「常驻轮询」：SystemUI 每 1.5 秒 call 一次本模块 provider（持续唤醒
+        // 后台进程）、无障碍服务每 200ms 走一帧、灭屏后仍查前台包并写日志。
+        // 这一组守的就是「这些轮询必须真的降下来」，不允许以后被改回去。
+        System.out.println("== T-22 v2.7.5 功耗专项 ==");
+        String cfgCode = read(dir.resolve("Config.java"));
+        String maskCode = read(dir.resolve("BurnInMaskService.java"));
+        String liveSrc = read(dir.resolve("LivePause.java"));
+        check(cfgCode.contains("private static long fetchInterval()"),
+                "T-22a 预取线程改为自适应间隔（不再固定 1.5 秒）", "");
+        check(cfgCode.contains("return 60000L;") && cfgCode.contains("return 20000L;"),
+                "T-22b 灭屏 60 秒 / 稳定 20 秒两档", "");
+        check(cfgCode.contains("public static void setScreenOn(boolean on)"),
+                "T-22c 屏幕状态由 Controller 同步给预取线程", "");
+        check(cfgCode.contains("fetchLock.wait(wait)"),
+                "T-22d 用 wait/notify 而非 sleep，亮屏能立刻唤醒", "");
+        check(cfgCode.contains("now - lastRead < 1200"),
+                "T-22e reload 节流 700 → 1200ms", "");
+        check(cfgCode.contains("now - lastSuTry > 300000L"),
+                "T-22f su 兜底 30 秒 → 5 分钟（fork 代价高）", "");
+        check(ctrlCode.contains("Config.setScreenOn(screenOn)"),
+                "T-22g tick 里同步屏幕状态", "");
+        check(ctrlCode.contains("if (!screenOn) {") && ctrlCode.contains("scheduleCycle(5000)")
+                        && ctrlCode.indexOf("if (!screenOn) {") < ctrlCode.indexOf("currentTopPackage();"),
+                "T-22h 灭屏快路径：先于前台包查询返回，5 秒一轮", "");
+        check(ctrlCode.contains("private static Object atms()") && ctrlCode.contains("atmsService"),
+                "T-22i ActivityTaskManager 的 Class/Service 缓存复用", "");
+        check(ctrlCode.contains("now - lastTopAt < 1000L"),
+                "T-22j 前台包结果 1 秒内复用", "");
+        check(ctrlCode.contains("lastDiagSig") && ctrlCode.contains("nowWl - lastWlDiag >= 30000"),
+                "T-22k 诊断日志：变化即记 + 30 秒心跳", "");
+        check(ctrlCode.contains("powerManager") && ctrlCode.contains("isInteractiveMethod"),
+                "T-22l PowerManager 的 Method 缓存（不再每轮 getMethod）", "");
+        check(maskCode.contains("private static final long TICK_MS = 1000L"),
+                "T-22m 遮盖步进 200ms → 1000ms", "");
+        check(maskCode.contains("IDLE_TICK_MS = 5000L") && maskCode.contains("private long step()"),
+                "T-22n 空转 5 秒，step 返回下一帧间隔", "");
+        check(maskCode.contains("boolean mayDraw") && maskCode.contains("} else if (windowAttached) {"),
+                "T-22o 不需要画时不保留全屏覆盖层", "");
+        check(maskCode.contains("private static boolean same(OverlayGeometry.Rect a"),
+                "T-22p 遮盖矩形没变就不重绘", "");
+        check(maskCode.contains("s.handler.removeCallbacks(s.tick)"),
+                "T-22q 预览立刻插一帧（不白等 1 秒）", "");
+        check(maskCode.contains("handler.removeCallbacks(tick);\n            handler.post(tick);"),
+                "T-22r 切前台立刻响应一次，其余时间空转", "");
+        check(liveSrc.contains("REFRESH_MS = 3000L"),
+                "T-22s 直播信号回源 1 秒 → 3 秒", "");
+        check(cfgCode.contains("lastDirectTry > 15000L"),
+                "T-22u 文件通道读不到时退避 15 秒（不再每轮 stat）", "");
+        check(ctrlCode.contains("if (!hidden) {\n                    PixelShift.tick();"),
+                "T-22t 系统栏已透明时跳过像素位移", "");
 
         System.out.println();
         System.out.println("结果：" + pass + " 通过 / " + fail + " 失败");

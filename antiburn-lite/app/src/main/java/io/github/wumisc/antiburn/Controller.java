@@ -46,6 +46,8 @@ public final class Controller {
     private static boolean hidden = false;
     private static boolean started = false;
     private static long lastWlDiag = 0; // 白名单诊断日志节流
+    /** v2.7.5：上一轮诊断签名。只有状态真的变了才立刻写一条，其余走 30 秒心跳。 */
+    private static volatile String lastDiagSig = "";
 
     /**
      * v2.7.4：本模块亲手改成透明的子视图。
@@ -602,6 +604,26 @@ public final class Controller {
         Config.reload();
 
         boolean screenOn = isScreenOn();
+        // v2.7.5：把屏幕状态同步给配置预取线程，灭屏时它自己降到 60 秒一轮。
+        Config.setScreenOn(screenOn);
+
+        // v2.7.5 功耗修复（真机 AVG 4.91W）：灭屏快路径。
+        // 旧版灭屏后仍然每 2 秒查一次前台包（两次跨进程 Binder 到 system_server）、
+        // 每 5 秒写一条诊断日志、每 8 秒推进一次像素偏移——屏幕都黑了，这些全是白烧电。
+        // 灭屏时只需要「把系统栏恢复回去」，然后 5 秒醒一次确认是否已亮屏。
+        if (!screenOn) {
+            if (hidden) {
+                applyShow();
+                hidden = false;
+            }
+            if (PixelShift.isActive()) {
+                PixelShift.shutdown();
+                XposedInit.diag("SHIFT 停止：灭屏");
+            }
+            scheduleCycle(5000);
+            return;
+        }
+
         String top = currentTopPackage();
         // v2.7.2：抖音 / 红果 直播间暂停信号。由 App 进程在识别到直播页时写文件
         // （带包名 + 15 秒有效期），这里只读不写，包名不匹配或过期即视为无信号。
@@ -614,9 +636,18 @@ public final class Controller {
         boolean inList = top != null && Config.list.contains(top);
 
         // 名单诊断（5s 节流）：让用户从 diag 文件直接核对「前台包 vs 名单」是否命中
+        // v2.7.5：旧版固定 5 秒一条，等于每分钟 12 次 open/write/close，日志文件还滚得飞快。
+        // 现在改成「状态真的变了立刻记，没变化 30 秒记一次心跳」——排障信息一条不少，
+        // 写盘次数降到 1/6。
         long nowWl = SystemClock.elapsedRealtime();
-        if (nowWl - lastWlDiag >= 5000) {
+        String diagSig = top + "|" + Config.listMode + "|" + intervene + "|" + inList
+                + "|" + Config.enableStatus + Config.enableNav + Config.enableShift
+                + Config.enableStatusBar + "|" + Config.uiStyle + "|" + Config.lastRev
+                + "|" + livePause;
+        boolean diagChanged = !diagSig.equals(lastDiagSig);
+        if (diagChanged || nowWl - lastWlDiag >= 30000) {
             lastWlDiag = nowWl;
+            lastDiagSig = diagSig;
             XposedInit.diag("SYS top=" + top + " mode=" + Config.listMode
                     + " list=" + Config.list + " hit=" + inList
                     + " intervene=" + intervene + " status=" + Config.enableStatus
@@ -638,7 +669,8 @@ public final class Controller {
         // 只要导航栏开关开着，总开关关了隐藏动作照跑；enableShift 更是完全不看总开关，
         // 真机日志里 status=false 时 SHIFT 仍连续跑了 25 分钟。现在关掉即全部停止。
         // v2.7.2：直播间暂停与灭屏 / 名单豁免同级 —— 命中即恢复系统栏并停掉像素偏移。
-        if (!screenOn || !intervene || livePause) {
+        // 灭屏已在上面提前返回，这里只剩「名单豁免」与「直播暂停」两种。
+        if (!intervene || livePause) {
             if (hidden) {
                 applyShow();
                 hidden = false;
@@ -691,7 +723,11 @@ public final class Controller {
                     XposedInit.diagForce("SHIFT style=" + PixelShift.styleState());
                 }
                 PixelShift.bind(statusView, navView);
-                PixelShift.tick();
+                // v2.7.5：系统栏已整体透明（hidden）时位移看不见，跳过步进，
+                // 省掉每 8 秒一次的状态栏重绘。恢复显示时相位照常继续。
+                if (!hidden) {
+                    PixelShift.tick();
+                }
             });
         } else if (PixelShift.isActive()) {
             PixelShift.shutdown();
@@ -909,19 +945,29 @@ public final class Controller {
         return "未知条件";
     }
 
+    /** 缓存 PowerManager 实例与 Method：每轮 tick 都 getMethod 会白白吃一次反射查找。 */
+    private static Object powerManager;
+    private static java.lang.reflect.Method isInteractiveMethod;
+
     private static boolean isScreenOn() {
         try {
-            if (statusView == null) {
-                return true;
-            }
-            Context ctx = statusView.getContext();
-            Object pm = ctx.getSystemService(Context.POWER_SERVICE);
-            if (pm == null) {
-                return true;
+            if (powerManager == null) {
+                View v = (statusView != null) ? statusView : navView;
+                if (v == null) {
+                    return true;
+                }
+                Context ctx = v.getContext();
+                powerManager = ctx.getSystemService(Context.POWER_SERVICE);
+                if (powerManager == null) {
+                    return true;
+                }
+                isInteractiveMethod = powerManager.getClass().getMethod("isInteractive");
             }
             // 反射调用 PowerManager.isInteractive()，避免编译期依赖
-            return (Boolean) pm.getClass().getMethod("isInteractive").invoke(pm);
+            return (Boolean) isInteractiveMethod.invoke(powerManager);
         } catch (Throwable t) {
+            powerManager = null;
+            isInteractiveMethod = null;
             return true;
         }
     }
@@ -931,16 +977,60 @@ public final class Controller {
      * 多层兜底：不同 ROM（HyperOS3/4、原生、其他定制）反射路径可能失败，逐级降级，
      * 任一成功即返回，避免黑名单因取不到前台包而失效。
      */
+    /**
+     * v2.7.5：ActivityTaskManager 的 Class 与 Service 缓存。
+     *
+     * <p>旧版每轮 tick 都 {@code Class.forName} 三次 + {@code getService()} 三次 ——
+     * Class.forName 走 ClassLoader 锁、getService 是一次 Binder，两个加起来每 2 秒
+     * 就有 4~6 次跨进程往返，而前台包绝大多数时候根本没变。
+     * 现在 Class 只查一次，Service 代理缓存复用，结果再套一层 1 秒缓存。</p>
+     */
+    private static Class<?> atmsClass;
+    private static Object atmsService;
+    private static String lastTopCache = "";
+    private static long lastTopAt = 0L;
+
+    private static Object atms() {
+        try {
+            if (atmsClass == null) {
+                atmsClass = Class.forName("android.app.ActivityTaskManager");
+            }
+            if (atmsService == null) {
+                atmsService = XposedHelpers.callStaticMethod(atmsClass, "getService");
+            }
+            return atmsService;
+        } catch (Throwable t) {
+            atmsClass = null;
+            atmsService = null;
+            return null;
+        }
+    }
+
     private static String currentTopPackage() {
+        long now = SystemClock.elapsedRealtime();
+        // 1 秒内直接复用：同一轮 tick 里 isScreenOn / 名单判定 / 日志都要用，只查一次。
+        if (now - lastTopAt < 1000L && !lastTopCache.isEmpty()) {
+            return lastTopCache;
+        }
+        String pkg = queryTopPackage();
+        if (!pkg.isEmpty()) {
+            lastTopCache = pkg;
+            lastTopAt = now;
+        }
+        return pkg;
+    }
+
+    private static String queryTopPackage() {
         // 候选0：getFocusedRootTaskInfo() → 当前聚焦任务（API31+，Android12+/HyperOS 最可靠）
         try {
-            Object atms = XposedHelpers.callStaticMethod(
-                    Class.forName("android.app.ActivityTaskManager"), "getService");
-            Object info = XposedHelpers.callMethod(atms, "getFocusedRootTaskInfo");
-            if (info != null) {
-                String top = topActivityOf(info);
-                if (top != null) {
-                    return top;
+            Object atms = atms();
+            if (atms != null) {
+                Object info = XposedHelpers.callMethod(atms, "getFocusedRootTaskInfo");
+                if (info != null) {
+                    String top = topActivityOf(info);
+                    if (top != null) {
+                        return top;
+                    }
                 }
             }
         } catch (Throwable t) {
@@ -948,8 +1038,10 @@ public final class Controller {
         }
         // 候选1：ActivityTaskManager.getService().getTasks(1, false) → topActivity（Android 10+ 主流）
         try {
-            Object atms = XposedHelpers.callStaticMethod(
-                    Class.forName("android.app.ActivityTaskManager"), "getService");
+            Object atms = atms();
+            if (atms == null) {
+                throw new IllegalStateException("no atms");
+            }
             Object tasks = XposedHelpers.callMethod(atms, "getTasks", 1, false);
             if (tasks instanceof List && !((List<?>) tasks).isEmpty()) {
                 Object task = ((List<?>) tasks).get(0);
@@ -963,8 +1055,10 @@ public final class Controller {
         }
         // 候选2：getTasks(1, true)（withResolvedActivity 为 true 时字段更完整）
         try {
-            Object atms = XposedHelpers.callStaticMethod(
-                    Class.forName("android.app.ActivityTaskManager"), "getService");
+            Object atms = atms();
+            if (atms == null) {
+                throw new IllegalStateException("no atms");
+            }
             Object tasks = XposedHelpers.callMethod(atms, "getTasks", 1, true);
             if (tasks instanceof List && !((List<?>) tasks).isEmpty()) {
                 Object task = ((List<?>) tasks).get(0);
