@@ -69,6 +69,14 @@ public class BurnInMaskService extends AccessibilityService {
     private static final long IDLE_TICK_MS = 5000L;
     /** 预览遮盖时长：给用户验证「到底盖没盖住」用 */
     public static final long PREVIEW_MS = 5000L;
+    /**
+     * 应用内盖黑总闸 —— 编译期常量，恒 false。
+     *
+     * <p>v2.8.6：用户已明确要求「不要在上面铺一层黑色，直接偏移」。这里留成常量而不是
+     * 只改配置默认值，是因为配置可以被旧文件、旧版本写入、Provider 镜像缺失等路径带回来；
+     * 编译期常量没有被绕过的可能。恢复这条通道必须改代码，不允许再悄悄打开。</p>
+     */
+    private static final boolean APP_AREA_CHANNEL = false;
 
     // ---- 供同进程 UI 读取的运行状态（不给跨进程用，所以是普通静态字段） ----
     /** 服务是否已连接 */
@@ -272,7 +280,11 @@ public class BurnInMaskService extends AccessibilityService {
          *  - eng=lsposed：系统栏交给 SystemUI 真隐藏（这里不重复画），
          *    App 内区域由这里兜底，两条通道互补而不是互相覆盖。</p>
          */
-        boolean appAreaOn = true;
+        // v2.8.6：默认 false，且 config() 读完后无条件再置 false。
+        // v2.8.4 只在命中 enable_app_overlay 键时置 false，镜像里缺这个键就回到 true，
+        // 真机日志里 appOn=true + areas=RTBC 自证「盖黑其实一直开着」，退出抖音后
+        // 五个黑块还挂在设置页上。这里改成默认关 + 硬关，两层保险。
+        boolean appAreaOn = false;
         /** 当前前台应用归属；NONE 表示不是四个目标视频 App，不画应用内区域。 */
         VideoApps.Kind appKind = VideoApps.Kind.NONE;
         /** 用户是否显式配置过该 App 的区域开关；没配过就按默认三区全画，保证开箱可用。 */
@@ -743,6 +755,10 @@ public class BurnInMaskService extends AccessibilityService {
         } catch (Throwable t) {
             Log.w(TAG, "read config failed", t);
         }
+        // v2.8.6：无论配置里写了什么，应用内盖黑一律关闭。
+        // 用户已明确否决「铺一层黑色」，这条通道只保留代码不再启用；
+        // 想恢复必须同时改这里和 APP_AREA_CHANNEL，避免又一次「以为关了其实开着」。
+        c.appAreaOn = false;
         cfg = c;
         return c;
     }
@@ -764,6 +780,7 @@ public class BurnInMaskService extends AccessibilityService {
             return;
         }
         if (!masked) {
+            maskView.setRects(null, null, java.util.Collections.emptyList());
             maskView.setMasked(false);
             masking = false;
             return;
@@ -791,6 +808,9 @@ public class BurnInMaskService extends AccessibilityService {
         java.util.List<OverlayGeometry.Rect> areas = appRects(c);
         if (top == null && bottom == null && areas.isEmpty()) {
             // 一个区域都没算出来（尺寸异常 / 全都判为不可见）：不画，并记下原因
+            // v2.8.6：连旧矩形一起清掉。只 setMasked(false) 时 appRects 字段还留着
+            // 上一帧的五个黑块，下一次 setMasked(true) 会把它们原样复活。
+            maskView.setRects(null, null, java.util.Collections.emptyList());
             maskView.setMasked(false);
             masking = false;
             lastError = "无可遮盖区域（状态栏高 " + statusBarH + "px，导航栏 "
@@ -829,6 +849,9 @@ public class BurnInMaskService extends AccessibilityService {
      */
     private java.util.List<OverlayGeometry.Rect> appRects(Cfg c) {
         java.util.List<OverlayGeometry.Rect> out = new java.util.ArrayList<>();
+        if (!APP_AREA_CHANNEL) {
+            return out;
+        }
         if (!c.appAreaOn || c.appKind == VideoApps.Kind.NONE || screenW <= 0 || screenH <= 0) {
             return out;
         }

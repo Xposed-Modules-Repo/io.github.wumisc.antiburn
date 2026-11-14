@@ -170,12 +170,15 @@ data class AbState(
     val enableBall: Boolean = false,
     val enableLog: Boolean = false,
     /**
-     * v2.8.2 稳定版：应用内固定区域兜底遮盖，默认开。
-     * 不依赖 LSPosed 把模块注入抖音 / 快手 / B站进程，只要无障碍服务连着就能生效。
+     * v2.8.6：应用内盖黑通道已废弃，恒 false。
+     *
+     * <p>v2.8.2 这里默认 true，靠无障碍覆盖层按屏幕比例画黑块；真机反馈是「整屏被盖住、
+     * 退出抖音后黑块还挂在设置页上」。用户已明确要求只做位置偏移，所以默认值、
+     * 恢复默认值、写盘值三处一起改成 false，不再让它从任何路径复活。</p>
      */
-    val enableAppOverlay: Boolean = true,
-    /** v2.8.3：SystemUI 进程内覆盖层，与无障碍兜底互补，默认开 */
-    val enableSysOverlay: Boolean = true,
+    val enableAppOverlay: Boolean = false,
+    /** v2.8.6：SystemUI 覆盖层同上，恒 false。 */
+    val enableSysOverlay: Boolean = false,
     val enableDouyinTop: Boolean = false,
     val enableDouyinBottom: Boolean = false,
     val enableDouyinLike: Boolean = false,
@@ -321,10 +324,9 @@ private val AbStateSaver = listSaver(
                 enableBiliTop = Bool(35),
                 enableBiliBottom = Bool(36),
                 enableBiliCorner = Bool(37),
-                // v2.8.2：旧 Bundle 只有 38 项时取默认 true，升级即获得兜底防护
-                enableAppOverlay = Bool(38, true),
-                // v2.8.3：旧 Bundle 只有 39 项时取默认 true
-                enableSysOverlay = Bool(39, true),
+                // v2.8.6：旧 Bundle 缺这两项时也不能回到 true，盖黑通道已废弃
+                enableAppOverlay = Bool(38, false),
+                enableSysOverlay = Bool(39, false),
             )
         }
     },
@@ -463,6 +465,9 @@ object AbConf {
         lines["enable_poem"] = if (s.enablePoem) "1" else "0"
         lines["enable_ball"] = if (s.enableBall) "1" else "0"
         lines["enable_log"] = if (s.enableLog) "1" else "0"
+        // v2.8.6：这两个键保留写盘只为一个目的 —— 每个配置项都有明确落点，审计时
+        // 能一眼看出「通道已废弃」而不是「漏写了」。字段本身恒 false（fromMap 强制、
+        // AbState 默认 false、Saver 默认 false 三条路都是 false），所以这里恒写 0。
         lines["enable_app_overlay"] = if (s.enableAppOverlay) "1" else "0"
         lines["enable_sys_overlay"] = if (s.enableSysOverlay) "1" else "0"
         lines["enable_douyin_top"] = if (s.enableDouyinTop) "1" else "0"
@@ -1518,15 +1523,13 @@ private fun EngineCard(
                         }
                     }
                     if (running) {
-                        TextButton(
-                            onClick = {
-                                BurnInMaskService.requestPreview()
-                                toast("接下来 5 秒会强制遮盖，看看状态栏有没有变黑")
-                            },
-                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp),
-                        ) {
-                            Text("预览 5 秒", style = MaterialTheme.typography.labelMedium)
-                        }
+                        // v2.8.6：移除遮盖预览入口。它会强制画一帧应用内黑块，
+                        // 用户看到的是整屏被盖住，与「不要铺黑、只要偏移」的结论相冲。
+                        Text(
+                            "遮盖预览已随盖黑通道一并移除；本版只做位置微移。",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 }
                 if (running && BurnInMaskService.lastError.isNotEmpty()) {
@@ -2673,7 +2676,7 @@ private fun RoadmapCard(dark: Boolean) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 6.dp))
-            Text("LSPosed 真隐藏需模块注入目标进程；未注入时由「应用内区域兜底」用无障碍覆盖层按屏幕比例遮盖，不依赖 root 与作用域勾选。",
+            Text("LSPosed 真隐藏需要模块注入目标进程。本版只做位置偏移，不再用覆盖层铺黑：注入没通时不会画任何东西，日志里可看 INJECTED 与作用域自检结果。",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.outline,
                 modifier = Modifier.padding(top = 6.dp))

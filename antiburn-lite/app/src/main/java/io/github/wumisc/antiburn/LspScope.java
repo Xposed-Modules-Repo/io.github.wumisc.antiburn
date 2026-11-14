@@ -5,8 +5,10 @@ import android.content.pm.PackageInfo;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
 import android.os.Process;
+import android.util.Base64;
 
 import java.io.File;
+import java.io.FileOutputStream;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -74,27 +76,61 @@ final class LspScope {
     }
 
     /**
-     * 把配置库（含 WAL / SHM）复制到应用私有目录，属主改回自身 uid。
-     * 复制失败时返回 null；调用方负责把原因写进日志。
+     * 把配置库（含 WAL / SHM）复制到应用私有目录。
+     *
+     * <p><b>v2.8.6 的关键修正</b>：v2.8.5 用 {@code cp} + {@code chown} + {@code restorecon}
+     * 把文件搬进私有目录，真机上 {@code SQLiteDatabase.openDatabase} 抛
+     * {@code SQLiteException}（日志里 {@code error=open:SQLiteException}）——
+     * 属主改了、SELinux context 却没落到应用自己的标签上，进程依旧读不了。</p>
+     *
+     * <p>现在改成：root 端只做 {@code base64 -w0} 输出字节，<b>文件由应用进程自己创建</b>。
+     * 自己创建的文件天然带 {@code app_data_file} 标签和本 uid，不再需要任何 chown/restorecon。
+     * WAL 一并搬过来，SQLite 打开时会自动重放，避免漏掉「刚勾选、还没 checkpoint」的作用域。</p>
      */
     private static File stage(Context ctx, String db) {
         File dir = new File(ctx.getFilesDir(), "lspdb");
-        int uid = Process.myUid();
-        String cmd = "D='" + dir.getAbsolutePath() + "'; "
-                + "rm -rf \"$D\"; mkdir -p \"$D\" || exit 2; "
-                + "cp -f '" + db + "' \"$D/modules_config.db\" || exit 3; "
-                + "cp -f '" + db + "-wal' \"$D/modules_config.db-wal\" 2>/dev/null; "
-                + "cp -f '" + db + "-shm' \"$D/modules_config.db-shm\" 2>/dev/null; "
-                + "chown " + uid + ":" + uid + " \"$D\" 2>/dev/null; "
-                + "chown " + uid + ":" + uid + " \"$D\"/* 2>/dev/null; "
-                + "chmod 0770 \"$D\" 2>/dev/null; chmod 0660 \"$D\"/* 2>/dev/null; "
-                + "restorecon -R \"$D\" 2>/dev/null; echo staged";
-        String out = ConfStore.execSuCapture(cmd, 10_000L);
-        if (out == null || !out.contains("staged")) {
+        if (!dir.exists() && !dir.mkdirs()) {
             return null;
         }
         File copy = new File(dir, "modules_config.db");
+        if (!pull(db, copy)) {
+            return null;
+        }
+        // WAL / SHM 是可选件：没有就跳过，有就必须同名放好，否则打开时读到旧快照
+        pull(db + "-wal", new File(dir, "modules_config.db-wal"));
+        pull(db + "-shm", new File(dir, "modules_config.db-shm"));
         return copy.exists() && copy.length() > 0 ? copy : null;
+    }
+
+    /**
+     * 用 root 把 src 以 base64 读出来，再由本进程写进 dst。
+     *
+     * <p>不用 {@code cp} 是为了绕开 SELinux：私有目录里的文件必须由应用自己创建，
+     * 否则即便 uid 对了，标签不对照样 {@code EACCES}。</p>
+     */
+    private static boolean pull(String src, File dst) {
+        String b64 = ConfStore.execSuCapture(
+                "base64 -w0 '" + src + "' 2>/dev/null", 20_000L);
+        if (b64 == null) {
+            return false;
+        }
+        b64 = b64.trim();
+        if (b64.isEmpty()) {
+            return false;
+        }
+        try {
+            byte[] data = Base64.decode(b64, Base64.DEFAULT);
+            if (data.length == 0) {
+                return false;
+            }
+            try (FileOutputStream fos = new FileOutputStream(dst, false)) {
+                fos.write(data);
+                fos.flush();
+            }
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
     }
 
     /** {@code modules} 表里存包名的列；不同 LSPosed 版本列名有过变化，按 pragma 现查。 */
