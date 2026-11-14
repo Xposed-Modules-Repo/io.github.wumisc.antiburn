@@ -80,6 +80,8 @@ public final class DouyinHook {
     private static volatile View currentDecor; // 当前根视图（用于周期强制重扫）
     private static boolean started = false;
     private static boolean hidden = false;
+    /** 当前相位（隐藏 / 显示）的起始时刻，用于 v2.9.0 恢复的周期真隐藏。 */
+    private static long phaseAt = 0L;
 
     // ---------- v2.8.4：App 内固定区域改为「位置微移」而非透明隐藏 ----------
     /**
@@ -1589,19 +1591,33 @@ public final class DouyinHook {
             return;
         }
 
-        // v2.8.4：位置微移是常驻的，不再分隐藏 / 显示相位。
+        // v2.9.0：恢复 v2.7 之前的「周期性真隐藏」。
         //
-        // 旧版按相位把控件透明隐藏再显示，用户看到的是「控件周期性消失」；
-        // 真机反馈明确要求「直接偏移，别盖别藏」。现在控件全程可见，
-        // 偏移方向每 8 秒轮转一格（九宫格绕圈），像素始终不在同一处停留，
-        // 防烧屏目的达到而画面不受影响。
+        // 中间几版改成常驻位置微移（控件全程可见、每 8 秒挪 2~3px），真机结论是
+        // 「不如最开始的真隐藏，效果立竿见影」—— 微移只让轮廓落在相邻像素上，
+        // 亮度一点没降；真隐藏是像素直接不发光，防烧屏强度差一个量级。
         //
-        // 归零只发生在四个场景：进 / 退直播间、强制显示、关掉对应区域开关、总闸关闭。
-        hideEnabled();
-        hidden = true;
+        // 代价是识别错了会藏掉内容区（用户说的「容易产生 bug」正是这条），
+        // 所以在 hideSafe() 里补了一道面积保险：超过屏幕 45%×45% 的一律不藏。
+        long now = SystemClock.elapsedRealtime();
+        long hideMs = Math.max(1, Config.hideSec) * 1000L;
+        long showMs = Math.max(1, Config.showSec) * 1000L;
+        if (!hidden) {
+            // phaseAt==0 表示刚进页面，先立刻藏一轮，别让用户等一个 showSec
+            if (phaseAt == 0L || now - phaseAt >= showMs) {
+                hideEnabled();
+                hidden = true;
+                phaseAt = now;
+            }
+        } else if (now - phaseAt >= hideMs) {
+            showAll();
+            hidden = false;
+            phaseAt = now;
+        }
 
-        // 每 2 秒重扫一次：覆盖翻页新建的容器，顺带推进偏移相位。
-        scheduleCycle(2000);
+        // 每 1 秒重扫一次：相位切换靠时间戳判定，tick 间隔必须小于最短相位，
+        // 否则 showSec 调小时会出现「该切了却迟迟不切」的迟滞。
+        scheduleCycle(1000);
     }
 
     private static void hideEnabled() {
@@ -1715,7 +1731,8 @@ public final class DouyinHook {
         // 不等显示相位结束 —— 与上面其它区域保持一致。
         for (View v : swipeHintList) {
             if (dSwipe) {
-                shiftDeep(v, "swipe");
+                // v2.9.0：引导条是静态竖排小字，真隐藏比微移彻底，一并走 hideSafe
+                hideSafe(v, "swipe");
             } else {
                 showDeep(v);
             }
@@ -1937,7 +1954,18 @@ public final class DouyinHook {
         return rw < 0.35f && rh < 0.35f; // 角落按钮：小控件
     }
 
-    /** 只对快手 / B站 加安全校验；抖音 / 红果沿用已真机验证的识别结果。 */
+    /**
+     * 隐藏单个区域的唯一出口。
+     *
+     * <p>v2.9.0 起恢复真隐藏（{@code alpha=0} + {@code INVISIBLE}）。防烧屏强度最高，
+     * 但识别错一次就会把内容区一起藏掉、屏幕发黑 —— 用户说的「容易产生 bug」正是这条。
+     * 所以执行前叠两道保险：</p>
+     * <ol>
+     *   <li>{@link #safeToHide} —— 只对快手 / B站 生效的区域白名单校验；</li>
+     *   <li>{@link #tooBigToHide} —— 对全部 App 生效的面积校验，超过屏幕 45%×45% 的
+     *       一律当内容容器，宁可少藏一块也不遮黑。</li>
+     * </ol>
+     */
     private static void hideSafe(View v, String what) {
         if (v == null) {
             return;
@@ -1946,7 +1974,32 @@ public final class DouyinHook {
             resetShift(v);
             return;
         }
-        shiftDeep(v, what);
+        if (tooBigToHide(v)) {
+            // 误判的典型形态：把播放器 / 列表容器当成「底部导航」藏掉，整屏变黑。
+            resetShift(v);
+            return;
+        }
+        transparentDeep(v, what);
+    }
+
+    /**
+     * 面积保险：宽、高都超过屏幕 45% 的 View 不是「控件」，而是内容容器或播放器。
+     *
+     * <p>真隐藏最容易踩的坑就在这儿 —— 几何评分只看位置和长宽比，竖屏内容区
+     * 在「上下各 15%」的判定里也可能拿高分。宽高双超限才拦，避免误伤
+     * 底部整条导航（宽 100%、高 8%）。</p>
+     */
+    private static boolean tooBigToHide(View v) {
+        try {
+            int sw = screenW(v);
+            int sh = screenH(v);
+            if (sw <= 0 || sh <= 0) {
+                return false;
+            }
+            return v.getWidth() > sw * 0.45f && v.getHeight() > sh * 0.45f;
+        } catch (Throwable t) {
+            return false;
+        }
     }
 
     // ---------- v2.8.4：位置微移 ----------

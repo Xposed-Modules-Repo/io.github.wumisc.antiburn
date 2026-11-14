@@ -55,13 +55,16 @@ final class LspScope {
         String error;
         boolean copied;
         boolean opened;
+        /** 本模块是否已在 LSPosed 里登记并启用。 */
+        boolean registered;
+        /** 旧版 LSPosed 的 modules 主键，新版没有这一列，仅在 scope 用 mid 关联时启用。 */
         int mid = -1;
         final Set<String> scope = new LinkedHashSet<>();
         final Set<String> installed = new LinkedHashSet<>();
         final Set<String> missing = new LinkedHashSet<>();
 
         boolean ok() {
-            return opened && mid > 0 && (error == null || error.isEmpty());
+            return opened && registered && (error == null || error.isEmpty());
         }
     }
 
@@ -163,20 +166,28 @@ final class LspScope {
     }
 
     /** {@code modules} 表里存包名的列；不同 LSPosed 版本列名有过变化，按 pragma 现查。 */
-    private static String pkgColumn(SQLiteDatabase d, String table) {
+    /** 读一张表的全部列名。不同 LSPosed 版本表结构不一样，一律现查，不写死。 */
+    private static List<String> columns(SQLiteDatabase d, String table) {
         List<String> cols = new ArrayList<>();
         try (Cursor c = d.rawQuery("pragma table_info(" + table + ")", null)) {
             while (c.moveToNext()) {
                 String n = c.getString(c.getColumnIndexOrThrow("name"));
-                if (n != null) {
+                if (n != null && !n.isEmpty()) {
                     cols.add(n);
                 }
             }
         } catch (Throwable ignored) {
-            return null;
         }
+        return cols;
+    }
+
+    /** 从列名里挑出「存模块包名」的那一列。 */
+    private static String pickPkgColumn(List<String> cols) {
         if (cols.contains("module_pkg_name")) {
             return "module_pkg_name";
+        }
+        if (cols.contains("pkg_name")) {
+            return "pkg_name";
         }
         for (String c : cols) {
             if (c.contains("pkg")) {
@@ -184,6 +195,45 @@ final class LspScope {
             }
         }
         return null;
+    }
+
+    /** 把列名清单拼成 `(a,b,c)`，用于把真实表结构写进错误信息。 */
+    private static String join(List<String> cols) {
+        StringBuilder sb = new StringBuilder("(");
+        for (String c : cols) {
+            if (sb.length() > 1) {
+                sb.append(',');
+            }
+            sb.append(c);
+        }
+        return sb.append(')').toString();
+    }
+
+    /** 按给定条件取作用域里的应用包名。 */
+    private static void readScope(SQLiteDatabase d, Report r, String where, String[] args) {
+        try (Cursor c = d.rawQuery("select app_pkg_name from scope where " + where, args)) {
+            while (c.moveToNext()) {
+                String s = c.getString(0);
+                if (s != null && !s.trim().isEmpty()) {
+                    r.scope.add(s.trim());
+                }
+            }
+        }
+    }
+
+    /** modules 表里实际登记了哪些模块，用于「本模块没启用」时给出旁证。 */
+    private static List<String> moduleNames(SQLiteDatabase d, String col) {
+        List<String> out = new ArrayList<>();
+        try (Cursor c = d.rawQuery("select " + col + " from modules limit 12", null)) {
+            while (c.moveToNext()) {
+                String s = c.getString(0);
+                if (s != null && !s.trim().isEmpty()) {
+                    out.add(s.trim());
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return out;
     }
 
     private static boolean hasTable(SQLiteDatabase d, String table) {
@@ -250,36 +300,58 @@ final class LspScope {
             try {
                 d = open(copy);
                 r.opened = true;
+
+                // ---- modules：只确认本模块已登记，不再假设存在 mid 列 ----
+                // v2.8.8 之前写死 `select mid from modules`，真机直接报
+                // `no such column: mid` —— 新版 LSPosed 的 modules 表以
+                // module_pkg_name 为主键，压根没有自增 mid。
                 if (!hasTable(d, "modules")) {
-                    r.error = "schema";
+                    r.error = "schema:no-modules";
                     return r;
                 }
-                String col = pkgColumn(d, "modules");
-                if (col == null) {
-                    r.error = "schema";
+                List<String> mcols = columns(d, "modules");
+                String mcol = pickPkgColumn(mcols);
+                if (mcol == null) {
+                    r.error = "schema:modules" + join(mcols);
                     return r;
                 }
                 try (Cursor c = d.rawQuery(
-                        "select mid from modules where " + col + "=? limit 1", new String[]{MODULE})) {
-                    if (c.moveToFirst()) {
-                        r.mid = c.getInt(0);
-                    }
+                        "select 1 from modules where " + mcol + "=? limit 1", new String[]{MODULE})) {
+                    r.registered = c.moveToFirst();
                 }
-                if (r.mid <= 0) {
-                    r.error = "unregistered";
+                if (!r.registered) {
+                    // modules 里查不到本模块名时，把实际登记过的模块打出来 ——
+                    // 常见于包名被改过、或用户在管理器里根本没启用。
+                    r.error = "unregistered" + join(moduleNames(d, mcol));
                     return r;
                 }
-                if (hasTable(d, "scope")) {
+
+                // ---- scope：新版按 module_pkg_name 关联，旧版按 mid ----
+                if (!hasTable(d, "scope")) {
+                    r.error = "schema:no-scope";
+                    return r;
+                }
+                List<String> scols = columns(d, "scope");
+                if (scols.contains("module_pkg_name")) {
+                    readScope(d, r, "module_pkg_name=?", new String[]{MODULE});
+                } else if (scols.contains("mid") && mcols.contains("mid")) {
                     try (Cursor c = d.rawQuery(
-                            "select app_pkg_name from scope where mid=?",
-                            new String[]{String.valueOf(r.mid)})) {
-                        while (c.moveToNext()) {
-                            String s = c.getString(0);
-                            if (s != null && !s.trim().isEmpty()) {
-                                r.scope.add(s.trim());
-                            }
+                            "select mid from modules where " + mcol + "=? limit 1",
+                            new String[]{MODULE})) {
+                        if (c.moveToFirst()) {
+                            r.mid = c.getInt(0);
                         }
                     }
+                    if (r.mid <= 0) {
+                        r.error = "schema:no-mid";
+                        return r;
+                    }
+                    readScope(d, r, "mid=?", new String[]{String.valueOf(r.mid)});
+                } else {
+                    // 两种关联方式都对不上：把真实列名带回去，下一版据此适配，
+                    // 不要再靠猜。
+                    r.error = "schema:scope" + join(scols);
+                    return r;
                 }
             } catch (Throwable t) {
                 // v2.8.8：只记异常类名会把 SQLITE_CANTOPEN(14)、文件损坏、schema 不符
@@ -387,22 +459,23 @@ final class LspScope {
         sb.append('\n');
         sb.append("配置库：").append(r.db == null ? "未找到" : r.db).append('\n');
         if (r.error != null) {
-            switch (r.error) {
-                case "no-db":
-                    sb.append("\n没找到 LSPosed 配置库。\n常见原因：框架不是 LSPosed（如 TaiChi / 旧版 EdXposed），或配置路径与已知版本不同。\n本模块只支持 LSPosed。");
-                    break;
-                case "su-denied":
-                    sb.append("\n读不到配置库：root 未授权，或 su 请求被拒绝。\n请在本应用弹出的 root 授权框点「允许」，然后重开本页。");
-                    break;
-                case "unregistered":
-                    sb.append("\nLSPosed 里没有启用本模块。\n处理：打开 LSPosed → 模块 → 勾选「抗烧屏」→ 重启手机。");
-                    break;
-                case "schema":
-                    sb.append("\n配置库结构无法识别，无法判断作用域。\n请手动确认：LSPosed → 模块 → 抗烧屏 → 作用域 里是否勾了抖音 / 红果 / 快手 / B站。");
-                    break;
-                default:
-                    sb.append("\n读取失败：").append(r.error);
-                    break;
+            // 前缀匹配：v2.8.9 起错误信息会带上真实表结构（如 schema:scope(...)），
+            // 用 switch 精确匹配会全部掉进 default，反而丢了针对性提示。
+            if (r.error.startsWith("no-db")) {
+                sb.append("\n没找到 LSPosed 配置库。\n常见原因：框架不是 LSPosed（如 TaiChi / 旧版 EdXposed），或配置路径与已知版本不同。\n本模块只支持 LSPosed。");
+            } else if (r.error.startsWith("su-denied")) {
+                sb.append("\n读不到配置库：root 未授权，或 su 请求被拒绝。\n请在本应用弹出的 root 授权框点「允许」，然后重开本页。");
+            } else if (r.error.startsWith("unregistered")) {
+                sb.append("\nLSPosed 里没有启用本模块。\n处理：打开 LSPosed → 模块 → 勾选「抗烧屏」→ 重启手机。");
+                int at = r.error.indexOf('(');
+                if (at > 0) {
+                    sb.append("\n\n配置库里登记过的模块：").append(r.error.substring(at));
+                }
+            } else if (r.error.startsWith("schema")) {
+                sb.append("\n配置库结构无法识别，无法判断作用域。\n请手动确认：LSPosed → 模块 → 抗烧屏 → 作用域 里是否勾了抖音 / 红果 / 快手 / B站。");
+                sb.append("\n\n结构信息（反馈时请一并附上）：").append(r.error);
+            } else {
+                sb.append("\n读取失败：").append(r.error);
             }
             // 即便读不到作用域，也把设备上装的目标 App 列出来 ——
             // 用户至少能照着名单去 LSPosed 里逐个勾，不必猜自己装的是哪个渠道包。
@@ -415,7 +488,11 @@ final class LspScope {
             }
             return sb.toString();
         }
-        sb.append("模块登记：已启用（mid=").append(r.mid).append("）\n");
+        sb.append("模块登记：已启用");
+        if (r.mid > 0) {
+            sb.append("（mid=").append(r.mid).append("）");
+        }
+        sb.append('\n');
         sb.append("已勾选作用域：").append(r.scope.size()).append(" 个");
         if (!r.scope.isEmpty()) {
             sb.append('\n');

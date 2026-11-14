@@ -299,7 +299,7 @@ public class XposedInit implements IXposedHookLoadPackage {
             // 跑不到，真隐藏必然失效 —— 此时去看导出日志末尾的 SELF 汇总行与 MASK 行。
             diagForce("SCOPE ver=" + BuildConfig.VERSION_NAME
                     + " targets=douyin,phoenix.read,kuaishou,bilibili"
-                    + " hint=视频App进程需出现 INJECTED <app> 或 HOOK-ATTACH；否则开启无障碍服务使用应用内区域兜底");
+                    + " hint=视频App进程需出现 INJECTED <app> 或 HOOK-ATTACH；没有就说明 LSPosed 作用域没勾，去「功能 › 通用 › 作用域自检」");
             Log.i(TAG, "loaded into SystemUI, starting...");
             try {
                 Controller.init(lpparam);
