@@ -385,8 +385,9 @@ object AbConf {
             enableBall = b(map["enable_ball"]),
             enableLog = b(map["enable_log"]),
             // 缺键（旧配置升级）默认开，保证装上就有兜底防护
-            enableAppOverlay = b(map["enable_app_overlay"], true),
-            enableSysOverlay = b(map["enable_sys_overlay"], true),
+            // v2.8.4：盖黑通道暂停使用，配置值不再生效
+            enableAppOverlay = false,
+            enableSysOverlay = false,
             enableDouyinTop = b(map["enable_douyin_top"]),
             enableDouyinBottom = b(map["enable_douyin_bottom"]),
             enableDouyinLike = b(map["enable_douyin_like"]),
@@ -853,6 +854,9 @@ private fun BurnInProtectApp() {
             // v2.8.3：启动即写一次自检（SELF + A11Y）。
             // 用户抓日志基本是直接拷文件、不点「导出日志」，自检必须落在启动路径上才有用。
             ConfStore.logSelfCheck(context)
+            // v2.8.4：查 LSPosed 作用域并补齐。作用域没勾，注入与位置微移都不会发生，
+            // 这是「改什么都没反应」最前面那道门。
+            ConfStore.logLine(LspScope.ensure())
             AbConf.load() to ConfStore.hasRoot()
         }
         // 加载窗口内用户点过的开关：在磁盘状态上按顺序重放，再一次性落盘。
@@ -2089,17 +2093,13 @@ private fun GeneralFeaturePage(
         onCheckedChange = { on -> onStateChange { s -> s.copy(enableLog = on) } })
     OptionRow("悬浮球", "点击切换隐藏控件", checked = state.enableBall, dark = dark,
         onCheckedChange = { on -> onStateChange { s -> s.copy(enableBall = on) } })
-    OptionRow("应用内区域兜底", "无 Root 也能遮盖右侧按钮列、顶部标题、底部导航",
-        checked = state.enableAppOverlay, dark = dark,
-        onCheckedChange = { on -> onStateChange { s -> s.copy(enableAppOverlay = on) } })
-    OptionRow("系统界面代理遮盖", "由已注入的系统界面直接绘制，不需要无障碍服务",
-        checked = state.enableSysOverlay, dark = dark,
-        onCheckedChange = { on -> onStateChange { s -> s.copy(enableSysOverlay = on) } })
+    // v2.8.4：删掉两个「盖黑」开关。真机反馈黑块盖住画面、影响观看，
+    // 防烧屏改由位置微移承担，不再提供这条通道。
     ListRow("周期时长", "隐藏 ${state.hideSec}s · 显示 ${state.showSec}s",
         { showCycleDialog = true }, dark, trailing = "›")
     HintText("像素微移是视觉无感的温和防护，内置常开，不单独提供开关。")
-    HintText("以上两项是两条独立通道，都会周期遮盖右侧按钮列 / 顶部标题 / 底部导航，且不吃触摸，点赞评论照常可点：\n「应用内区域兜底」由无障碍覆盖层绘制，需要在系统设置里开启本应用的无障碍服务，服务没连上时不会生效；\n「系统界面代理遮盖」由已注入的系统界面直接绘制，不需要无障碍，只要模块注入了系统界面就生效 —— 真机上那条通道常年可用。\n两条同时开启不冲突，谁在跑谁负责画，不需要的可以只留一条。")
-    HintText("各 App 的区域开关未逐个配置时，兜底默认按「右侧按钮列 + 顶部标题 + 底部导航」三区遮盖；需要精调请到对应 App 的二级页逐区开关，或直接关闭本项。")
+    HintText("App 内固定控件采用位置微移，不遮盖画面：右侧按钮列、顶部标题、底部导航每 8 秒挪动 2~3 像素，让轮廓落在相邻像素上，看得见也防得住。\n进直播间会自动还原原位 —— 直播间的礼物栏与输入框位置是动态的，位移会点不准。\n微移只在模块注入对应 App 进程时生效；日志里的 LSPDB 行会给出作用域是否已勾齐。")
+    HintText("各 App 的区域开关决定哪几块参与微移；四个都关时按「右侧按钮列 + 顶部标题 + 底部导航」三区执行。")
     if (showCycleDialog) {
         CycleDialog(
             state = state,
@@ -2118,7 +2118,7 @@ private fun DouyinFeaturePage(
 ) {
     val overlay = state.isOverlay
     if (overlay) OverlayNotice(dark, "抖音")
-    GroupTitle("抖音 · 视频页六个区域")
+    GroupTitle("抖音 · 视频页六个区域（位置微移）")
     OptionRow("顶部导航", "直播/团购/关注/商城", checked = state.enableDouyinTop, dark = dark,
         enabled = !overlay,
         onCheckedChange = { on -> onStateChange { s -> s.copy(enableDouyinTop = on) } })
@@ -2137,8 +2137,8 @@ private fun DouyinFeaturePage(
     OptionRow("直播间隐藏", "直播页顶栏/底栏/右下", checked = state.enableLive, dark = dark,
         enabled = !overlay,
         onCheckedChange = { on -> onStateChange { s -> s.copy(enableLive = on) } })
-    HintText("打开后，抖音进程内对应区域会按周期隐藏。若直播黑屏，可关闭「直播间隐藏」。")
-    HintText("以上开关控制 LSPosed 真隐藏（需要模块注入抖音进程）。若真机日志里没有 INJECTED Douyin，请到「通用」开启「应用内区域兜底」：它由无障碍覆盖层按屏幕比例遮盖同样几块区域，不要求注入。")
+    HintText("打开后，对应区域每 8 秒整体挪动 2~3 像素，画面照常可见。进直播间自动还原原位，避免点不准礼物栏与输入框。")
+    HintText("位置微移需要模块注入抖音进程。日志里出现 INJECTED Douyin 即已注入；若只有 INJECTED SystemUI，看同一份日志的 LSPDB 行：scope=complete 说明作用域已齐，重启抖音即可；出现 added=… 表示刚补上，重启抖音生效。")
 }
 
 @Composable
@@ -2149,7 +2149,7 @@ private fun DramaFeaturePage(
 ) {
     val overlay = state.isOverlay
     if (overlay) OverlayNotice(dark, "红果短剧")
-    GroupTitle("红果短剧 · 视频页区域")
+    GroupTitle("红果短剧 · 视频页区域（位置微移）")
     OptionRow("顶部区域", "视频页顶部栏", checked = state.enableDramaTop, dark = dark,
         enabled = !overlay,
         onCheckedChange = { on -> onStateChange { s -> s.copy(enableDramaTop = on) } })
@@ -2168,7 +2168,7 @@ private fun DramaFeaturePage(
     OptionRow("底部入口", "剧集/选集入口，模块刻意不隐藏", checked = false, dark = dark,
         enabled = false, disabledLabel = "始终常驻", onCheckedChange = {})
     HintText("红果底部是「完整观看 / 选集」等功能入口，模块刻意不隐藏，避免点不进去。")
-    HintText("「左滑查看详情」按文案识别引导条，仅 LSPosed 引擎下生效。应用内三区的兜底遮盖走「通用 › 应用内区域兜底」，不需要 root。")
+    HintText("「左滑查看详情」按文案识别引导条，同样走位置微移。以上都需要模块注入红果进程，日志里出现 INJECTED Drama 即已生效。")
 }
 
 /**
@@ -2191,7 +2191,7 @@ private fun VideoAppSubPage(
     val top = if (isKuaishou) state.enableKsTop else state.enableBiliTop
     val bottom = if (isKuaishou) state.enableKsBottom else state.enableBiliBottom
     val corner = if (isKuaishou) state.enableKsCorner else state.enableBiliCorner
-    OptionRow("$appLabel 总开关", "关则本应用所有区域都不隐藏", checked = master, dark = dark,
+    OptionRow("$appLabel 总开关", "关则本应用所有区域都不参与微移", checked = master, dark = dark,
         enabled = !overlay,
         onCheckedChange = { on -> onStateChange { s ->
             if (isKuaishou) s.copy(enableKuaishou = on) else s.copy(enableBilibili = on)
@@ -2216,8 +2216,8 @@ private fun VideoAppSubPage(
         onCheckedChange = { on -> onStateChange { s ->
             if (isKuaishou) s.copy(enableKsCorner = on) else s.copy(enableBiliCorner = on)
         } })
-    HintText("快手与哔哩哔哩各一套独立开关，互不影响。这里的开关控制 LSPosed 真隐藏，也决定兜底遮盖优先画哪几块区域；四个都关时兜底按默认三区全画。")
-    HintText("若真机日志里没有 INJECTED Kuaishou / Bilibili，说明模块没被注入该进程，真隐藏不会生效 —— 请在「通用」开启「应用内区域兜底」，它不要求注入。")
+    HintText("快手与哔哩哔哩各一套独立开关，互不影响。打开的区域每 8 秒整体挪动 2~3 像素，画面照常可见，进直播间自动还原。四个都关时按「右侧 + 顶部 + 底部」三区执行。")
+    HintText("微移需要模块注入该进程。日志里出现 INJECTED Kuaishou / Bilibili 即已生效；若只有 INJECTED SystemUI，看同一份日志的 LSPDB 行确认作用域是否已补齐。")
 }
 
 @Composable

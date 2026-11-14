@@ -80,6 +80,23 @@ public final class DouyinHook {
     private static volatile View currentDecor; // 当前根视图（用于周期强制重扫）
     private static boolean started = false;
     private static boolean hidden = false;
+
+    // ---------- v2.8.4：App 内固定区域改为「位置微移」而非透明隐藏 ----------
+    /**
+     * 偏移步长（px）。固定 UI 长期压在同一批像素上才会烧屏，把它整体挪 2~3px
+     * 就足以让轮廓落在相邻像素上，画面本身完整可见 —— 这是真机上唯一
+     * 「既看得见又能防烧屏」的形态，也是用户明确要求的形态。
+     *
+     * <p>九宫格绕圈（不含中心），每 8 秒一步，一个循环 64 秒。任何时刻都不会
+     * 回到原点停留，除非进入直播间或强制显示 —— 那时必须还原，因为直播间的
+     * 礼物栏 / 弹幕输入框位置是动态的，偏移会造成错位。</p>
+     */
+    private static final int[] SHIFT_DX = {-3, -2, 0, 2, 3, 2, 0, -2};
+    private static final int[] SHIFT_DY = {0, 2, 3, 2, 0, -2, -3, -2};
+    private static final long SHIFT_STEP_MS = 8000L;
+    private static volatile int shiftDx = 0;
+    private static volatile int shiftDy = 0;
+    private static volatile long shiftStepAt = 0L;
     private static boolean isDrama = false; // 红果短剧（com.phoenix.read 系）进程：用红果独立开关
     /** v2.6.8：快手 / B站 进程。复用同一套已验证的几何识别骨架，用视频区域开关 + 各自总开关。 */
     private static volatile boolean isVideoApp = false;
@@ -1499,37 +1516,24 @@ public final class DouyinHook {
             return;
         }
 
-        // 统一周期相位：与 SystemUI 状态栏/导航栏（Controller）共用「系统单调时钟对周期取模」判断此刻
-        // 该隐藏还是显示，并在同一相位边界切换——抖音/红果与状态栏/导航栏完全同步，
-        // 不再"这个隐藏完了那个才显示"，用户观感统一。
-        long now = SystemClock.elapsedRealtime();
-        long hideMs = Math.max(1, Config.hideSec) * 1000L;
-        long showMs = Math.max(1, Config.showSec) * 1000L;
-        long pos = now % (hideMs + showMs);
-        boolean shouldHide = pos < hideMs;
+        // v2.8.4：位置微移是常驻的，不再分隐藏 / 显示相位。
+        //
+        // 旧版按相位把控件透明隐藏再显示，用户看到的是「控件周期性消失」；
+        // 真机反馈明确要求「直接偏移，别盖别藏」。现在控件全程可见，
+        // 偏移方向每 8 秒轮转一格（九宫格绕圈），像素始终不在同一处停留，
+        // 防烧屏目的达到而画面不受影响。
+        //
+        // 归零只发生在四个场景：进 / 退直播间、强制显示、关掉对应区域开关、总闸关闭。
+        hideEnabled();
+        hidden = true;
 
-        if (shouldHide) {
-            if (!hidden) {
-                hideEnabled();
-                hidden = true;
-            } else {
-                // 隐藏窗口内：轻量重压一遍。已隐藏容器仅做属性检查（几乎无开销），
-                // 覆盖翻页新建容器；翻页即时性主要由布局监听 + onAttached 兜底保证。
-                hideEnabled();
-            }
-        } else {
-            if (hidden) {
-                showAll();
-                hidden = false;
-            }
-        }
-
-        // 调度：优先切到下一相位边界（保持四者同步），但最迟 2s 一次（兜底重扫/保活）
-        long remain = shouldHide ? (hideMs - pos) : (hideMs + showMs - pos);
-        scheduleCycle(Math.min(2000, Math.max(100, remain)));
+        // 每 2 秒重扫一次：覆盖翻页新建的容器，顺带推进偏移相位。
+        scheduleCycle(2000);
     }
 
     private static void hideEnabled() {
+        // v2.8.4：先推进偏移相位，再按各区域开关应用。
+        updateShiftPhase();
         // 悬浮球"强制显示"模式：不隐藏任何控件（用于查看各区域控件是否被正确隐藏）
         if (forceShow) {
             showAll();
@@ -1546,15 +1550,17 @@ public final class DouyinHook {
         // 会把用户已开启的顶部/右侧等普通区域开关一起否决；判定又依赖 rightTop 的
         // RoundCornerFrameLayout（普通视频页也可能命中），误判后整个区域隐藏失效。
         // 现在两套开关彻底解耦：直播三区按 enableLive 隐藏/恢复，普通区域照常按各自开关。
-        final boolean liveHide = liveDetected && !isDrama && !isVideoApp && Config.enableLive;
+        // v2.8.4：直播间一律还原位置。
+        // 礼物栏 / 弹幕输入框 / 连麦按钮的位置随直播内容动态变化，做位移会让
+        // 点击区域与画面错开，用户明确要求「进直播间还原」。
         for (View v : liveTopList) {
-            if (liveHide) transparentDeep(v, "livetop"); else showDeep(v);
+            resetShift(v);
         }
         for (View v : liveBottomList) {
-            if (liveHide) transparentDeep(v, "livebottom"); else showDeep(v);
+            resetShift(v);
         }
         for (View v : liveRightList) {
-            if (liveHide) transparentDeep(v, "liveright"); else showDeep(v);
+            resetShift(v);
         }
         // 红果短剧用红果独立开关，抖音用抖音开关，快手 / B站 用视频区域开关 + 各自总开关。
         // 复用同一套几何容器：rightList=右侧互动列，topBar=顶部工具栏，
@@ -1608,9 +1614,9 @@ public final class DouyinHook {
                 showDeep(v);
             }
         }
-        // 直播间右上角（RoundCornerFrameLayout 强特征）原本无条件隐藏；解耦后由
-        // 「直播间隐藏」或「右上角」任一开关控制，两个开关互不否决。
-        if (dRt || liveHide) {
+        // v2.8.4：v2.7 曾让「直播间隐藏」也来否决这里；现在直播三区一律还原位置，
+        // 右上角只由「右上角」开关决定，语义单一不打架。
+        if (dRt) {
             if (rightTop != null) {
                 hideSafe(rightTop, "righttop");
             }
@@ -1636,7 +1642,7 @@ public final class DouyinHook {
         // 不等显示相位结束 —— 与上面其它区域保持一致。
         for (View v : swipeHintList) {
             if (dSwipe) {
-                transparentDeep(v, "swipe");
+                shiftDeep(v, "swipe");
             } else {
                 showDeep(v);
             }
@@ -1694,11 +1700,14 @@ public final class DouyinHook {
         }
     }
 
-    /** 深度恢复：容器恢复 VISIBLE + alpha=1 */
+    /** 深度恢复：容器恢复 VISIBLE + alpha=1，并把 v2.8.4 的偏移归零 */
     private static void showDeep(View v) {
         if (v == null) {
             return;
         }
+        // v2.8.4：偏移必须在这里归零，否则「关掉开关 / 退出直播」后控件
+        // 还停在挪过的位置，用户会以为布局错乱。
+        resetShift(v);
         // v2.7.3：恢复路径同样单点兜底。showAll() 会在进/退直播时被频繁调用，
         // 这里一旦抛出，整轮 tick 中断，正是「退出直播后再也不隐藏」的直接触发点。
         try {
@@ -1855,16 +1864,89 @@ public final class DouyinHook {
         return rw < 0.35f && rh < 0.35f; // 角落按钮：小控件
     }
 
-    /** 只对快手 / B站 加安全校验；抖音 / 红果沿用已真机验证的行为，一道不改。 */
+    /** 只对快手 / B站 加安全校验；抖音 / 红果沿用已真机验证的识别结果。 */
     private static void hideSafe(View v, String what) {
         if (v == null) {
             return;
         }
         if (isVideoApp && !safeToHide(v, what)) {
-            showDeep(v);
+            resetShift(v);
             return;
         }
-        transparentDeep(v, what);
+        shiftDeep(v, what);
+    }
+
+    // ---------- v2.8.4：位置微移 ----------
+
+    /**
+     * 推进偏移相位：每 {@link #SHIFT_STEP_MS} 换一格，九宫格绕圈。
+     *
+     * <p>只在主线程 tick 里调用，节流靠时间戳，不额外开线程。</p>
+     */
+    private static void updateShiftPhase() {
+        long now = SystemClock.elapsedRealtime();
+        if (shiftStepAt != 0L && now - shiftStepAt < SHIFT_STEP_MS) {
+            return;
+        }
+        shiftStepAt = now;
+        int step = (int) ((now / SHIFT_STEP_MS) % SHIFT_DX.length);
+        shiftDx = SHIFT_DX[step];
+        shiftDy = SHIFT_DY[step];
+    }
+
+    /**
+     * 把固定控件整体平移当前偏移量。
+     *
+     * <p>用 {@code setTranslationX/Y} 而不是改 LayoutParams：前者只影响绘制与
+     * 触摸命中区域的变换，不触发父容器重新测量布局，在抖音这种复杂 RecyclerView
+     * 里不会引起列表抖动或回收错位。</p>
+     */
+    private static void shiftDeep(View v, String what) {
+        if (v == null) {
+            return;
+        }
+        try {
+            int dx = shiftDx;
+            int dy = shiftDy;
+            if (v.getTranslationX() != dx) {
+                v.setTranslationX(dx);
+            }
+            if (v.getTranslationY() != dy) {
+                v.setTranslationY(dy);
+            }
+            // 曾经被透明隐藏过的控件（旧版本留下的状态），这里顺手恢复可见
+            if (v.getAlpha() != 1f) {
+                v.setAlpha(1f);
+            }
+            if (v.getVisibility() == View.INVISIBLE) {
+                v.setVisibility(View.VISIBLE);
+            }
+        } catch (Throwable t) {
+            Log.e(TAG, "shift failed: " + what, t);
+        }
+    }
+
+    /** 偏移归零：退出偏置状态、恢复原始位置（进直播间 / 强制显示 / 开关关闭时）。 */
+    private static void resetShift(View v) {
+        if (v == null) {
+            return;
+        }
+        try {
+            if (v.getTranslationX() != 0f) {
+                v.setTranslationX(0f);
+            }
+            if (v.getTranslationY() != 0f) {
+                v.setTranslationY(0f);
+            }
+            if (v.getAlpha() != 1f) {
+                v.setAlpha(1f);
+            }
+            if (v.getVisibility() == View.INVISIBLE) {
+                v.setVisibility(View.VISIBLE);
+            }
+        } catch (Throwable t) {
+            Log.e(TAG, "reset failed", t);
+        }
     }
 
     // ---------- v2.6.9：直播特征页（只用于保守跳过，不触发隐藏） ----------

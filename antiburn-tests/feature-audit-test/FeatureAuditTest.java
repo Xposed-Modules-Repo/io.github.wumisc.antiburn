@@ -58,7 +58,7 @@ public class FeatureAuditTest {
      * 只是不再需要界面入口 —— 用户也不该再被一个容易误触的开关困扰。</p>
      */
     private static final Set<String> KNOWN_NO_UI =
-            Set.of("enableIcon", "enableDramaBottom", "enablePoem", "enableShift");
+            Set.of("enableAppOverlay", "enableSysOverlay", "enableIcon", "enableDramaBottom", "enablePoem", "enableShift");
 
     /**
      * 已知「有界面/存储但无 Hook 消费」的字段。
@@ -1148,9 +1148,12 @@ public class FeatureAuditTest {
         String xp282 = read(dir.resolve("XposedInit.java"));
         String cfg282 = read(dir.resolve("Config.java"));
         String prov282 = read(dir.resolve("ConfigProvider.java"));
-        check(conf282.contains("enable_app_overlay=1") && main.contains("enable_app_overlay")
-                        && mask282.contains("enable_app_overlay"),
-                "T-27a 应用内区域兜底默认开，配置/UI/遮盖服务三处键一致", "");
+        // v2.8.4：盖黑通道整体停用（真机反馈黑块遮画面），默认必须为 0，
+        // 且配置层即使读到 1 也要强制不生效，否则升级后照样盖黑。
+        check(conf282.contains("enable_app_overlay=0"),
+                "T-27a 应用内区域兜底默认关（v2.8.4 由位置微移取代）", "");
+        check(cfg282.contains("case \"enable_app_overlay\": ao = false;"),
+                "T-27a2 旧配置里残留的 =1 不再生效", "");
         check(mask282.contains("resolveApp(c, foregroundPkg)") && mask282.contains("VideoApps.of(fgPkg)"),
                 "T-27b 按前台包名识别目标 App，不注入目标进程也能画", "");
         check(mask282.contains("boolean sysBar =") && mask282.contains("boolean appArea =")
@@ -1207,9 +1210,10 @@ public class FeatureAuditTest {
         check(cfg283.contains("public static int appAreaMask(VideoApps.Kind kind)")
                         && cfg283.contains("if (!r && !t && !b && !c)"),
                 "T-28i 四区掩码：全关回退 R+T+B，不全猜", "");
-        check(cfg283.contains("enableSysOverlay") && main.contains("enable_sys_overlay")
-                        && conf283.contains("enable_sys_overlay=1"),
-                "T-28j enable_sys_overlay 三处一致且默认开", "");
+        check(cfg283.contains("enableSysOverlay")
+                        && conf283.contains("enable_sys_overlay=0")
+                        && cfg283.contains("case \"enable_sys_overlay\": so = false;"),
+                "T-28j enable_sys_overlay 默认关，旧配置残留值不生效", "");
         check(conf283.contains("private static void appendRaw(")
                         && conf283.contains("base64 -d") && conf283.contains("execSu(cmd)"),
                 "T-28k SELF 改走 su 追加，不再因分区存储静默失败", "");
@@ -1228,6 +1232,33 @@ public class FeatureAuditTest {
                 "T-28p 启用时并入已有服务列表，不覆盖别的应用、不写进 null", "");
         check(versionAtLeast(gradle, 46, "2.8.3"),
                 "T-28n 版本号升到 vc46 / 2.8.3", "");
+
+        // ---------- T-29 v2.8.4：位置微移取代盖黑 ----------
+        System.out.println("== T-29 v2.8.4 位置微移 ==");
+        String dy284 = read(dir.resolve("DouyinHook.java"));
+        String lsp = read(dir.resolve("LspScope.java"));
+        check(dy284.contains("private static void shiftDeep(")
+                        && dy284.contains("v.setTranslationX(dx)")
+                        && dy284.contains("v.setTranslationY(dy)"),
+                "T-29a 固定控件用 translation 微移，不再 setAlpha(0) 隐藏", "");
+        check(dy284.contains("SHIFT_DX") && dy284.contains("SHIFT_DY")
+                        && dy284.contains("SHIFT_STEP_MS = 8000L"),
+                "T-29b 九宫格绕圈，每 8 秒换一格", "");
+        check(dy284.contains("private static void resetShift("),
+                "T-29c 提供归零通道", "");
+        String hid284 = slice(dy284, "private static void hideEnabled()", "private static void transparentDeep");
+        int liveReset = hid284.split("resetShift\\(v\\);", -1).length - 1;
+        check(liveReset >= 3, "T-29d 直播三区一律 resetShift 还原（实际 " + liveReset + " 处）", "");
+        check(!hid284.contains("transparentDeep("),
+                "T-29e 应用路径里不再有透明隐藏调用", "");
+        check(dy284.contains("// v2.8.4：偏移必须在这里归零"), "T-29f 关开关/退直播后位置必须归零", "");
+        check(lsp.contains("modules_config.db") && lsp.contains("insert into scope(")
+                        && lsp.contains("WHERE not exists") || lsp.contains("where not exists"),
+                "T-29g 作用域缺失时按需 INSERT，不删改其它模块的行", "");
+        check(lsp.contains("modules_config.db.bak") && lsp.contains("已还原备份"),
+                "T-29h 写前备份，复查失败自动还原", "");
+        check(versionAtLeast(gradle, 47, "2.8.4"),
+                "T-29i 版本号升到 vc47 / 2.8.4", "");
 
         System.out.println();
         System.out.println("结果：" + pass + " 通过 / " + fail + " 失败");

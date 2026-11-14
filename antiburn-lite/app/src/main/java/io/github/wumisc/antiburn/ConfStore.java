@@ -222,11 +222,12 @@ public final class ConfStore {
         // 与引擎选择无关：即使 LSPosed 没把模块注入目标视频 App 进程（真机日志实证），
         // 只要无障碍服务连着，右侧按钮列 / 顶部标题 / 底部导航就能周期变黑。
         // 已有配置缺这个键时，BurnInMaskService.Cfg 同样按 true 处理，升级即生效。
-        sb.append("enable_app_overlay=1\n");
-        // v2.8.3：SystemUI 进程内的覆盖层兜底，默认开。
-        // 与 enable_app_overlay 的区别是「谁来画」：这条由已注入的 SystemUI 直接
-        // addView，不要求无障碍服务，也不要求目标 App 进程被注入。
-        sb.append("enable_sys_overlay=1\n");
+        // v2.8.4：两条「盖黑矩形」通道默认关闭。
+        // 真机反馈很直接：黑块盖住画面、影响观看，而防烧屏只需要让固定像素
+        // 不在同一个点常亮 —— 位置微移（DouyinHook 的 shiftDeep）就能做到，
+        // 画面完整可见。盖黑只在注入彻底失败时才有意义，留作手动开关。
+        sb.append("enable_app_overlay=0\n");
+        sb.append("enable_sys_overlay=0\n");
         return sb.toString();
     }
 
@@ -964,6 +965,14 @@ public final class ConfStore {
             sb.append(t);
         }
         return sb.toString();
+    }
+
+    /** v2.8.4：App 侧往日志里追加一行（带 [app/self] 前缀与时间戳）。 */
+    public static void logLine(String msg) {
+        if (msg == null || msg.isEmpty()) {
+            return;
+        }
+        appendRaw(System.currentTimeMillis() + " [app/self] " + msg);
     }
 
     /**

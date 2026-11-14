@@ -713,7 +713,8 @@ public class BurnInMaskService extends AccessibilityService {
                     } else if ("show_duration".equals(k)) {
                         c.showSec = clampDur(v, c.showSec, 1);
                     } else if ("enable_app_overlay".equals(k)) {
-                        c.appAreaOn = "1".equals(v);
+                        // v2.8.4：暂停生效，恒 false（盖黑被位置微移取代）
+                        c.appAreaOn = false;
                     } else {
                         // v2.8.2：把各 App 的区域开关收进一张表，resolveApp() 按
                         // 前台包名挑用。缺省键不进表 —— 缺键和显式 0 都算「没配过」，

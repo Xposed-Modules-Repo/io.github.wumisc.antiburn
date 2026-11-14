@@ -78,7 +78,12 @@ public final class Config {
     public static volatile boolean enableStatusBar = true;
     public static volatile boolean enableLog = false;
     /** v2.8.2：应用内区域兜底遮盖；Config 侧留存并打进 CONF apply，真正消费方是 BurnInMaskService。 */
-    public static volatile boolean enableAppOverlay = true;
+    /**
+     * v2.8.4：默认关闭。真机反馈「黑块盖住画面、没什么用」，防烧屏改回位置微移
+     * （DouyinHook.shiftDeep），画面完整可见。此项只在注入彻底失败时作为最后手段，
+     * 由用户手动打开。
+     */
+    public static volatile boolean enableAppOverlay = false;
     /**
      * v2.8.3：SystemUI 进程内的覆盖层兜底。
      *
@@ -87,7 +92,8 @@ public final class Config {
      * addView 一个 TYPE_APPLICATION_OVERLAY，不需要无障碍、不需要注入目标 App。
      * 两条同时开着不冲突：无障碍那条只在服务连上时画，SystemUI 这条一直在。</p>
      */
-    public static volatile boolean enableSysOverlay = true;
+    /** v2.8.4：默认关闭，原因同 {@link #enableAppOverlay}。 */
+    public static volatile boolean enableSysOverlay = false;
     /** 目标 UI 适配方案（conf 里的 ui_style，与 profiles/*.json 对应）。默认按机型识别。 */
     public static volatile String uiStyle = UiStyle.detect(
             android.os.Build.MANUFACTURER, android.os.Build.BRAND,
@@ -826,8 +832,10 @@ public final class Config {
                 case "enable_icon": ic = "1".equals(v); break;
                 case "enable_status_bar": sb = "1".equals(v); break;
                 case "enable_log": lg = "1".equals(v); break;
-                case "enable_app_overlay": ao = "1".equals(v); break;
-                case "enable_sys_overlay": so = "1".equals(v); break;
+                // v2.8.4：暂停生效。配置里即使还是 1（v2.8.2/2.8.3 写进去的），
+                // 也不再生效 —— 否则用户升级后照样被黑块盖住。
+                case "enable_app_overlay": ao = false; break;
+                case "enable_sys_overlay": so = false; break;
                 case "custom_poems":
                     customDecoded = ConfStore.decodeValue(v);
                     break;
