@@ -73,9 +73,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.PathParser
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
@@ -854,9 +857,11 @@ private fun BurnInProtectApp() {
             // v2.8.3：启动即写一次自检（SELF + A11Y）。
             // 用户抓日志基本是直接拷文件、不点「导出日志」，自检必须落在启动路径上才有用。
             ConfStore.logSelfCheck(context)
-            // v2.8.4：查 LSPosed 作用域并补齐。作用域没勾，注入与位置微移都不会发生，
-            // 这是「改什么都没反应」最前面那道门。
-            ConfStore.logLine(LspScope.ensure())
+            // v2.8.5：只读查询 LSPosed 作用域。作用域没勾，注入与位置微移都不会发生，
+            // 这是「改什么都没反应」最前面那道门。v2.8.4 用 sqlite3 命令行读，
+            // 而真机根本没有 sqlite3，这行日志一直停在 sqlite3=missing；
+            // 现在改成 root 复制 + 系统 SQLiteDatabase 读，结果里直接列出缺哪几个包。
+            ConfStore.logLine(LspScope.ensure(context))
             AbConf.load() to ConfStore.hasRoot()
         }
         // 加载窗口内用户点过的开关：在磁盘状态上按顺序重放，再一次性落盘。
@@ -2070,7 +2075,7 @@ private fun OverlayNotice(dark: Boolean, appLabel: String) {
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = UiPalette.warn(dark).copy(alpha = 0.12f)),
     ) {
-        Text("当前是免 root 遮盖引擎。系统栏照常按周期盖黑；$appLabel 内固定控件不做真隐藏，但「通用 › 应用内区域兜底」会用覆盖层按屏幕比例遮盖右侧按钮列 / 顶部 / 底部，两种引擎下都能防烧屏。这里的开关只对 LSPosed 真隐藏生效。",
+        Text("当前不是 Hook 引擎。系统栏照常按周期盖黑；$appLabel 内的固定控件（右侧按钮列 / 顶部标题 / 底部导航）需要模块注入该 App 进程才能做位置微移，本机没注入时这几项不会生效。想在 $appLabel 里也用上，请在有 LSPosed 的环境给本模块勾上它的作用域。",
             style = MaterialTheme.typography.bodySmall,
             color = UiPalette.warn(dark),
             modifier = Modifier.padding(14.dp))
@@ -2084,6 +2089,9 @@ private fun GeneralFeaturePage(
     dark: Boolean,
 ) {
     var showCycleDialog by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var scopeText by remember { mutableStateOf<String?>(null) }
     GroupTitle("系统栏与通用")
     OptionRow("状态栏", "顶部图标周期性隐藏", checked = state.enableStatusBar, dark = dark,
         onCheckedChange = { on -> onStateChange { s -> s.copy(enableStatusBar = on) } })
@@ -2100,6 +2108,29 @@ private fun GeneralFeaturePage(
     HintText("像素微移是视觉无感的温和防护，内置常开，不单独提供开关。")
     HintText("App 内固定控件采用位置微移，不遮盖画面：右侧按钮列、顶部标题、底部导航每 8 秒挪动 2~3 像素，让轮廓落在相邻像素上，看得见也防得住。\n进直播间会自动还原原位 —— 直播间的礼物栏与输入框位置是动态的，位移会点不准。\n微移只在模块注入对应 App 进程时生效；日志里的 LSPDB 行会给出作用域是否已勾齐。")
     HintText("各 App 的区域开关决定哪几块参与微移；四个都关时按「右侧按钮列 + 顶部标题 + 底部导航」三区执行。")
+    // v2.8.5：作用域自检入口。用户反馈「改什么都没反应」时，绝大多数情况是
+    // LSPosed 没给视频 App 勾作用域 —— 模块代码根本没进那个进程，
+    // 真隐藏 / 位置微移都不存在。以前只能靠导日志看 LSPDB 行猜，
+    // 现在点一下就把「哪几个 App 没勾」直接列出来，并给一个跳转管理器的按钮。
+    ListRow("作用域自检", "查 LSPosed 是否给抖音 / 红果 / 快手 / B站 勾了作用域", {
+        scopeText = "正在读取 LSPosed 配置…"
+        scope.launch {
+            val text = withContext(Dispatchers.IO) {
+                runCatching { LspScope.diagnose(context) }
+                    .getOrElse { "读取失败：" + (it.message ?: it.javaClass.simpleName) }
+            }
+            scopeText = text
+            withContext(Dispatchers.IO) { ConfStore.logLine(LspScope.ensure(context)) }
+        }
+    }, dark, trailing = "›")
+    scopeText?.let { text ->
+        ScopeDialog(
+            text = text,
+            dark = dark,
+            onOpenLsposed = { openLsposedManager(context) },
+            onDismiss = { scopeText = null },
+        )
+    }
     if (showCycleDialog) {
         CycleDialog(
             state = state,
@@ -2457,7 +2488,7 @@ private fun SuggestPage(dark: Boolean, onOpenUrl: (String) -> Unit) {
         "适配新机型" to "写清机型、系统版本与 ROM（如 ColorOS 15、Flyme 11），附一张状态栏截图最好",
         "新增功能" to "说清想解决什么问题、期望怎么开关，比只写「加个 XX」更容易实现",
         "问题反馈" to "附首页「日志」按钮导出的诊断日志与复现步骤，能省掉大量来回确认",
-        "能力边界" to "LSPosed 真隐藏需要模块注入目标 App 进程；未注入时由无障碍「应用内区域兜底」按屏幕比例遮盖，免 root 也能防护",
+        "能力边界" to "LSPosed 真隐藏必须由模块注入目标 App 进程，前提是在 LSPosed 里给本模块勾选那个 App；没勾时该 App 内不会有任何效果，请先在「通用」里做一次作用域自检",
     ).forEach { (itemTitle, desc) ->
         Column(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 10.dp)) {
             Text(itemTitle, style = MaterialTheme.typography.titleMedium,
@@ -2655,6 +2686,75 @@ private fun RoadmapCard(dark: Boolean) {
 }
 
 /**
+ * 拉起 LSPosed 管理器（v2.8.5）。
+ *
+ * <p>模块只能「读」作用域，改还是得用户自己在管理器里点。少一步「自己去桌面找图标」
+ * 就少一步出错的机会，所以这里按几个已知包名依次试；都没有就提示手动打开，
+ * 不弹浏览器、不猜市场链接。</p>
+ */
+private fun openLsposedManager(context: Context) {
+    val names = arrayOf(
+        "org.lsposed.manager",
+        "org.lsposed.manager.canary",
+        "org.lsposed.manager.debug",
+    )
+    for (p in names) {
+        try {
+            val i = context.packageManager.getLaunchIntentForPackage(p)
+            if (i != null) {
+                context.startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                return
+            }
+        } catch (ignored: Throwable) {
+        }
+    }
+    Toast.makeText(context, "没找到 LSPosed 管理器，请从桌面图标手动打开", Toast.LENGTH_LONG).show()
+}
+
+/**
+ * 作用域自检结果（v2.8.5）：等宽字体逐行列出「已勾选的包 / 设备上装了的目标 App / 缺哪几个」。
+ * 提供复制按钮，方便把结论贴到反馈里。
+ */
+@Composable
+private fun ScopeDialog(
+    text: String,
+    dark: Boolean,
+    onOpenLsposed: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val clip = LocalClipboardManager.current
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(22.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        ) {
+            Column(Modifier.padding(horizontal = 20.dp, vertical = 18.dp)) {
+                Text("LSPosed 作用域自检", style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold, color = UiPalette.ink(dark))
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .heightIn(max = 360.dp)
+                        .verticalScroll(rememberScrollState()),
+                )
+                Spacer(Modifier.height(12.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = { clip.setText(AnnotatedString(text)) }) { Text("复制") }
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = onOpenLsposed) { Text("打开 LSPosed") }
+                    TextButton(onClick = onDismiss) { Text("关闭") }
+                }
+            }
+        }
+    }
+}
+
+/**
  * 周期时长小窗（v2.6.5）。
  *
  * <p>以前是首页 ListRow 跳一个二级页：要先回首页、再进二级页、改完再返回。
@@ -2703,7 +2803,7 @@ private fun CyclePage(
     var show by remember(state.showSec) { mutableIntStateOf(state.showSec) }
     val changed = hide != state.hideSec || show != state.showSec
 
-    Text("一个周期 = 隐藏时长 + 显示时长。系统栏、导航栏与抖音、红果短剧、快手、B站 的固定区域都按同一节奏周期性隐藏或盖黑，如此往复防止固定像素常亮。",
+    Text("一个周期 = 隐藏时长 + 显示时长。系统栏、导航栏与抖音、红果短剧、快手、B站 的固定区域都按同一节奏周期性变化（系统栏隐藏，App 内固定控件做位置微移），如此往复防止固定像素常亮。",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant)
 

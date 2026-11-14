@@ -1,24 +1,37 @@
 package io.github.wumisc.antiburn;
 
+import android.content.Context;
+import android.content.pm.PackageInfo;
+import android.database.Cursor;
+import android.database.sqlite.SQLiteDatabase;
+import android.os.Process;
+
+import java.io.File;
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Set;
 
 /**
- * LSPosed 作用域自检与补全。
+ * LSPosed 作用域自检（只读，不改配置）。
  *
  * <p><b>为什么需要它</b>：真机日志里 {@code inject=douyin:0 drama:0 kuaishou:0
- * bilibili:0 hookdiag:0} 连续多版成立，模块自己的 {@code SCOPE targets=…} 只是
- * arrays.xml 里声明过的包名，<b>不等于</b> LSPosed 的实际作用域。LSPosed 是否把模块
- * 注入某个 App，只取决于管理器里给这个模块勾了哪些作用域。</p>
+ * bilibili:0 hookdiag:0} 连续多版成立，而 {@code INJECTED SystemUI} 一直都在。
+ * 模块自己的 {@code SCOPE targets=…} 只是 arrays.xml 里声明过的包名，<b>不等于</b>
+ * LSPosed 的实际作用域；LSPosed 只往「管理器里给本模块勾选过」的包里注入。
+ * 作用域没勾，{@link DouyinHook} 一行都跑不到，位置微移自然无从谈起 ——
+ * 用户看到的就是「不管怎么改都没反应」。</p>
  *
- * <p>作用域没勾，DouyinHook 一行都跑不到，位置微移自然也没机会执行 ——
- * 用户看到的就是「不管怎么改都没反应」。这里用 root 直接读 LSPosed 的
- * {@code modules_config.db}，把「模块是否已登记」「作用域是否包含四个目标包」
- * 查清楚并写进可导出的日志；缺失时自动补齐（写前备份，写完复查）。</p>
+ * <p><b>v2.8.5 的关键修正</b>：v2.8.4 用 {@code sqlite3} 命令行读配置库，而绝大多数
+ * Android 设备（含真机 OPPO）根本没有 sqlite3 二进制，于是自检永远停在
+ * {@code sqlite3=missing}，作用域内容一次都没读出来过。这里改成 --root 复制配置库
+ * 到应用私有目录，再用系统自带的 {@code SQLiteDatabase} 打开查询，不依赖任何外部命令。</p>
  *
- * <p><b>安全边界</b>：只 INSERT 本模块自己的 scope 行，不删不改其它模块；
- * 写前把 db 复制到日志目录；补完立刻复查，复查不通过就把备份还原回去。
- * 任何一步失败都只写日志、不重试。</p>
+ * <p><b>为什么只读不写</b>：直接往 {@code modules_config.db} 里 INSERT 看似省事，
+ * 但 LSPosed 的服务端在启动时把作用域读进内存、并与 WAL 共用同一份文件，外部写入
+ * 既要处理属主 / SELinux / WAL 一致性，又可能让管理器下次启动时判定配置损坏。
+ * 勾选作用域在管理器里只需几步，风险却全在用户设备上，不值得代劳。这里只负责
+ * <b>把真相读出来并说清楚缺哪几个</b>。</p>
  */
 final class LspScope {
 
@@ -31,15 +44,23 @@ final class LspScope {
             "/data/adb/modules/zygisk_lsposed/config/modules_config.db",
     };
 
-    /** 需要注入的目标包（与 arrays.xml 的 xposed_scope 保持一致）。 */
-    static final String[] TARGETS = {
-            "com.ss.android.ugc.aweme",
-            "com.phoenix.read",
-            "com.smile.gifmaker",
-            "tv.danmaku.bili",
-    };
-
     private LspScope() {
+    }
+
+    /** 一次自检的结论；字段全部为 null / 空时看 {@link #error}。 */
+    static final class Report {
+        String db;
+        String error;
+        boolean copied;
+        boolean opened;
+        int mid = -1;
+        final Set<String> scope = new LinkedHashSet<>();
+        final Set<String> installed = new LinkedHashSet<>();
+        final Set<String> missing = new LinkedHashSet<>();
+
+        boolean ok() {
+            return opened && mid > 0 && (error == null || error.isEmpty());
+        }
     }
 
     private static String findDb() {
@@ -52,109 +73,279 @@ final class LspScope {
         return null;
     }
 
-    private static boolean hasSqlite() {
-        String out = ConfStore.execSuCapture("command -v sqlite3 2>/dev/null || echo none");
-        return out != null && !out.trim().equals("none") && !out.trim().isEmpty();
-    }
-
-    private static String q(String db, String sql) {
-        String out = ConfStore.execSuCapture("sqlite3 -noheader \"" + db + "\" \"" + sql + "\" 2>/dev/null");
-        return out == null ? "" : out.trim();
-    }
-
     /**
-     * 查当前状态并补齐缺失的作用域。
-     *
-     * @return 一行可直接落盘的诊断结论；不会抛异常
+     * 把配置库（含 WAL / SHM）复制到应用私有目录，属主改回自身 uid。
+     * 复制失败时返回 null；调用方负责把原因写进日志。
      */
-    static String ensure() {
-        try {
-            String db = findDb();
-            if (db == null) {
-                return "LSPDB none（没找到 LSPosed 配置库；可能是 KernelSU 版路径不同或是非 LSPosed 框架）";
-            }
-            if (!hasSqlite()) {
-                return "LSPDB " + db + " sqlite3=missing（设备没有 sqlite3，无法读取作用域）";
-            }
-            String midStr = q(db, "select mid from modules where module_pkg_name='" + MODULE + "' limit 1;");
-            if (midStr.isEmpty()) {
-                return "LSPDB " + db + " module=unregistered（LSPosed 还没识别到本模块，先在管理器里启用模块并重启）";
-            }
-            int mid;
-            try {
-                mid = Integer.parseInt(midStr.trim());
-            } catch (Throwable t) {
-                return "LSPDB " + db + " mid=\"" + midStr.trim() + "\"（解析失败）";
-            }
-
-            Set<String> have = new LinkedHashSet<>();
-            String rows = q(db, "select app_pkg_name from scope where mid=" + mid + ";");
-            if (!rows.isEmpty()) {
-                for (String l : rows.split("\\n")) {
-                    String t = l.trim();
-                    if (!t.isEmpty()) {
-                        have.add(t);
-                    }
-                }
-            }
-
-            StringBuilder missing = new StringBuilder();
-            for (String p : TARGETS) {
-                // 用前缀判断：作用域里可能写的是变体包
-                boolean hit = false;
-                for (String h : have) {
-                    if (h.equals(p) || h.startsWith(p + ".")) {
-                        hit = true;
-                        break;
-                    }
-                }
-                if (!hit) {
-                    if (missing.length() > 0) {
-                        missing.append(',');
-                    }
-                    missing.append(p);
-                }
-            }
-            if (missing.length() == 0) {
-                return "LSPDB " + db + " mid=" + mid + " scope=complete";
-            }
-
-            // 写前备份：坏了还能拿回来
-            String bak = ConfStore.LOG_DIR + "/modules_config.db.bak";
-            ConfStore.execSu("cp -f \"" + db + "\" \"" + bak + "\" 2>/dev/null; true");
-
-            StringBuilder added = new StringBuilder();
-            StringBuilder failed = new StringBuilder();
-            for (String p : missing.toString().split(",")) {
-                String sql = "insert into scope(mid, app_pkg_name, user_id) "
-                        + "select " + mid + ",'" + p + "',0 where not exists("
-                        + "select 1 from scope where mid=" + mid + " and app_pkg_name='" + p + "');";
-                ConfStore.execSu("sqlite3 \"" + db + "\" \"" + sql + "\" 2>/dev/null; true");
-                String check = q(db, "select count(*) from scope where mid=" + mid
-                        + " and app_pkg_name='" + p + "';");
-                if ("1".equals(check.trim())) {
-                    if (added.length() > 0) {
-                        added.append(',');
-                    }
-                    added.append(p);
-                } else {
-                    if (failed.length() > 0) {
-                        failed.append(',');
-                    }
-                    failed.append(p);
-                }
-            }
-
-            // 复查失败的还原，避免留下半残配置
-            if (failed.length() > 0) {
-                ConfStore.execSu("cp -f \"" + bak + "\" \"" + db + "\" 2>/dev/null; true");
-                return "LSPDB " + db + " mid=" + mid + " added=" + added
-                        + " FAILED=" + failed + "（已还原备份）";
-            }
-            return "LSPDB " + db + " mid=" + mid + " added=" + added
-                    + " next=重启目标 App 或手机后生效 backup=" + bak;
-        } catch (Throwable t) {
-            return "LSPDB error " + t.getClass().getSimpleName();
+    private static File stage(Context ctx, String db) {
+        File dir = new File(ctx.getFilesDir(), "lspdb");
+        int uid = Process.myUid();
+        String cmd = "D='" + dir.getAbsolutePath() + "'; "
+                + "rm -rf \"$D\"; mkdir -p \"$D\" || exit 2; "
+                + "cp -f '" + db + "' \"$D/modules_config.db\" || exit 3; "
+                + "cp -f '" + db + "-wal' \"$D/modules_config.db-wal\" 2>/dev/null; "
+                + "cp -f '" + db + "-shm' \"$D/modules_config.db-shm\" 2>/dev/null; "
+                + "chown " + uid + ":" + uid + " \"$D\" 2>/dev/null; "
+                + "chown " + uid + ":" + uid + " \"$D\"/* 2>/dev/null; "
+                + "chmod 0770 \"$D\" 2>/dev/null; chmod 0660 \"$D\"/* 2>/dev/null; "
+                + "restorecon -R \"$D\" 2>/dev/null; echo staged";
+        String out = ConfStore.execSuCapture(cmd, 10_000L);
+        if (out == null || !out.contains("staged")) {
+            return null;
         }
+        File copy = new File(dir, "modules_config.db");
+        return copy.exists() && copy.length() > 0 ? copy : null;
+    }
+
+    /** {@code modules} 表里存包名的列；不同 LSPosed 版本列名有过变化，按 pragma 现查。 */
+    private static String pkgColumn(SQLiteDatabase d, String table) {
+        List<String> cols = new ArrayList<>();
+        try (Cursor c = d.rawQuery("pragma table_info(" + table + ")", null)) {
+            while (c.moveToNext()) {
+                String n = c.getString(c.getColumnIndexOrThrow("name"));
+                if (n != null) {
+                    cols.add(n);
+                }
+            }
+        } catch (Throwable ignored) {
+            return null;
+        }
+        if (cols.contains("module_pkg_name")) {
+            return "module_pkg_name";
+        }
+        for (String c : cols) {
+            if (c.contains("pkg")) {
+                return c;
+            }
+        }
+        return null;
+    }
+
+    private static boolean hasTable(SQLiteDatabase d, String table) {
+        try (Cursor c = d.rawQuery(
+                "select name from sqlite_master where type='table' and name=?", new String[]{table})) {
+            return c.moveToFirst();
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    /** 设备上真实安装的目标应用包名（渠道包 / 海外版都算），用于精确比对作用域。 */
+    private static Set<String> installedTargets(Context ctx) {
+        Set<String> out = new LinkedHashSet<>();
+        try {
+            List<PackageInfo> list = ctx.getPackageManager().getInstalledPackages(0);
+            if (list != null) {
+                for (PackageInfo pi : list) {
+                    if (pi != null && VideoApps.isTarget(pi.packageName)) {
+                        out.add(pi.packageName);
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+            // 部分 ROM 即便声明了 QUERY_ALL_PACKAGES 也只返回可见包，走下面的 su 兜底
+        }
+        if (out.isEmpty()) {
+            String pm = ConfStore.execSuCapture("pm list packages 2>/dev/null");
+            if (pm != null) {
+                for (String line : pm.split("\\n")) {
+                    String p = line.trim();
+                    if (p.startsWith("package:")) {
+                        p = p.substring(8).trim();
+                    }
+                    if (VideoApps.isTarget(p)) {
+                        out.add(p);
+                    }
+                }
+            }
+        }
+        return out;
+    }
+
+    /** 读作用域并算出缺口；任何一步失败都写进 error，不抛异常。 */
+    static Report probe(Context ctx) {
+        Report r = new Report();
+        try {
+            r.db = findDb();
+            if (r.db == null) {
+                r.error = "no-db";
+                return r;
+            }
+            if (ctx == null) {
+                r.error = "no-context";
+                return r;
+            }
+            File copy = stage(ctx, r.db);
+            if (copy == null) {
+                r.error = "su-denied";
+                return r;
+            }
+            r.copied = true;
+            SQLiteDatabase d = null;
+            try {
+                d = SQLiteDatabase.openDatabase(copy.getAbsolutePath(), null,
+                        SQLiteDatabase.OPEN_READONLY);
+                r.opened = true;
+                if (!hasTable(d, "modules")) {
+                    r.error = "schema";
+                    return r;
+                }
+                String col = pkgColumn(d, "modules");
+                if (col == null) {
+                    r.error = "schema";
+                    return r;
+                }
+                try (Cursor c = d.rawQuery(
+                        "select mid from modules where " + col + "=? limit 1", new String[]{MODULE})) {
+                    if (c.moveToFirst()) {
+                        r.mid = c.getInt(0);
+                    }
+                }
+                if (r.mid <= 0) {
+                    r.error = "unregistered";
+                    return r;
+                }
+                if (hasTable(d, "scope")) {
+                    try (Cursor c = d.rawQuery(
+                            "select app_pkg_name from scope where mid=?",
+                            new String[]{String.valueOf(r.mid)})) {
+                        while (c.moveToNext()) {
+                            String s = c.getString(0);
+                            if (s != null && !s.trim().isEmpty()) {
+                                r.scope.add(s.trim());
+                            }
+                        }
+                    }
+                }
+            } catch (Throwable t) {
+                r.error = "open:" + t.getClass().getSimpleName();
+            } finally {
+                if (d != null) {
+                    try {
+                        d.close();
+                    } catch (Throwable ignored) {
+                    }
+                }
+            }
+            r.installed.addAll(installedTargets(ctx));
+            for (String p : r.installed) {
+                if (!r.scope.contains(p)) {
+                    r.missing.add(p);
+                }
+            }
+            return r;
+        } catch (Throwable t) {
+            r.error = "error:" + t.getClass().getSimpleName();
+            return r;
+        }
+    }
+
+    private static String zh(String pkg) {
+        switch (VideoApps.of(pkg)) {
+            case DOUYIN: return "抖音";
+            case DRAMA: return "红果";
+            case KUAISHOU: return "快手";
+            case BILIBILI: return "B站";
+            default: return "其它";
+        }
+    }
+
+    private static String join(Set<String> s) {
+        StringBuilder sb = new StringBuilder();
+        for (String x : s) {
+            if (sb.length() > 0) {
+                sb.append(',');
+            }
+            sb.append(x);
+        }
+        return sb.toString();
+    }
+
+    /** 单行日志版本：字段短、可 grep，便于用户把一行贴回来定位。 */
+    static String ensure(Context ctx) {
+        Report r = probe(ctx);
+        StringBuilder sb = new StringBuilder("LSPDB db=").append(r.db == null ? "none" : r.db);
+        if (r.error != null) {
+            sb.append(" error=").append(r.error);
+            switch (r.error) {
+                case "no-db":
+                    sb.append("（没找到 LSPosed 配置库：可能是 KernelSU 版路径不同，或框架不是 LSPosed）");
+                    break;
+                case "su-denied":
+                    sb.append("（root 未授权，读不到作用域；请给本应用 root 权限后重开）");
+                    break;
+                case "unregistered":
+                    sb.append("（LSPosed 里还没启用本模块：先启用模块并重启手机）");
+                    break;
+                case "schema":
+                    sb.append("（配置库结构不认识，可能是很新/很旧的 LSPosed 版本）");
+                    break;
+                default:
+                    break;
+            }
+            return sb.toString();
+        }
+        sb.append(" mid=").append(r.mid)
+                .append(" scope=").append(r.scope.size()).append('[').append(join(r.scope)).append(']')
+                .append(" installed=").append(r.installed.size()).append('[').append(join(r.installed)).append(']');
+        if (r.missing.isEmpty()) {
+            sb.append(" missing=0");
+        } else {
+            sb.append(" missing=").append(r.missing.size()).append('[').append(join(r.missing)).append(']')
+                    .append(" next=在 LSPosed 里给本模块勾选缺失应用，保存后强行停止该应用再打开");
+        }
+        return sb.toString();
+    }
+
+    /** 多行可读版本：给设置页「作用域自检」弹窗用。 */
+    static String diagnose(Context ctx) {
+        Report r = probe(ctx);
+        StringBuilder sb = new StringBuilder();
+        sb.append("配置库：").append(r.db == null ? "未找到" : r.db).append('\n');
+        if (r.error != null) {
+            switch (r.error) {
+                case "no-db":
+                    sb.append("\n没找到 LSPosed 配置库。\n常见原因：框架不是 LSPosed（如 TaiChi / 旧版 EdXposed），或配置路径与已知版本不同。\n本模块只支持 LSPosed。");
+                    break;
+                case "su-denied":
+                    sb.append("\n读不到配置库：root 未授权，或 su 请求被拒绝。\n请在本应用弹出的 root 授权框点「允许」，然后重开本页。");
+                    break;
+                case "unregistered":
+                    sb.append("\nLSPosed 里没有启用本模块。\n处理：打开 LSPosed → 模块 → 勾选「抗烧屏」→ 重启手机。");
+                    break;
+                case "schema":
+                    sb.append("\n配置库结构无法识别，无法判断作用域。\n请手动确认：LSPosed → 模块 → 抗烧屏 → 作用域 里是否勾了抖音 / 红果 / 快手 / B站。");
+                    break;
+                default:
+                    sb.append("\n读取失败：").append(r.error);
+                    break;
+            }
+            return sb.toString();
+        }
+        sb.append("模块登记：已启用（mid=").append(r.mid).append("）\n");
+        sb.append("已勾选作用域：").append(r.scope.size()).append(" 个");
+        if (!r.scope.isEmpty()) {
+            sb.append('\n');
+            for (String p : r.scope) {
+                sb.append("  ✓ ").append(p).append('\n');
+            }
+        } else {
+            sb.append("（空，只有 SystemUI 生效时通常说明从没勾过）\n");
+        }
+        sb.append("\n设备上找到的目标应用：").append(r.installed.size()).append(" 个\n");
+        for (String p : r.installed) {
+            sb.append(r.scope.contains(p) ? "  ✓ " : "  ✗ ").append(zh(p)).append(' ').append(p).append('\n');
+        }
+        if (r.installed.isEmpty()) {
+            sb.append("  （没找到抖音/红果/快手/B站，确认是否装在本机）\n");
+        }
+        sb.append('\n');
+        if (r.missing.isEmpty()) {
+            sb.append("结论：作用域已勾齐。\n若仍无效果，请强行停止对应 App 再打开，让新进程重新加载模块。");
+        } else {
+            sb.append("结论：有 ").append(r.missing.size()).append(" 个应用没勾选，模块不会被注入，这些 App 内一定没效果。\n\n")
+                    .append("处理：LSPosed → 模块 → 抗烧屏 → 作用域 → 勾选上面打 ✗ 的应用 → 保存 → 强行停止该 App 再打开。");
+        }
+        return sb.toString();
     }
 }

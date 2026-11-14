@@ -350,6 +350,49 @@ public final class DouyinHook {
     // ---------- 扫描 ----------
 
     /** 全量重新扫描当前界面，更新各区域容器引用 */
+    /**
+     * v2.8.5：资源 id 名 → id 值的缓存。
+     *
+     * <p>用 {@code getIdentifier("bottom_navigation", "id", 包名)} 而不是写死 0x7f090681：
+     * 资源 id 数值每次发版都会变（B站 8.91.1 的 bottom_navigation 是 0x7f090681，
+     * 下个版本多半不是），但<b>名字不会变</b>。名字查询一次即可，缓存住避免每轮扫描都反射。</p>
+     */
+    private static final java.util.concurrent.ConcurrentHashMap<String, Integer> ID_CACHE =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static int idOfName(View root, String name) {
+        Integer hit = ID_CACHE.get(name);
+        if (hit != null) {
+            return hit;
+        }
+        int id = 0;
+        try {
+            id = root.getResources().getIdentifier(name, "id", selfPkg);
+        } catch (Throwable ignored) {
+            // 资源系统异常按「没有这个 id」处理，走几何兜底
+        }
+        if (id != 0) {
+            ID_CACHE.put(name, id);
+        }
+        return id;
+    }
+
+    /** 按 id 名在 root 子树里取控件；找不到 / 资源名不存在都返回 null。 */
+    private static View byId(View root, String name) {
+        if (root == null) {
+            return null;
+        }
+        int id = idOfName(root, name);
+        if (id == 0) {
+            return null;
+        }
+        try {
+            return root.findViewById(id);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
     private static void rescan(ViewGroup root) {
         try {
             List<View> rights = collectRight(root, 4);
@@ -361,6 +404,36 @@ public final class DouyinHook {
             }
             View t = scan(root, DouyinHook::scoreTop);
             List<View> bottoms = collectBottom(root);
+            // v2.8.5：B站资源 id 锚点（反编译 tv.danmaku.bili 8.91.1 实证）。
+            // 主界面布局 res/6R5.xml 的实际结构：
+            //   CoordinatorLayout(id=coordinatorLayout)
+            //     ├ FrameLayout(id=main_top_layout) —— 顶部整块，含 ImageView(id=main_top_bg)
+            //     ├ com.bilibili.lib.homepage.widget.TabHost(id=bottom_navigation)
+            //     │     layout_gravity=bottom / height=wrap —— 就是底部 5 个 tab
+            //     └ tv.danmaku.bili.ui.main2.widget.HomeAppBarLayout(id=app_bar)
+            //           └ androidx.appcompat.widget.Toolbar(id=nav_top_bar) —— 顶部搜索栏
+            // TabHost 是自绘 ViewGroup（子节点不是 ImageView，也不一定贴满宽度），
+            // HomeAppBarLayout 被 AppBarLayout 的 behavior 托管、位置随滚动变化，
+            // 两者都过不了 scoreTop / collectBottom 的几何门槛 —— 真机表现正是
+            // 「B站只有右侧按钮列生效，顶部标题和底部导航不动」。
+            // 抖音 / 红果的资源名被整体混淆（id 只剩 a / 0 / 00 这类），快手主界面 id
+            // 也被抹掉，只有 B站 保留了语义化 id，所以这条锚点只对 B站 生效。
+            if (isBilibili) {
+                View nav = byId(root, "bottom_navigation");
+                if (nav != null && nav.isShown() && nav.getWidth() > 0 && nav.getHeight() > 0) {
+                    bottoms.clear();
+                    bottoms.add(nav);
+                }
+                if (t == null) {
+                    View bar = byId(root, "app_bar");
+                    if (bar == null) {
+                        bar = byId(root, "nav_top_bar");
+                    }
+                    if (bar != null && bar.isShown() && bar.getHeight() > 0) {
+                        t = bar;
+                    }
+                }
+            }
             View rt = scan(root, DouyinHook::scoreRightTop);
             View lt = scan(root, DouyinHook::scoreLeftTop);
             // v2.6.6：红果「左滑查看详情」竖排引导条。只在红果进程按文案收集，
