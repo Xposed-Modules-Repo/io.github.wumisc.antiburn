@@ -834,6 +834,8 @@ public final class Controller {
                 PixelShift.shutdown();
                 XposedInit.diag("SHIFT 停止：灭屏");
             }
+            // v2.8.3：灭屏必须收窗，否则黑屏时还留着一层全屏合成
+            updateOverlay(null, false);
             scheduleCycle(5000);
             return;
         }
@@ -899,6 +901,8 @@ public final class Controller {
                 XposedInit.diag("SHIFT 停止：" + pauseReason(screenOn, intervene, top, livePause));
             }
             // 暂停期间古诗浮层同样必须移除（applyShow 只恢复系统栏，不清理 Overlay）
+            // v2.8.3：应用内覆盖层同理，暂停即收
+            updateOverlay(top, false);
             // 2 秒轮询，等恢复条件满足后继续周期
             scheduleCycle(2000);
             return;
@@ -927,6 +931,10 @@ public final class Controller {
                 hidden = false;
             }
         }
+        // v2.8.3：应用内区域覆盖层与系统栏共用同一相位。
+        // 真机日志证明视频 App 进程零注入、无障碍零连接，这条是那些设备上
+        // 唯一可用的 App 内防护通道：SystemUI 自己 addView，盖在 App 之上。
+        updateOverlay(top, shouldHide);
         // 像素偏移（与 AOSP BurnInProtectionController 同思路）：把状态栏 item 缓慢平移 1~2px，
         // 视觉几乎无感，但轮廓边缘不再固定压在同一批像素上。与「隐藏」互补 ——
         // 隐藏减少点亮时间，偏移分摊轮廓，两者叠加才接近厂商级防护。
@@ -956,6 +964,24 @@ public final class Controller {
         // 旧版直接等到相位边界（最长 hideSec 秒），导致改了开关要等几十秒才生效。
         long remain = shouldHide ? (hideMs - pos) : (hideMs + showMs - pos);
         scheduleCycle(Math.min(2000L, Math.max(100L, remain)));
+    }
+
+    /**
+     * v2.8.3：刷新 SystemUI 侧的应用内区域覆盖层。
+     *
+     * <p>包一层 FeatureGuard：这条通道要往 SystemUI 的 WindowManager 里加窗口，
+     * 任何 ROM 自定义（HyperOS / ColorOS 的窗口策略）都可能抛异常。一旦抛了，
+     * 只熔断这一项，状态栏隐藏与像素偏移照常跑，绝不能把 SystemUI 拖崩。</p>
+     */
+    private static void updateOverlay(String top, boolean show) {
+        FeatureGuard.guard("sys.appoverlay", () -> {
+            View holder = statusView != null ? statusView : navView;
+            if (holder == null) {
+                return;
+            }
+            int inset = statusView != null ? statusView.getHeight() : 0;
+            SysOverlay.tick(holder.getContext(), top, show, inset);
+        });
     }
 
     /** 上一次应用到 PixelShift 的 UI 方案，变化时才重设并打日志 */

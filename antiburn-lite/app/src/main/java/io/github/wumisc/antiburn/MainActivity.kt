@@ -171,6 +171,8 @@ data class AbState(
      * 不依赖 LSPosed 把模块注入抖音 / 快手 / B站进程，只要无障碍服务连着就能生效。
      */
     val enableAppOverlay: Boolean = true,
+    /** v2.8.3：SystemUI 进程内覆盖层，与无障碍兜底互补，默认开 */
+    val enableSysOverlay: Boolean = true,
     val enableDouyinTop: Boolean = false,
     val enableDouyinBottom: Boolean = false,
     val enableDouyinLike: Boolean = false,
@@ -256,6 +258,7 @@ private val AbStateSaver = listSaver(
             s.enableBiliBottom, s.enableBiliCorner,
             // v2.8.2：应用内区域兜底。索引 38，追加在末尾不动旧索引。
             s.enableAppOverlay,
+            s.enableSysOverlay,
         )
     },
     restore = { l: List<Any> ->
@@ -317,6 +320,8 @@ private val AbStateSaver = listSaver(
                 enableBiliCorner = Bool(37),
                 // v2.8.2：旧 Bundle 只有 38 项时取默认 true，升级即获得兜底防护
                 enableAppOverlay = Bool(38, true),
+                // v2.8.3：旧 Bundle 只有 39 项时取默认 true
+                enableSysOverlay = Bool(39, true),
             )
         }
     },
@@ -381,6 +386,7 @@ object AbConf {
             enableLog = b(map["enable_log"]),
             // 缺键（旧配置升级）默认开，保证装上就有兜底防护
             enableAppOverlay = b(map["enable_app_overlay"], true),
+            enableSysOverlay = b(map["enable_sys_overlay"], true),
             enableDouyinTop = b(map["enable_douyin_top"]),
             enableDouyinBottom = b(map["enable_douyin_bottom"]),
             enableDouyinLike = b(map["enable_douyin_like"]),
@@ -454,6 +460,7 @@ object AbConf {
         lines["enable_ball"] = if (s.enableBall) "1" else "0"
         lines["enable_log"] = if (s.enableLog) "1" else "0"
         lines["enable_app_overlay"] = if (s.enableAppOverlay) "1" else "0"
+        lines["enable_sys_overlay"] = if (s.enableSysOverlay) "1" else "0"
         lines["enable_douyin_top"] = if (s.enableDouyinTop) "1" else "0"
         lines["enable_douyin_bottom"] = if (s.enableDouyinBottom) "1" else "0"
         lines["enable_douyin_like"] = if (s.enableDouyinLike) "1" else "0"
@@ -527,6 +534,7 @@ object AbConf {
         putB("enable_ball", old.enableBall, new.enableBall)
         putB("enable_log", old.enableLog, new.enableLog)
         putB("enable_app_overlay", old.enableAppOverlay, new.enableAppOverlay)
+        putB("enable_sys_overlay", old.enableSysOverlay, new.enableSysOverlay)
         putB("enable_douyin_top", old.enableDouyinTop, new.enableDouyinTop)
         putB("enable_douyin_bottom", old.enableDouyinBottom, new.enableDouyinBottom)
         putB("enable_douyin_like", old.enableDouyinLike, new.enableDouyinLike)
@@ -842,6 +850,9 @@ private fun BurnInProtectApp() {
             // 先把日志目录准备好：Android 11+ 只能在 su 下建 /sdcard/Android/ 子目录，
             // 建好并放开权限后，SystemUI 才能把诊断日志直接写进用户能看到的路径。
             ConfStore.prepareSharedDirs()
+            // v2.8.3：启动即写一次自检（SELF + A11Y）。
+            // 用户抓日志基本是直接拷文件、不点「导出日志」，自检必须落在启动路径上才有用。
+            ConfStore.logSelfCheck(context)
             AbConf.load() to ConfStore.hasRoot()
         }
         // 加载窗口内用户点过的开关：在磁盘状态上按顺序重放，再一次性落盘。
@@ -2078,13 +2089,16 @@ private fun GeneralFeaturePage(
         onCheckedChange = { on -> onStateChange { s -> s.copy(enableLog = on) } })
     OptionRow("悬浮球", "点击切换隐藏控件", checked = state.enableBall, dark = dark,
         onCheckedChange = { on -> onStateChange { s -> s.copy(enableBall = on) } })
-    OptionRow("应用内区域兜底", "无需 Root / 无需注入，遮盖右侧按钮列、顶部标题、底部导航",
+    OptionRow("应用内区域兜底", "无 Root 也能遮盖右侧按钮列、顶部标题、底部导航",
         checked = state.enableAppOverlay, dark = dark,
         onCheckedChange = { on -> onStateChange { s -> s.copy(enableAppOverlay = on) } })
+    OptionRow("系统界面代理遮盖", "由已注入的系统界面直接绘制，不需要无障碍服务",
+        checked = state.enableSysOverlay, dark = dark,
+        onCheckedChange = { on -> onStateChange { s -> s.copy(enableSysOverlay = on) } })
     ListRow("周期时长", "隐藏 ${state.hideSec}s · 显示 ${state.showSec}s",
         { showCycleDialog = true }, dark, trailing = "›")
     HintText("像素微移是视觉无感的温和防护，内置常开，不单独提供开关。")
-    HintText("「应用内区域兜底」由无障碍覆盖层绘制，需要在系统设置里为本应用开启无障碍服务。它不要求 LSPosed 把模块注入抖音 / 快手 / B站进程，因此在这类设备上往往是最有效的一条通道；与真隐藏同时开启也不冲突，覆盖层不吃触摸，点赞评论照常可点。")
+    HintText("以上两项是两条独立通道，都会周期遮盖右侧按钮列 / 顶部标题 / 底部导航，且不吃触摸，点赞评论照常可点：\n「应用内区域兜底」由无障碍覆盖层绘制，需要在系统设置里开启本应用的无障碍服务，服务没连上时不会生效；\n「系统界面代理遮盖」由已注入的系统界面直接绘制，不需要无障碍，只要模块注入了系统界面就生效 —— 真机上那条通道常年可用。\n两条同时开启不冲突，谁在跑谁负责画，不需要的可以只留一条。")
     HintText("各 App 的区域开关未逐个配置时，兜底默认按「右侧按钮列 + 顶部标题 + 底部导航」三区遮盖；需要精调请到对应 App 的二级页逐区开关，或直接关闭本项。")
     if (showCycleDialog) {
         CycleDialog(

@@ -36,7 +36,9 @@ public class FeatureAuditTest {
     /** Hook 侧会消费 Config 的文件 */
     private static final List<String> HOOK_FILES = List.of(
             "Controller.java", "DouyinHook.java", "AntiburnTile.java",
-            "XposedInit.java", "FeatureGuard.java", "ConfStore.java");
+            "XposedInit.java", "FeatureGuard.java", "ConfStore.java",
+            // v2.8.3：SystemUI 进程内的应用内区域覆盖层，同样在 Hook 侧消费 Config
+            "SysOverlay.java", "AppRegions.java");
 
     /**
      * 已知「有 Hook 实现但无界面入口」的字段。
@@ -1174,6 +1176,58 @@ public class FeatureAuditTest {
                 "T-27l MASK 诊断行输出前台 App、区域位与兜底状态", "");
         check(versionAtLeast(gradle, 45, "2.8.2"),
                 "T-27k 版本号升到 vc45 / 2.8.2", "");
+
+        // ---------- T-28 v2.8.3 稳定版：SystemUI 代理遮盖 ----------
+        System.out.println("== T-28 v2.8.3 SystemUI 代理遮盖 ==");
+        String sys = read(dir.resolve("SysOverlay.java"));
+        String reg = read(dir.resolve("AppRegions.java"));
+        String ctrl = read(dir.resolve("Controller.java"));
+        String mask283 = read(dir.resolve("BurnInMaskService.java"));
+        String conf283 = read(dir.resolve("ConfStore.java"));
+        check(sys.contains("TYPE_APP_OVERLAY = 2038") && sys.contains("TYPE_SYSTEM_ALERT = 2003"),
+                "T-28a 覆盖层优先 2038，失败退 2003（老 ROM 兜底）", "");
+        check(sys.contains("FLAG_NOT_TOUCHABLE"),
+                "T-28b 覆盖层不吃触摸，点赞收藏评论照常可点", "");
+        check(sys.contains("broken = true") && sys.contains("if (broken || ctx == null)"),
+                "T-28c 加窗失败即熔断本进程，绝不反复抛异常拖崩 SystemUI", "");
+        check(sys.contains("removeViewImmediate") && sys.contains("static void release()"),
+                "T-28d 提供撤窗通道，切引擎/关开关时能收回", "");
+        check(ctrl.contains("updateOverlay(top, shouldHide)")
+                        && ctrl.contains("updateOverlay(top, false)")
+                        && ctrl.contains("updateOverlay(null, false)"),
+                "T-28e 相位切换 / 暂停 / 灭屏三处都刷新覆盖层", "");
+        check(ctrl.contains("FeatureGuard.guard(\"sys.appoverlay\""),
+                "T-28f 覆盖层单独熔断，异常不影响状态栏隐藏与像素偏移", "");
+        check(reg.contains("public static List<int[]> rects(") && reg.contains("public static int mask(")
+                        && mask283.contains("AppRegions.rects(") && sys.contains("AppRegions.rects("),
+                "T-28g 区域几何只有一份，两条通道共用", "");
+        check(reg.contains("0.84f") && reg.contains("0.28f") && reg.contains("0.90f"),
+                "T-28h 右侧列 / 顶部 / 底部比例与标定一致", "");
+        String cfg283 = read(dir.resolve("Config.java"));
+        check(cfg283.contains("public static int appAreaMask(VideoApps.Kind kind)")
+                        && cfg283.contains("if (!r && !t && !b && !c)"),
+                "T-28i 四区掩码：全关回退 R+T+B，不全猜", "");
+        check(cfg283.contains("enableSysOverlay") && main.contains("enable_sys_overlay")
+                        && conf283.contains("enable_sys_overlay=1"),
+                "T-28j enable_sys_overlay 三处一致且默认开", "");
+        check(conf283.contains("private static void appendRaw(")
+                        && conf283.contains("base64 -d") && conf283.contains("execSu(cmd)"),
+                "T-28k SELF 改走 su 追加，不再因分区存储静默失败", "");
+        check(conf283.contains("public static boolean a11yEnabled(")
+                        && conf283.contains("public static void logSelfCheck("),
+                "T-28l 启动写 A11Y 自检，服务没开能直接从日志看出来", "");
+        check(sys.contains("\"OVL \"") && sys.contains("areas=") && sys.contains("window attached type="),
+                "T-28m OVL 诊断行带 app/areas/type", "");
+        check(conf283.contains("public static boolean enableA11yByRoot(")
+                        && conf283.contains("enabled_accessibility_services")
+                        && conf283.contains("accessibility_enabled 1"),
+                "T-28o 有 root 时直接启用本应用无障碍服务，不用用户手动去设置", "");
+        check(conf283.contains("static String mergeA11yList(")
+                        && conf283.contains("\"null\".equals(t)")
+                        && conf283.contains("set.add(comp)"),
+                "T-28p 启用时并入已有服务列表，不覆盖别的应用、不写进 null", "");
+        check(versionAtLeast(gradle, 46, "2.8.3"),
+                "T-28n 版本号升到 vc46 / 2.8.3", "");
 
         System.out.println();
         System.out.println("结果：" + pass + " 通过 / " + fail + " 失败");

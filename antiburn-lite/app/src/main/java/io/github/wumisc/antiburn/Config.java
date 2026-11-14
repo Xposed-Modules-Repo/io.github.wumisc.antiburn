@@ -79,6 +79,15 @@ public final class Config {
     public static volatile boolean enableLog = false;
     /** v2.8.2：应用内区域兜底遮盖；Config 侧留存并打进 CONF apply，真正消费方是 BurnInMaskService。 */
     public static volatile boolean enableAppOverlay = true;
+    /**
+     * v2.8.3：SystemUI 进程内的覆盖层兜底。
+     *
+     * <p>与 {@link #enableAppOverlay} 的区别是「谁来画」：无障碍通道要用户开服务，
+     * 真机日志显示它经常没连上（零 MASK 行）；这条由已被注入的 SystemUI 直接
+     * addView 一个 TYPE_APPLICATION_OVERLAY，不需要无障碍、不需要注入目标 App。
+     * 两条同时开着不冲突：无障碍那条只在服务连上时画，SystemUI 这条一直在。</p>
+     */
+    public static volatile boolean enableSysOverlay = true;
     /** 目标 UI 适配方案（conf 里的 ui_style，与 profiles/*.json 对应）。默认按机型识别。 */
     public static volatile String uiStyle = UiStyle.detect(
             android.os.Build.MANUFACTURER, android.os.Build.BRAND,
@@ -570,7 +579,7 @@ public final class Config {
                 + " wl=" + list.size() + " lm=" + listMode
                 + " w=" + whiteCount + " b=" + blackCount + " fetch=" + fetchState
                 + " cache=" + (cacheText != null ? "ok" : "none")
-                + " eng=" + engine + " ao=" + enableAppOverlay
+                + " eng=" + engine + " ao=" + enableAppOverlay + " so=" + enableSysOverlay
                 // v2.8.2「改日志」：把各 App 分区开关位串一起打出来。旧日志只有
                 // status/nav/shift，真机排障时无法判断「区域开关到底有没有读到新值」，
                 // 只能反复让用户猜。位序固定，见各二级页的排列顺序。
@@ -721,6 +730,7 @@ public final class Config {
         boolean live = enableLive, poem = enablePoem, ball = enableBall;
         boolean ic = enableIcon, lg = enableLog;
         boolean ao = enableAppOverlay;
+        boolean so = enableSysOverlay;
         boolean sb = enableStatusBar;
         String style = uiStyle;
         String custom = customPoems;
@@ -817,6 +827,7 @@ public final class Config {
                 case "enable_status_bar": sb = "1".equals(v); break;
                 case "enable_log": lg = "1".equals(v); break;
                 case "enable_app_overlay": ao = "1".equals(v); break;
+                case "enable_sys_overlay": so = "1".equals(v); break;
                 case "custom_poems":
                     customDecoded = ConfStore.decodeValue(v);
                     break;
@@ -894,6 +905,7 @@ public final class Config {
         enableStatusBar = sb;
         enableLog = lg;
         enableAppOverlay = ao;
+        enableSysOverlay = so;
         uiStyle = style;
         customPoems = custom;
         if (appVerRaw != null) {
@@ -964,6 +976,49 @@ public final class Config {
      * <p>黑名单空集之所以不按字面「全部豁免」，是因为用户切到黑名单却没勾任何
      * 应用时，模块会表现为完全没反应，极易被判定成「功能坏了」。</p>
      */
+    /**
+     * v2.8.3：把某个 App 的四区开关压成 {@link AppRegions} 位掩码。
+     *
+     * <p>真机日志 {@code dr=11000} 说明红果只开了右侧一列，用户看到的就是
+     * 「红果也不行」—— 所以这里不做任何「默认全开」的猜测，只在四区全关时
+     * 回退 R+T+B（与 BurnInMaskService 的 appExplicit 回退保持同一口径）。</p>
+     */
+    public static int appAreaMask(VideoApps.Kind kind) {
+        boolean r = false, t = false, b = false, c = false, on = true;
+        if (kind == VideoApps.Kind.DOUYIN) {
+            r = enableDouyinLike || enableDouyinRt;
+            t = enableDouyinTop;
+            b = enableDouyinBottom;
+            c = enableDouyinLt;
+        } else if (kind == VideoApps.Kind.DRAMA) {
+            r = enableDramaLike || enableDramaRt;
+            t = enableDramaTop;
+            b = enableDramaBottom;
+            c = enableDramaLt;
+        } else if (kind == VideoApps.Kind.KUAISHOU) {
+            r = enableKsRight;
+            t = enableKsTop;
+            b = enableKsBottom;
+            c = enableKsCorner;
+            on = enableKuaishou || r || t || b || c;
+        } else if (kind == VideoApps.Kind.BILIBILI) {
+            r = enableBiliRight;
+            t = enableBiliTop;
+            b = enableBiliBottom;
+            c = enableBiliCorner;
+            on = enableBilibili || r || t || b || c;
+        } else {
+            return 0;
+        }
+        if (!on) {
+            return 0;
+        }
+        if (!r && !t && !b && !c) {
+            r = t = b = true;
+        }
+        return AppRegions.mask(r, t, b, c);
+    }
+
     public static boolean shouldIntervene(String pkg) {
         if (!enableStatus) {
             return false;

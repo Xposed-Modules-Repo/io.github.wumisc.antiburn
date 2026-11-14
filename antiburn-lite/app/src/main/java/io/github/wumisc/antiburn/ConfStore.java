@@ -223,6 +223,10 @@ public final class ConfStore {
         // 只要无障碍服务连着，右侧按钮列 / 顶部标题 / 底部导航就能周期变黑。
         // 已有配置缺这个键时，BurnInMaskService.Cfg 同样按 true 处理，升级即生效。
         sb.append("enable_app_overlay=1\n");
+        // v2.8.3：SystemUI 进程内的覆盖层兜底，默认开。
+        // 与 enable_app_overlay 的区别是「谁来画」：这条由已注入的 SystemUI 直接
+        // addView，不要求无障碍服务，也不要求目标 App 进程被注入。
+        sb.append("enable_sys_overlay=1\n");
         return sb.toString();
     }
 
@@ -790,19 +794,34 @@ public final class ConfStore {
      */
     private static void appendSelfCheck() {
         try {
+            // v2.8.3：App 进程读不到 /storage/emulated/0/Android/... 时（分区存储），
+            // 退回 su cat。旧版只做直读，读失败就 return，SELF 因此从未出现。
+            String all = "";
             File f = new File(LOG_FILE);
-            if (!f.exists() || f.length() == 0) {
-                return;
+            try {
+                if (f.exists() && f.length() > 0) {
+                    StringBuilder sb = new StringBuilder();
+                    try (java.io.BufferedReader br = new java.io.BufferedReader(
+                            new java.io.FileReader(f))) {
+                        String line;
+                        while ((line = br.readLine()) != null) {
+                            sb.append(line).append('\n');
+                        }
+                    }
+                    all = sb.toString();
+                }
+            } catch (Throwable ignored) {
             }
-            StringBuilder sb = new StringBuilder();
-            try (java.io.BufferedReader br = new java.io.BufferedReader(
-                    new java.io.FileReader(f))) {
-                String line;
-                while ((line = br.readLine()) != null) {
-                    sb.append(line).append('\n');
+            if (all.isEmpty()) {
+                String via = execSuCapture("cat \"" + LOG_FILE + "\" 2>/dev/null; "
+                        + "cat \"" + LOG_DIR_FALLBACK + "/antiburn.log\" 2>/dev/null");
+                if (via != null) {
+                    all = via;
                 }
             }
-            String all = sb.toString();
+            if (all.isEmpty()) {
+                return;
+            }
             int dy = occurrences(all, "INJECTED Douyin")
                     + occurrences(all, "HOOK-ATTACH pkg=com.ss.android");
             int dr = occurrences(all, "INJECTED Drama")
@@ -831,15 +850,141 @@ public final class ConfStore {
             String hint = injected
                     ? "hook=alive（各 App 真隐藏通道可用，继续看 HOOK app= 的 sw/R/T/B）"
                     : "hook=NONE（LSPosed 未注入任何视频 App 进程，真隐藏不会生效）；请开启无障碍服务，由「应用内区域兜底」接管";
+            int ovl = occurrences(all, "OVL on app=") + occurrences(all, "OVL window attached");
             String line = System.currentTimeMillis() + " [app/self] SELF ver="
                     + BuildConfig.VERSION_NAME
                     + " inject=douyin:" + dy + " drama:" + dr + " kuaishou:" + ks
                     + " bilibili:" + bi + " hookdiag:" + hdiag + " mask:" + mask
+                    + " ovl:" + ovl
                     + " app_overlay=" + (overlayOn ? 1 : 0)
-                    + " " + hint + "\n";
-            try (java.io.FileOutputStream fo = new java.io.FileOutputStream(f, true)) {
-                fo.write(line.getBytes("UTF-8"));
+                    + " " + hint;
+            appendRaw(line);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /**
+     * v2.8.3：把一行日志真正写进文件。
+     *
+     * <p>v2.8.2 的 SELF 自检为什么在真机日志里一条都没有：它用
+     * {@code new FileOutputStream(LOG_FILE, true)} 直写
+     * {@code /storage/emulated/0/Android/Prevent burn-in/antiburn.log}，
+     * App 进程没有这个目录的写权限（分区存储），异常又被 catch 吞掉，
+     * 于是「导出时追加自检」永远静默失败。这里改走 su 追加（base64 传输避免引号转义），
+     * su 不可用时才退回直写。</p>
+     */
+    private static void appendRaw(String line) {
+        if (line == null || line.isEmpty()) {
+            return;
+        }
+        String payload = android.util.Base64.encodeToString(
+                (line + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                android.util.Base64.NO_WRAP);
+        String cmd = "mkdir -p \"" + LOG_DIR + "\" \"" + LOG_DIR_FALLBACK + "\" 2>/dev/null; "
+                + "echo " + payload + " | base64 -d "
+                + "| tee -a \"" + LOG_FILE + "\" "
+                + "| tee -a \"" + LOG_DIR_FALLBACK + "/antiburn.log\" >/dev/null 2>&1; true";
+        if (execSu(cmd)) {
+            return;
+        }
+        try (java.io.FileOutputStream fo = new java.io.FileOutputStream(LOG_FILE, true)) {
+            fo.write((line + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /**
+     * v2.8.3：无障碍服务到底有没有开。
+     *
+     * <p>真机日志里连一条 {@code MASK} 都没有，说明服务从未连上 —— 但旧版日志
+     * 里没有任何字段能表达这件事，用户只能看到「兜底开关是开的、就是没反应」。
+     * 这里直接读系统设置，把结论写进日志。</p>
+     */
+    public static boolean a11yEnabled(android.content.Context ctx) {
+        try {
+            String s = android.provider.Settings.Secure.getString(
+                    ctx.getContentResolver(), "enabled_accessibility_services");
+            if (s == null || s.isEmpty()) {
+                return false;
             }
+            String cls = BurnInMaskService.class.getName();
+            return s.contains(cls) || s.contains("io.github.wumisc.antiburn");
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
+     * v2.8.3：用 root 直接把本应用的无障碍服务写进系统设置。
+     *
+     * <p>真机日志连续多版零 {@code MASK} 行，说明无障碍服务从来没连上过 ——
+     * 用户手里其实一直有 root，只是没人告诉他要另外去设置里开一个开关。
+     * 这里用 {@code settings put secure enabled_accessibility_services} 直接开，
+     * 保留列表里其它应用的服务，只追加本应用这一项，并把 accessibilty_enabled 置 1。</p>
+     *
+     * <p>只影响本应用自己的服务，不改任何第三方应用；用户随时可在系统设置里关掉。</p>
+     */
+    public static boolean enableA11yByRoot(android.content.Context ctx) {
+        try {
+            if (ctx == null || !hasRoot()) {
+                return false;
+            }
+            String comp = ctx.getPackageName() + "/" + BurnInMaskService.class.getName();
+            String cur = execSuCapture("settings get secure enabled_accessibility_services");
+            String merged = mergeA11yList(cur, comp);
+            String cmd = "settings put secure enabled_accessibility_services '" + merged + "'; "
+                    + "settings put secure accessibility_enabled 1; true";
+            boolean ok = execSu(cmd);
+            appendRaw(System.currentTimeMillis() + " [app/self] A11Y "
+                    + (ok ? "auto-enabled" : "enable FAILED")
+                    + " svc=" + comp + " list=" + merged);
+            return ok;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** 纯函数：把本应用服务并进已有的无障碍服务列表，去掉 "null" 与重复项。 */
+    static String mergeA11yList(String cur, String comp) {
+        java.util.LinkedHashSet<String> set = new java.util.LinkedHashSet<>();
+        if (cur != null) {
+            for (String p : cur.trim().split(":")) {
+                String t = p.trim();
+                if (!t.isEmpty() && !"null".equals(t)) {
+                    set.add(t);
+                }
+            }
+        }
+        set.add(comp);
+        StringBuilder sb = new StringBuilder();
+        for (String t : set) {
+            if (sb.length() > 0) {
+                sb.append(':');
+            }
+            sb.append(t);
+        }
+        return sb.toString();
+    }
+
+    /**
+     * v2.8.3：App 启动时写一次完整自检（SELF + A11Y）。
+     *
+     * <p>放在启动而不是只放在「导出日志」里，是因为用户抓日志往往直接把
+     * {@code antiburn.log} 拷走，根本不会点导出按钮，旧版的 SELF 就永远看不到。</p>
+     */
+    public static void logSelfCheck(android.content.Context ctx) {
+        try {
+            boolean a11y = a11yEnabled(ctx);
+            if (!a11y) {
+                // 有 root 就直接把服务开起来：这条通道没开，应用内兜底等于没装。
+                if (enableA11yByRoot(ctx)) {
+                    a11y = a11yEnabled(ctx);
+                }
+            }
+            appendRaw(System.currentTimeMillis() + " [app/self] A11Y enabled=" + (a11y ? 1 : 0)
+                    + " svc=" + (a11y ? "on" : "off")
+                    + (a11y ? "" : " hint=无障碍服务未开启，「应用内区域兜底」不会生效"));
+            appendSelfCheck();
         } catch (Throwable ignored) {
         }
     }

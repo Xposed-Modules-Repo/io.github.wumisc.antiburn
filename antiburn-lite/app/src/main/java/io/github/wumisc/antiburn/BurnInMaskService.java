@@ -819,26 +819,21 @@ public class BurnInMaskService extends AccessibilityService {
      * <p>这些矩形画在 TYPE_ACCESSIBILITY_OVERLAY 上，带 FLAG_NOT_TOUCHABLE，
      * 只挡住像素发光、不吃触摸，点赞/评论照样能点。</p>
      */
+    /**
+     * v2.8.3：几何计算统一交给 {@link AppRegions}。
+     *
+     * <p>v2.8.2 这份比例是写死在本类里的，而 SystemUI 那条通道（SysOverlay）
+     * 又需要同一套数字。两处各写一份的结果必然是「这个 App 有效那个无效」，
+     * 所以这里不再自己算，只做类型转换。</p>
+     */
     private java.util.List<OverlayGeometry.Rect> appRects(Cfg c) {
         java.util.List<OverlayGeometry.Rect> out = new java.util.ArrayList<>();
         if (!c.appAreaOn || c.appKind == VideoApps.Kind.NONE || screenW <= 0 || screenH <= 0) {
             return out;
         }
-        int w = screenW;
-        int h = screenH;
-        int sb = Math.max(0, statusBarH);
-        if (c.appRight) {
-            addRect(out, (int) (w * 0.84f), (int) (h * 0.28f), w, (int) (h * 0.92f));
-        }
-        if (c.appTop) {
-            addRect(out, 0, sb, w, Math.max(sb + 8, (int) (h * 0.11f)));
-        }
-        if (c.appBottom) {
-            addRect(out, 0, (int) (h * 0.90f), w, h);
-        }
-        if (c.appCorner) {
-            addRect(out, (int) (w * 0.78f), sb, w, (int) (h * 0.20f));
-            addRect(out, 0, sb, (int) (w * 0.20f), (int) (h * 0.20f));
+        int mask = AppRegions.mask(c.appRight, c.appTop, c.appBottom, c.appCorner);
+        for (int[] r : AppRegions.rects(screenW, screenH, Math.max(0, statusBarH), mask)) {
+            addRect(out, r[0], r[1], r[2], r[3]);
         }
         return out;
     }
