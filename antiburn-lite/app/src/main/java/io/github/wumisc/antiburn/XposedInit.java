@@ -277,6 +277,16 @@ public class XposedInit implements IXposedHookLoadPackage {
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) {
         String pkg = lpparam.packageName;
         String proc = lpparam.processName;
+        // v2.8.7：入口探针，必须在任何其它类之前打。
+        // 这一行是区分两种「日志里什么都没有」的唯一手段：
+        //   有 ENTER 但没 INJECTED → 模块进来了，后面某处崩了；
+        //   连 ENTER 都没有         → LSPosed 压根没加载模块（作用域 / 注入链）。
+        // 之前几版都卡在这个二义性上，只能凭猜。
+        try {
+            diagForce("ENTER pkg=" + pkg + " proc=" + proc);
+        } catch (Throwable ignored) {
+            // 连日志都写不出去时，宁可继续走主流程，也不能因为这个探针把注入挡掉
+        }
         // v2.8.0：包名识别收敛到 VideoApps 单一真源。渠道包 / 变体包
         // （真机实证：抖音 com.ss.android.ugc.aweme.mobile、B站 com.bilibili.app.in）
         // 此前被精确 equals 漏掉，LSPosed 不注入这些进程，App 内分区隐藏 100% 失效。

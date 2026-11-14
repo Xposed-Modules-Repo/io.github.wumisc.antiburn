@@ -382,6 +382,48 @@ final class LspScope {
             sb.append("结论：有 ").append(r.missing.size()).append(" 个应用没勾选，模块不会被注入，这些 App 内一定没效果。\n\n")
                     .append("处理：LSPosed → 模块 → 抗烧屏 → 作用域 → 勾选上面打 ✗ 的应用 → 保存 → 强行停止该 App 再打开。");
         }
+        String digest = lspLogDigest();
+        if (!digest.isEmpty()) {
+            sb.append("\n\n—— LSPosed 自己的日志（最近几条与本模块相关）——\n").append(digest);
+        }
         return sb.toString();
+    }
+
+    /**
+     * 从 LSPosed 自己的日志里筛出与本模块相关的最近几行。
+     *
+     * <p>作用域勾齐了却仍没有 {@code INJECTED}，问题就不在模块里，而在 LSPosed 的加载环节
+     * （框架版本与新系统不兼容、Zygisk 未生效、模块 dex 损坏等）。这些判断只有 LSPosed
+     * 自己的日志写得清楚，所以直接把它读回来，不再让用户去猜。</p>
+     */
+    private static String lspLogDigest() {
+        try {
+            String out = ConfStore.execSuCapture(
+                    "for f in /data/adb/lspd/log/modules.log /data/adb/lspd/log/verbose.log; do "
+                            + "[ -f \"$f\" ] && echo \"==$f\" && tail -600 \"$f\"; done 2>/dev/null",
+                    12_000L);
+            if (out == null || out.trim().isEmpty()) {
+                return "";
+            }
+            StringBuilder sb = new StringBuilder();
+            int kept = 0;
+            String[] lines = out.split("\n");
+            for (int i = lines.length - 1; i >= 0 && kept < 10; i--) {
+                String l = lines[i].trim();
+                if (l.isEmpty()) {
+                    continue;
+                }
+                if (!(l.contains("antiburn") || l.contains("wumisc.antiburn")
+                        || l.contains("Zygisk") || l.contains("zygisk")
+                        || l.contains("scope") || l.contains("Scope"))) {
+                    continue;
+                }
+                sb.insert(0, l + "\n");
+                kept++;
+            }
+            return sb.toString().trim();
+        } catch (Throwable t) {
+            return "";
+        }
     }
 }
