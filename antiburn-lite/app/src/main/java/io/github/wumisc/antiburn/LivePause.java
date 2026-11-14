@@ -65,9 +65,12 @@ public final class LivePause {
     }
 
     static boolean supports(String pkg) {
-        return "com.ss.android.ugc.aweme".equals(pkg)
-                || "com.phoenix.read".equals(pkg)
-                || "com.phoenix.read.oversea.gp".equals(pkg);
+        // v2.8.0：与 XposedInit / DouyinHook 共用 VideoApps 唯一真源，别再单独写一份
+        // 精确 equals。渠道包（抖音 com.ss.android.ugc.aweme.mobile）此前漏判，
+        // 该进程的直播间暂停信号根本不发。注意直播暂停只服务抖音 / 红果，
+        // 快手 / B站 走的是另一条几何分支，不在此放行。
+        VideoApps.Kind k = VideoApps.of(pkg);
+        return k == VideoApps.Kind.DOUYIN || k == VideoApps.Kind.DRAMA;
     }
 
     /** 纯函数：编码指定应用的直播状态；active=false 写时间戳 0，立即撤销。 */

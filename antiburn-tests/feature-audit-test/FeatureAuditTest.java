@@ -67,7 +67,10 @@ public class FeatureAuditTest {
      * 界面在 v2.6 就没有入口了。字段与解析键保留只为向下兼容老 conf，
      * App 侧固定写 0，不会再把「关不掉的行为」带进新版本。</p>
      */
-    private static final Set<String> KNOWN_NO_HOOK = Set.of("enableIcon", "enablePoem");
+    // v2.8.2 enableAppOverlay：消费方是 App 进程的无障碍遮盖服务（直接读 conf），
+    // 不经过 Config / Hook 进程，因此登记为「无 Hook 消费」而非死字段。
+    private static final Set<String> KNOWN_NO_HOOK =
+            Set.of("enableIcon", "enablePoem", "enableAppOverlay");
 
     private static void check(boolean cond, String name, String detail) {
         if (cond) {
@@ -93,6 +96,28 @@ public class FeatureAuditTest {
     }
 
     /** 统计匹配次数（Set 版会因匹配文本相同而去重，数量断言必须用这个）。参数是正则。 */
+    /** 版本号单调检查：避免每次升版都要改一遍测试（v2.7.6 起遗留的假红）。 */
+    private static boolean versionAtLeast(String gradle, int vc, String name) {
+        Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
+        Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
+        if (!cm.find() || !nm.find() || Integer.parseInt(cm.group(1)) < vc) {
+            return false;
+        }
+        try {
+            String[] x = nm.group(1).split("\\."), y = name.split("\\.");
+            for (int i = 0; i < Math.max(x.length, y.length); i++) {
+                int xi = i < x.length ? Integer.parseInt(x[i].trim()) : 0;
+                int yi = i < y.length ? Integer.parseInt(y[i].trim()) : 0;
+                if (xi != yi) {
+                    return xi > yi;
+                }
+            }
+            return true;
+        } catch (NumberFormatException e) {
+            return false;
+        }
+    }
+
     private static int count(String text, String regex) {
         int n = 0;
         Matcher m = Pattern.compile(regex).matcher(text);
@@ -293,34 +318,41 @@ public class FeatureAuditTest {
         }
         check(staleUiException.isEmpty(), "T-04b 无入口例外表仍然成立", "已加回入口=" + staleUiException);
 
-        // ---------- T-05 磁贴完整性 ----------
-        System.out.println("== T-05 功能磁贴 ==");
+        // ---------- T-05 开关行完整性（v2.7.8：磁贴 -> 单行列表） ----------
+        System.out.println("== T-05 功能开关行 ==");
         List<String> titles = new ArrayList<>();
-        List<String> badBind = new ArrayList<>();
-        Matcher tm = Pattern.compile(
-                "TileItem\\(\"([^\"]+)\", \"([^\"]+)\", \"([^\"]+)\", ([^\\n]+)").matcher(main);
+        Matcher tm = Pattern.compile("OptionRow\\(\"([^\"]+)\"").matcher(main);
         while (tm.find()) {
             titles.add(tm.group(1));
-            Matcher fm = Pattern.compile("state\\.(\\w+)").matcher(tm.group(4));
+        }
+        // 按 OptionRow( 分块：每块只到下一行开关之前，避免跨行误配。
+        // 字段来源两种：checked = state.X（多数）与 s.copy(X = on)（快手/B站共用子页）。
+        // 同一块内可能同时匹配到两处（既写 checked 又写 copy），先去重再计入。
+        List<String> bound = new ArrayList<>();
+        List<String> badBind = new ArrayList<>();
+        String[] optBlocks = main.split("OptionRow\\(");
+        for (int i = 1; i < optBlocks.length; i++) {
+            Set<String> inBlock = new LinkedHashSet<>();
+            Matcher fm = Pattern.compile("checked = state\\.(\\w+)|s\\.copy\\((\\w+) = on\\)")
+                    .matcher(optBlocks[i]);
             while (fm.find()) {
-                if (!fields.contains(fm.group(1))) {
-                    badBind.add(tm.group(1) + "→" + fm.group(1));
+                inBlock.add(fm.group(1) != null ? fm.group(1) : fm.group(2));
+            }
+            for (String f : inBlock) {
+                bound.add(f);
+                if (!fields.contains(f)) {
+                    badBind.add(f);
                 }
             }
         }
-        // 同名磁贴允许跨 App 出现（抖音「右上角」与红果「右上角」是两块不同开关），
-        // 真正要防的是同一个配置字段被摆成两块磁贴。
-        List<String> bound = new ArrayList<>();
-        Matcher bm = Pattern.compile(
-                "TileItem\\(\"[^\"]+\", \"[^\"]+\", \"[^\"]+\", [^\\n]*?state\\.(\\w+)").matcher(main);
-        while (bm.find()) {
-            bound.add(bm.group(1));
-        }
         Set<String> uniqBound = new LinkedHashSet<>(bound);
-        check(bound.size() == uniqBound.size(), "T-05a 同一配置字段不绑两块磁贴",
-                "绑定 " + bound.size() + " 处，去重后 " + uniqBound.size() + " · 标题 " + titles.size() + " 块");
-        check(badBind.isEmpty(), "T-05b 磁贴绑定的字段都真实存在", "错绑=" + badBind);
-        check(titles.size() >= 10, "T-05c 磁贴数量未异常减少", "共 " + titles.size() + " 块");
+        check(bound.size() == uniqBound.size(), "T-05a 同一配置字段不绑两行开关",
+                "绑定 " + bound.size() + " 处，去重后 " + uniqBound.size() + " · 标题 " + titles.size() + " 行");
+        check(badBind.isEmpty(), "T-05b 开关行绑定的字段都真实存在", "错绑=" + badBind);
+        check(titles.size() >= 20, "T-05c 开关行数量未异常减少", "共 " + titles.size() + " 行");
+        check(!stripComments(main).contains("TileItem")
+                        && !stripComments(main).contains("TileGrid"),
+                "T-05d 旧磁贴组件已删除（六参 + 尾随 lambda 误绑隐患连根拔掉）", "");
 
         // ---------- T-06 页面结构与二级路由 ----------
         System.out.println("== T-06 页面与二级路由 ==");
@@ -357,11 +389,11 @@ public class FeatureAuditTest {
 
         // ---------- T-07 首页关键入口仍在 ----------
         System.out.println("== T-07 首页入口 ==");
-        String features = slice(main, "private fun FeaturesPage", "private fun TileGrid");
-        check(features.contains("\"周期时长\", \"时\""),
-                "T-07a 周期时长入口在功能区通用磁贴（不在首页）", "");
-        check(!main.contains("ListRow(\"周期时长\""),
-                "T-07c 首页不再有周期时长第二处入口", "");
+        String features = slice(main, "private fun FeaturesPage", "private fun AboutPage");
+        check(features.contains("ListRow(\"周期时长\"") && main.contains("CycleDialog("),
+                "T-07a 周期时长入口在「通用」二级页 + 弹窗小窗（不在首页）", "");
+        check(count(main, "ListRow\\(\"周期时长\"") == 1,
+                "T-07c 周期时长全 App 只有 1 处入口", "出现=" + count(main, "ListRow\\(\"周期时长\""));
         check(count(main, "ListModeChips\\(") == 2,
                 "T-07b 名单卡片全局只有 1 处调用（1 定义 + 1 调用）", "");
 
@@ -409,18 +441,17 @@ public class FeatureAuditTest {
         // 前者是 TileItem 的尾随 lambda 被绑到 navClick（最后一个参数），
         // onToggle 成了空实现、isEntry 恒真、右上角永远是「›」；
         // 后者是状态栏没有独立开关，总闸一开必然连同导航栏一起隐藏。
-        System.out.println("== T-10 磁贴参数顺序 / 状态栏独立开关 ==");
-        int onClick = main.indexOf("val onToggle: (Boolean) -> Unit");
-        int onNav = main.indexOf("val navClick: (() -> Unit)?");
-        check(onClick > 0 && onNav > 0 && onNav < onClick,
-                "T-10a onToggle 是 TileItem 最后一个参数（尾随 lambda 才能绑对）",
-                "navClick@" + onNav + " onToggle@" + onClick);
-        check(count(main, "navClick = \\{") == 1,
-                "T-10b 只有 1 处显式命名参数的入口磁贴（周期时长），其余开关不得误用入口",
-                "出现=" + count(main, "navClick = \\{"));
+        System.out.println("== T-10 开关行参数安全 / 状态栏独立开关 ==");
+        check(main.contains("private fun OptionRow(")
+                        && main.contains("onCheckedChange: (Boolean) -> Unit"),
+                "T-10a 开关行用显式命名参数 onCheckedChange（无尾随 lambda 误绑空间）", "");
+        check(!stripComments(main).contains("TileItem")
+                        && !stripComments(main).contains("navClick")
+                        && !stripComments(main).contains("TileGrid"),
+                "T-10b 六参磁贴数据类 / navClick / TileGrid 已从代码层移除", "");
         check(main.contains("val enableStatusBar: Boolean = true"),
                 "T-10c AbState 新字段默认 true（老配置升级行为不变）", "");
-        check(main.contains("TileItem(\"状态栏\""), "T-10d 通用页有「状态栏」磁贴", "");
+        check(main.contains("OptionRow(\"状态栏\""), "T-10d 通用二级页有「状态栏」开关行", "");
         check(config.contains("case \"enable_status_bar\""), "T-10e Config 解析 enable_status_bar", "");
         check(config.contains("public static volatile boolean enableStatusBar = true"),
                 "T-10f Hook 侧字段默认 true（老配置缺失键行为不变）", "");
@@ -469,7 +500,7 @@ public class FeatureAuditTest {
                 "T-12h 适配计划卡片 1 定义 + 1 调用", "");
         check(main.contains("快手") && main.contains("哔哩哔哩") && main.contains("已支持"),
                 "T-12i 说明卡点名快手/B站且写明已支持", "");
-        check(main.contains("切到「快手」「B站」子页开启对应开关")
+        check(main.contains("点开「快手」「B站」逐项开启对应开关")
                         && !stripComments(main).contains("不提供开关"),
                 "T-12j 说明卡引导到真实子页（不再是「不提供开关」占位）", "");
         check(!main.contains("LSPosed + root 环境") && main.contains("免 root 无障碍两种运行方式"),
@@ -502,7 +533,7 @@ public class FeatureAuditTest {
                 "T-13h 排除视频画面容器（不黑屏）", "");
         check(douyin.contains("if (isDrama)") && douyin.contains("collectSwipeHintNode"),
                 "T-13i 只在红果进程收集，不影响抖音", "");
-        check(main.contains("TileItem(\"左滑查看详情\", \"滑\""),
+        check(main.contains("OptionRow(\"左滑查看详情\""),
                 "T-13j 红果页有该开关磁贴", "");
         check(main.contains("state.enableDramaSwipe"),
                 "T-13k 磁贴绑定真实字段（用户看得见开/关）", "");
@@ -526,16 +557,22 @@ public class FeatureAuditTest {
         String scopeCode = stripComments(scope);
         String douyinCode = stripComments(douyin);   // douyin 由 T-13 读入
 
-        // 作用域沿用 Step 1 结论：两个日志确认过的主包，恰好 6 项，变体只登记不启用
+        // v2.8.0：真机日志实证用户 OPPO ColorOS 装的是抖音 .mobile / B站 com.bilibili.app.in，
+        // 旧的「精确 6 项主包 + 变体不启用」会直接导致这两个进程不注入、App 内隐藏 100% 失效。
+        // 断言改为验证「主包仍在 + 真机实证渠道包已启用」。
         check(scope.contains("<item>com.smile.gifmaker</item>")
-                        && scope.contains("<item>tv.danmaku.bili</item>"),
-                "T-14a 作用域含两个日志确认过的主包", "");
-        check(countLiteral(scope, "<item>") == 6,
-                "T-14b 作用域恰好 6 项", "item 数=" + countLiteral(scope, "<item>"));
-        check(!scopeCode.contains("<item>com.kuaishou")
-                        && !scopeCode.contains("<item>com.bilibili")
-                        && !scopeCode.contains("<item>tv.danmaku.bilibilihd"),
-                "T-14c 变体包仍未启用", "");
+                        && scope.contains("<item>tv.danmaku.bili</item>")
+                        && scope.contains("<item>com.ss.android.ugc.aweme</item>")
+                        && scope.contains("<item>com.phoenix.read</item>"),
+                "T-14a 作用域含四个主包", "");
+        check(scopeCode.contains("<item>com.ss.android.ugc.aweme.mobile</item>")
+                        && scopeCode.contains("<item>com.bilibili.app.in</item>"),
+                "T-14b 真机实证的两个渠道包已进入作用域（否则 LSPosed 不注入）", "");
+        check(scopeCode.contains("<item>com.ss.android.ugc.aweme.lite</item>")
+                        && scopeCode.contains("<item>com.kuaishou.nebula</item>")
+                        && scopeCode.contains("<item>tv.danmaku.bilibilihd</item>")
+                        && scopeCode.contains("<item>com.bilibili.app.blue</item>"),
+                "T-14c 常见变体（极速版/HD/概念版）一并登记，供用户勾选", "");
 
         // 分发：抖音/红果/快手/B站 四路都进 DouyinHook（真隐藏），快手/B站 另保留诊断探针
         check(countLiteral(xposedCode, "DouyinHook.init(lpparam)") == 4,
@@ -546,8 +583,9 @@ public class FeatureAuditTest {
         check(xposed.contains("INJECTED Kuaishou") && xposed.contains("INJECTED Bilibili")
                         && xposed.contains("stage=2 hide-ready"),
                 "T-14f 新分发出注入日志并标明已接入隐藏", "");
-        String ksBlock = slice(xposedCode, "\"com.smile.gifmaker\".equals(pkg)", "tv.danmaku.bili");
-        String biliBlock = slice(xposedCode, "\"tv.danmaku.bili\".equals(pkg)", "\n    }\n}");
+        // v2.8.0：分发改用 VideoApps.Kind 单一真源，不再精确 equals 包名
+        String ksBlock = slice(xposedCode, "kind == VideoApps.Kind.KUAISHOU", "kind == VideoApps.Kind.BILIBILI");
+        String biliBlock = slice(xposedCode, "kind == VideoApps.Kind.BILIBILI", "\n    }\n}");
         check(ksBlock.contains("DouyinHook.init") && ksBlock.contains("VideoAppProbe.init")
                         && !ksBlock.contains("Controller.init"),
                 "T-14g 快手分支真隐藏 + 诊断并存，且不动 SystemUI 逻辑", "");
@@ -603,11 +641,13 @@ public class FeatureAuditTest {
         check(main.contains("private fun VideoAppSubPage(") && countLiteral(main, "VideoAppSubPage(") == 3,
                 "T-14q 功能页有快手/B站独立子页（1 定义 + 2 调用）",
                 "次数=" + countLiteral(main, "VideoAppSubPage("));
-        check(main.contains("\"通用\", \"抖音\", \"红果\", \"快手\", \"B站\""),
-                "T-14r 子页 tab 扩到 5 个（快手/B站 可进入）", "");
+        check(main.contains("\"feat-general\"") && main.contains("\"feat-douyin\"")
+                        && main.contains("\"feat-drama\"") && main.contains("\"feat-kuaishou\"")
+                        && main.contains("\"feat-bilibili\""),
+                "T-14r 五个功能分类各有一个二级菜单路由（通用/抖音/红果/快手/B站）", "");
         check(main.contains("val overlay = state.isOverlay") && main.contains("enabled = !overlay"),
                 "T-14s overlay 引擎下整页磁贴置灰（不放假开关）", "");
-        check(main.contains("快手、哔哩哔哩已支持") && main.contains("切到「快手」「B站」子页"),
+        check(main.contains("快手、哔哩哔哩已支持") && main.contains("点开「快手」「B站」逐项开启"),
                 "T-14t 说明卡改为「已支持 + 引导子页」，不再是占位", "");
 
         // 探针仍只读（隐藏由 DouyinHook 负责），沿用 Step 1 的零隐藏边界
@@ -620,8 +660,8 @@ public class FeatureAuditTest {
                 "T-14w 全链路异常兜底，异常不冒到宿主主线程",
                 "catch 数=" + countLiteral(probeCode, "catch (Throwable"));
 
-        check(gradle.contains("versionCode 38") && gradle.contains("versionName \"2.7.5\""),
-                "T-14x 版本号升到 vc38 / 2.7.5", "");
+        check(versionAtLeast(gradle, 38, "2.7.5"),
+                "T-14x 版本号不低于 vc38 / 2.7.5（单调升，升版无需改测试）", "");
         check(manifest.contains("xposedscope") && manifest.contains("快手、哔哩哔哩各区域"),
                 "T-14y 模块描述如实写明已支持快手/B站", "");
 
@@ -649,8 +689,8 @@ public class FeatureAuditTest {
                 "T-15i 加号归入底部开关，关掉立即恢复", "");
         check(countLiteral(douyinCode, "videoLivePage = isLiveTextPage(root, 0)") == 1,
                 "T-15j 直播判定只在 rescan 提交一次", "");
-        check(gradle.contains("versionCode 38") && gradle.contains("versionName \"2.7.5\""),
-                "T-15k 版本号升到 vc38 / 2.7.5", "");
+        check(versionAtLeast(gradle, 38, "2.7.5"),
+                "T-15k 版本号不低于 vc38 / 2.7.5（单调升，升版无需改测试）", "");
 
         // ---------- T-16 v2.7.0 正式版 ----------
         System.out.println("== T-16 v2.7.0 正式版 ==");
@@ -704,8 +744,8 @@ public class FeatureAuditTest {
             hookPriority &= config.contains("!presentKeys.contains(\"" + key + "\")");
         }
         check(hookPriority, "T-17e Hook 八个独立键存在时均忽略旧共用键", "");
-        check(gradle.contains("versionCode 38") && gradle.contains("versionName \"2.7.5\""),
-                "T-17f 版本号升到 vc38 / 2.7.5", "");
+        check(versionAtLeast(gradle, 38, "2.7.5"),
+                "T-17f 版本号不低于 vc38 / 2.7.5（单调升，升版无需改测试）", "");
 
         // ---------- T-18 v2.7.2 快手右侧列 / 角落按钮 / 直播全暂停 ----------
         System.out.println("== T-18 v2.7.2 快手右侧列 / 角落按钮 / 直播全暂停 ==");
@@ -772,8 +812,8 @@ public class FeatureAuditTest {
                 "T-18r 暂停信号 15 秒过期（宿主异常退出不会永久停摆）", "");
         check(!liveCode.contains("AbConf") && !liveCode.contains("Config.enable"),
                 "T-18s 暂停状态不写入用户配置（退出直播后原开关自然继续）", "");
-        check(gradle.contains("versionCode 38") && gradle.contains("versionName \"2.7.5\""),
-                "T-18t 版本号升到 vc38 / 2.7.5", "");
+        check(versionAtLeast(gradle, 38, "2.7.5"),
+                "T-18t 版本号不低于 vc38 / 2.7.5（单调升，升版无需改测试）", "");
 
         // ---------- T-19 v2.7.3 周期循环永不因异常停摆 ----------
         // 真机现象：抖音进直播间正常暂停，退出后 App 内隐藏全部失效且不再恢复。
@@ -924,8 +964,9 @@ public class FeatureAuditTest {
                 "T-22m 遮盖步进 200ms → 1000ms", "");
         check(maskCode.contains("IDLE_TICK_MS = 5000L") && maskCode.contains("private long step()"),
                 "T-22n 空转 5 秒，step 返回下一帧间隔", "");
-        check(maskCode.contains("boolean mayDraw") && maskCode.contains("} else if (windowAttached) {"),
-                "T-22o 不需要画时不保留全屏覆盖层", "");
+        check(maskCode.contains("boolean mayDraw")
+                        && maskCode.contains("} else if (windowAttached && now - lastMayDrawAt >= DETACH_HYSTERESIS_MS) {"),
+                "T-22o 不需要画时滞回 3 秒再撤窗（不保留全屏覆盖层，也不秒级增删）", "");
         check(maskCode.contains("private static boolean same(OverlayGeometry.Rect a"),
                 "T-22p 遮盖矩形没变就不重绘", "");
         check(maskCode.contains("s.handler.removeCallbacks(s.tick)"),
@@ -938,6 +979,201 @@ public class FeatureAuditTest {
                 "T-22u 文件通道读不到时退避 15 秒（不再每轮 stat）", "");
         check(ctrlCode.contains("if (!hidden) {\n                    PixelShift.tick();"),
                 "T-22t 系统栏已透明时跳过像素位移", "");
+
+        // ---------- T-23 v2.7.8 功能页列表化 / 功能建议二级页 ----------
+        System.out.println("== T-23 列表化与功能建议 ==");
+        String mainCode = stripComments(main);
+        check(mainCode.contains("private fun FeaturesPage(")
+                        && mainCode.contains("onOpen: (String) -> Unit"),
+                "T-23a 功能页改为路由式列表（点行进二级菜单）", "");
+        check(count(main, "onOpen\\(\"feat-") == 5,
+                "T-23b 功能页 5 个分组入口", "出现=" + count(main, "onOpen\\(\"feat-"));
+        check(count(main, "\"feat-[\\w-]+\" -> \\w+Page\\(") == 5,
+                "T-23c 五个分组都有落地页（不会点出白屏）",
+                "落地=" + count(main, "\"feat-[\\w-]+\" -> \\w+Page\\("));
+        check(main.contains("ListRow(\"功能建议\"")
+                        && main.contains("\"suggest\" -> \"功能建议\"")
+                        && main.contains("\"suggest\" -> SuggestPage("),
+                "T-23d 关于页新增「功能建议」入口 / 标题 / 落地页", "");
+        check(main.contains("PROJECT_ISSUES_URL") && main.contains("/issues/new"),
+                "T-23e GitHub 提交按钮指向新建 Issue 页", "");
+        check(main.contains("appendQueryParameter(\"title\", \"[功能建议] \")")
+                        && main.contains("模块版本：") && main.contains("onOpenUrl(url)"),
+                "T-23f 按钮预填标题标签与正文模板（含模块版本）", "");
+        check(main.contains("前往 GitHub 提交建议") && main.contains("Button("),
+                "T-23g 建议页有可见的提交按钮", "");
+        check(count(main, "OverlayNotice\\(dark, ") == 3,
+                "T-23h 抖音/红果/快手B站三处都有遮盖引擎能力提示",
+                "出现=" + count(main, "OverlayNotice\\(dark, "));
+        check(count(main, "enabled = !overlay") >= 15,
+                "T-23i App 内控件开关在遮盖引擎下统一置灰（不再放假开关）",
+                "置灰=" + count(main, "enabled = !overlay"));
+        check(main.contains("if (page.startsWith(\"feat-\")) saveBar()"),
+                "T-23j 功能二级页带保存状态反馈", "");
+        check(main.contains("BackHandler(enabled = subPage != null)"),
+                "T-23k 系统返回键先回二级页（含新增页）", "");
+        check(!mainCode.contains("featurePage"),
+                "T-23l 旧横向 tab 状态已删除（不再与 Pager 抢滑动手势）", "");
+
+        // ---------- T-24 v2.7.9 ColorOS 15 视图识别 / 遮盖落盘（真机日志实锤） ----------
+        System.out.println("== T-24 ColorOS 15 视图识别修复 ==");
+        String ctrl279 = stripComments(controller);
+        check(ctrl279.contains("findStatusBarContainer(View v)")
+                        && ctrl279.contains("v.getRootView()"),
+                "T-24a 状态栏容器从整棵窗口树按根查找（不再只查图标自己）", "");
+        check(!ctrl279.contains("bar = v;"),
+                "T-24b 删除「退化用 attach 的 View 本身」——抓单个图标的根因", "");
+        check(ctrl279.contains("isIconLike(View v)")
+                        && ctrl279.contains("\"Bindable\"") && ctrl279.contains("\"Icon\""),
+                "T-24c 图标 / 绑定项类名显式排除（SingleBindableStatusBarIconView）", "");
+        check(ctrl279.contains("isPlausibleStatusBar(View v)")
+                        && ctrl279.contains("getWidth()") && ctrl279.contains("widthPixels"),
+                "T-24d statusView 合格性用几何判据（不靠类名误杀合法容器）", "");
+        check(ctrl279.contains("BAD STATUS VIEW"),
+                "T-24e 抓错对象可自愈丢弃重抓（旧引用是图标时不再空转一整晚）", "");
+        check(ctrl279.contains("findBarByGeometry(View root)"),
+                "T-24f 厂商把 id 全改名时按几何兜底找横贯全屏的状态栏", "");
+        check(ctrl279.contains("svok="),
+                "T-24g 诊断行带 statusView 合格标记（sv= 之外再给一个判定）", "");
+        check(!ctrl279.contains("\"system_icons\"")
+                        && !ctrl279.contains("\"status_bar_start_side\""),
+                "T-24h 候选 id 不含局部区域（避免只抓半条栏继续烧时钟）", "");
+        check(ctrl279.contains("findStatusBarContainer(root)"),
+                "T-24i 窗口重扫不再靠类名猜，改用容器查找", "");
+
+        String mask279 = stripComments(mask);
+        check(mask279.contains("maskDiag(") && mask279.contains("ConfStore.LOG_FILE"),
+                "T-24j 遮盖引擎状态写入用户可导出的 antiburn.log（消除排障盲区）", "");
+        check(mask279.contains("\"connected\"") && mask279.contains("window FAILED")
+                        && mask279.contains("\"teardown\""),
+                "T-24k 服务连接 / 覆盖层被系统拒 / 销毁三节点都落盘", "");
+        check(mask279.contains("mayDraw=") && mask279.contains("hit=")
+                        && mask279.contains("fg=") && mask279.contains("eng="),
+                "T-24l 一条日志说清遮盖为何没生效（名单/引擎/前台/总闸逐项）", "");
+        check(mask279.contains("lastMaskSig") && mask279.contains("30000L"),
+                "T-24m 状态签名 + 30s 心跳节流，不每帧写盘", "");
+        check(versionAtLeast(gradle, 42, "2.7.9"),
+                "T-24n 版本号 vc42 / 2.7.9", "");
+
+        // ---------- T-25 v2.8.0 变体包名适配 + 视频进程诊断落盘 ----------
+        System.out.println("== T-25 v2.8.0 变体适配 / 应用内链路可观测 ==");
+        String vapps = read(dir.resolve("VideoApps.java"));
+        String vappsC = stripComments(vapps);
+        String xposedC = stripComments(xposed);
+        String dyC = stripComments(douyin);
+        check(vappsC.contains("enum Kind") && vappsC.contains("NONE, DOUYIN, DRAMA, KUAISHOU, BILIBILI"),
+                "T-25a VideoApps 单一真源定义四类目标应用", "");
+        check(vappsC.contains("startsWith(\"com.ss.android.ugc.aweme\")")
+                        && vappsC.contains("startsWith(\"com.bilibili.app.\")")
+                        && vappsC.contains("startsWith(\"com.phoenix.read\")")
+                        && vappsC.contains("startsWith(\"com.smile.gifmaker\")"),
+                "T-25b 前缀匹配覆盖渠道包/极速版/HD/概念版（.mobile、com.bilibili.app.in）", "");
+        check(vappsC.contains("static String label(Kind k)") && vappsC.contains("return \"douyin\"")
+                        && vappsC.contains("return \"bilibili\""),
+                "T-25c label() 供诊断/探针复用，避免各处再硬编码字符串", "");
+        // 分发处与 Hook 处共用同一真源，不再各自精确 equals
+        check(xposedC.contains("VideoApps.Kind kind = VideoApps.of(pkg)"),
+                "T-25d XposedInit 分发改用 VideoApps.of 单一真源", "");
+        check(countLiteral(xposedC, "kind == VideoApps.Kind.") == 4,
+                "T-25e 四类应用各一路分发", "次数=" + countLiteral(xposedC, "kind == VideoApps.Kind."));
+        check(!xposedC.contains("\"com.ss.android.ugc.aweme\".equals(pkg)")
+                        && !xposedC.contains("\"tv.danmaku.bili\".equals(pkg)"),
+                "T-25f 分发处已无精确 equals 包名（变体不再被漏掉）", "");
+        check(dyC.contains("VideoApps.Kind kind = VideoApps.of(lpparam.packageName)")
+                        && dyC.contains("isBilibili = kind == VideoApps.Kind.BILIBILI")
+                        && dyC.contains("isVideoApp = isKuaishou || isBilibili"),
+                "T-25g DouyinHook 用同一真源判定，B站变体不再掉进抖音分支", "");
+        // 视频进程诊断无条件落盘（消除前几轮排障盲区）
+        check(xposedC.contains("write(s, true)") && xposedC.contains("write(s, false)")
+                        && xposedC.contains("if (force || now - lastSuWrite > SU_WRITE_INTERVAL_MS)"),
+                "T-25h diagForce 跳过 su 10s 节流，注入日志不再被吞", "");
+        check(dyC.contains("XposedInit.diagForce(\"HOOK-ATTACH pkg=\"")
+                        && dyC.contains("XposedInit.diagForce(\"HOOK\" + sig)"),
+                "T-25i 视频进程注入 + 周期状态都无条件落盘", "");
+        check(dyC.contains("hookDiag();") && dyC.contains("now - lastHookDiagAt < 30_000L"),
+                "T-25j HOOK 状态签名 + 30s 心跳节流，不刷屏", "");
+        check(dyC.contains("Config.shouldIntervene(selfPkg)") && dyC.contains("eng=\" + Config.engine")
+                        && dyC.contains("\" hid=\"") && dyC.contains("rightList.size()"),
+                "T-25k 一条 HOOK 日志说清 引擎/名单/开关/几何命中数/隐藏相位", "");
+        check(xposedC.contains("\" pkg=\" + pkg"),
+                "T-25l 注入日志带真实包名，可直接核对渠道包是否命中", "");
+        check(versionAtLeast(gradle, 43, "2.8.0"),
+                "T-25m 版本号 vc43 / 2.8.0", "");
+        String livePauseC = stripComments(read(dir.resolve("LivePause.java")));
+        check(livePauseC.contains("VideoApps.Kind k = VideoApps.of(pkg)")
+                        && livePauseC.contains("k == VideoApps.Kind.DOUYIN || k == VideoApps.Kind.DRAMA"),
+                "T-25n LivePause 直播暂停也复用单一真源，且只放行抖音/红果（不误扩快手/B站）", "");
+
+        // ---------- T-26 v2.8.1 无障碍服务崩溃修复（真机日志断流实锤） ----------
+        System.out.println("== T-26 无障碍服务稳定性 / 崩溃可观测 ==");
+        String svc281 = stripComments(read(dir.resolve("BurnInMaskService.java")));
+        String app281 = stripComments(read(dir.resolve("AbApplication.java")));
+
+        check(svc281.contains("suIo.execute(") && svc281.contains("suPending.compareAndSet")
+                        && svc281.contains("if (!ok && "),
+                "T-26a 日志直写失败时 su 兜底改后台单线程，主线程零阻塞", "");
+        check(svc281.contains("ConfStore.ensureMirror()") && !svc281.contains("String text = ConfStore.read();"),
+                "T-26b config() 读盘改 ensureMirror，不再在主线程 tick 触发 su", "");
+        int cbGuard = 0;
+        for (String w : new String[]{"onServiceConnected", "onAccessibilityEvent",
+                "onConfigurationChanged", "onUnbind", "onDestroy", "step", "tick.postDelayed"}) {
+            if (svc281.contains("reportCallbackCrash(\"" + w + "\"")) {
+                cbGuard++;
+            }
+        }
+        check(cbGuard == 7 && svc281.contains("private static void reportCallbackCrash(String where, Throwable t)"),
+                "T-26c 六个生命周期回调 + step/postDelayed 全部异常兜底并落盘", "guard=" + cbGuard);
+        check(svc281.contains("DETACH_HYSTERESIS_MS = 3000L") && svc281.contains("lastMayDrawAt = now")
+                        && svc281.contains("lastMayDrawAt = 0L"),
+                "T-26d 窗口增删滞回 3 秒，消除 ColorOS 高频 add/removeViewImmediate", "");
+        check(svc281.contains("\" eng=\" + c.engineName") && svc281.contains("c.engineName = v"),
+                "T-26e 诊断打印真实引擎值（不再把 lsposed 显示成 other）", "");
+        check(app281.contains("Thread.setDefaultUncaughtExceptionHandler")
+                        && app281.contains("FATAL thread=") && app281.contains("Caused by: "),
+                "T-26f 全局 UEH 把崩溃与 Caused by 完整堆栈写进可导出日志", "");
+        check(app281.contains("pending_crash.log") && app281.contains("CRASH-REPLAY"),
+                "T-26g 崩溃另存应用内部目录，下次启动回放到主日志（目录不可写也不丢）", "");
+        check(app281.contains("prev.uncaughtException(thread, ex)"),
+                "T-26h 崩溃交回系统默认处理，不吞异常导致僵死 ANR", "");
+        check(versionAtLeast(gradle, 44, "2.8.1"),
+                "T-26i 版本号 vc44 / 2.8.1", "");
+
+
+        // ---------- T-27 v2.8.2 稳定版：应用内区域兜底 + 日志自检 ----------
+        System.out.println("== T-27 v2.8.2 应用内区域兜底 / 日志自检 ==");
+        String mask282 = read(dir.resolve("BurnInMaskService.java"));
+        String conf282 = read(dir.resolve("ConfStore.java"));
+        String xp282 = read(dir.resolve("XposedInit.java"));
+        String cfg282 = read(dir.resolve("Config.java"));
+        String prov282 = read(dir.resolve("ConfigProvider.java"));
+        check(conf282.contains("enable_app_overlay=1") && main.contains("enable_app_overlay")
+                        && mask282.contains("enable_app_overlay"),
+                "T-27a 应用内区域兜底默认开，配置/UI/遮盖服务三处键一致", "");
+        check(mask282.contains("resolveApp(c, foregroundPkg)") && mask282.contains("VideoApps.of(fgPkg)"),
+                "T-27b 按前台包名识别目标 App，不注入目标进程也能画", "");
+        check(mask282.contains("boolean sysBar =") && mask282.contains("boolean appArea =")
+                        && mask282.contains("(sysBar || appArea)"),
+                "T-27c 系统栏与应用内区域分开判，LSPosed 引擎下兜底仍生效", "");
+        check(mask282.contains("private java.util.List<OverlayGeometry.Rect> appRects(Cfg c)")
+                        && mask282.contains("canvas.drawRect(r.left"),
+                "T-27d 应用内矩形按右侧列/顶部/底部/角落计算并绘制", "");
+        check(mask282.contains("FLAG_NOT_TOUCHABLE"),
+                "T-27e 覆盖层不吃触摸，点赞评论照常可点", "");
+        check(conf282.contains("appendSelfCheck()") && conf282.contains("SELF ver="),
+                "T-27f 导出日志追加 SELF 注入自检汇总", "");
+        check(conf282.contains("hook=NONE") && conf282.contains("INJECTED Douyin"),
+                "T-27g SELF 能明确给出「LSPosed 未注入」结论", "");
+        check(xp282.contains("SCOPE ver=") && xp282.contains("providerLog(line)"),
+                "T-27h 注入时写 SCOPE 提示，su 失败时经 Provider 回传日志", "");
+        check(prov282.contains("METHOD_PUT_LOG") && prov282.contains("appendLog(line)"),
+                "T-27i ConfigProvider 提供带 token 校验的日志代写通道", "");
+        check(cfg282.contains("dsw=") && cfg282.contains("ks=") && cfg282.contains("bi="),
+                "T-27j CONF apply 补齐各 App 分区开关位串", "");
+        check(mask282.contains("\" app=\"") && mask282.contains("areas=")
+                        && mask282.contains("fallback="),
+                "T-27l MASK 诊断行输出前台 App、区域位与兜底状态", "");
+        check(versionAtLeast(gradle, 45, "2.8.2"),
+                "T-27k 版本号升到 vc45 / 2.8.2", "");
 
         System.out.println();
         System.out.println("结果：" + pass + " 通过 / " + fail + " 失败");

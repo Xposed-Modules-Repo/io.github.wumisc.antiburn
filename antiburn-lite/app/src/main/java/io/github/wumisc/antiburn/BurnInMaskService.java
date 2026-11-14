@@ -105,6 +105,107 @@ public class BurnInMaskService extends AccessibilityService {
      * 引入这些约束不值得。静态字段直达，服务没连上时界面直接读
      * {@link #connected} 就知道该不该让按钮可点。</p>
      */
+    /**
+     * v2.7.9：把遮盖引擎状态写进用户能导出的 antiburn.log。
+     *
+     * <p>旧版遮盖服务的所有结论只走 {@link Log#i}（logcat），而用户导出的
+     * antiburn.log 是 Xposed 侧写的，里面一条遮盖记录都没有 —— 「切到
+     * 无障碍遮盖也没反应」根本无从判断是「服务没连上」「覆盖层被系统拒绝」
+     * 还是「黑名单模式下当前 app 本来就不该遮盖」。这里低频补上，
+     * 直写共享目录，失败再借 su 兜底，全程 try/catch，绝不影响遮盖主逻辑。</p>
+     */
+    private static volatile long lastMaskDiagAt = 0L;
+    private static volatile String lastMaskSig = "";
+
+    /**
+     * v2.8.1：su 兜底必须离开主线程。
+     *
+     * <p>ConfStore.execSu 内部 waitFor 最长 4 秒，root 授权弹窗还可能更久。而
+     * maskDiagForce("connected") 正好在 onServiceConnected 主线程 —— 直写日志一旦
+     * 失败（分区存储 / 目录被回收），一次 su 就把主线程卡住，系统随即判 ANR，
+     * 表现为「无障碍服务崩溃、开关被自动关掉」。改为后台单线程串行执行，
+     * 同一时刻只允许一个 su 任务，既不阻塞也不堆积。</p>
+     */
+    private static final java.util.concurrent.ExecutorService suIo =
+            java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+                Thread t = new Thread(r, "antiburn-mask-log");
+                t.setDaemon(true);
+                return t;
+            });
+    private static final java.util.concurrent.atomic.AtomicBoolean suPending =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+
+    private static void maskDiag(String s) {
+        maskDiag(s, false);
+    }
+
+    private static void maskDiagForce(String s) {
+        maskDiag(s, true);
+    }
+
+    private static void maskDiag(String s, boolean force) {
+        long now = System.currentTimeMillis();
+        if (!force) {
+            if (s.equals(lastMaskSig) && now - lastMaskDiagAt < 30000L) {
+                return; // 状态没变：30 秒一条心跳，避免每帧写盘
+            }
+        }
+        lastMaskSig = s;
+        lastMaskDiagAt = now;
+        String line = now + " [mask/" + android.os.Process.myPid() + "] MASK " + s + "\n";
+        boolean ok = false;
+        try {
+            java.io.File f = new java.io.File(ConfStore.LOG_FILE);
+            java.io.File parent = f.getParentFile();
+            if (parent != null && (parent.exists() || parent.mkdirs())) {
+                try (java.io.FileOutputStream fo = new java.io.FileOutputStream(f, true)) {
+                    fo.write(line.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                }
+                ok = true;
+            }
+        } catch (Throwable ignored) {
+        }
+        if (!ok && suPending.compareAndSet(false, true)) {
+            // v2.8.1：分区存储 / 目录权限不足时借 root 补一条，但只在后台跑。
+            try {
+                final String b64 = android.util.Base64.encodeToString(
+                        line.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                        android.util.Base64.NO_WRAP);
+                suIo.execute(() -> {
+                    try {
+                        ConfStore.execSu("echo " + b64 + " | base64 -d >> \""
+                                + ConfStore.LOG_FILE + "\" 2>/dev/null; true");
+                    } catch (Throwable ignored) {
+                    } finally {
+                        suPending.set(false);
+                    }
+                });
+            } catch (Throwable t) {
+                suPending.set(false);
+            }
+        }
+        Log.i(TAG, "MASK " + s);
+    }
+
+    /**
+     * v2.8.1：无障碍服务的回调异常绝不能冒到系统框架。
+     *
+     * <p>AccessibilityService 的 onServiceConnected / onAccessibilityEvent 等回调由
+     * framework 跨进程调用，任何未捕获异常都会被系统记为「无障碍服务崩溃」，
+     * 随即断开绑定、把开关自动关掉 —— 这正是用户看到的「无障碍崩溃」。
+     * 这里兜住异常并写进可导出的 antiburn.log（带堆栈），下次导日志即可定位。</p>
+     */
+    private static void reportCallbackCrash(String where, Throwable t) {
+        try {
+            String stack = android.util.Log.getStackTraceString(t).replace('\n', '|');
+            Log.e(TAG, "callback crash @" + where, t);
+            // 非 force：状态签名节流，避免 step 每帧抛异常时刷屏写盘
+            maskDiag("CRASH " + where + " " + t.getClass().getName()
+                    + (t.getMessage() == null ? "" : ": " + t.getMessage()) + " | " + stack);
+        } catch (Throwable ignored) {
+        }
+    }
+
     private static volatile long previewUntil = 0L;
 
     /** 服务实例引用：预览要把周期从「等待下一帧」提前到「立刻画一帧」。 */
@@ -154,55 +255,160 @@ public class BurnInMaskService extends AccessibilityService {
          * 再被这里盖一条黑边，比任何单套都难看。</p>
          */
         boolean maskAllowed = false;
+        /** 配置里的引擎原文，落盘诊断用（v2.8.1：别再把 lsposed 显示成 other） */
+        String engineName = "?";
         String mode = ConfStore.MODE_WHITE;
         Set<String> list = new HashSet<>();
         int hideSec = 30;
         int showSec = 10;
+        /**
+         * v2.8.2 稳定版：应用内固定区域兜底遮盖总开关（enable_app_overlay，默认开）。
+         *
+         * <p>真机日志实证：模块只被 LSPosed 注入 SystemUI，抖音 / 快手 / B站 进程
+         * 连一条 INJECTED / HOOK-ATTACH 都没有，DouyinHook 整个跑不到，App 内分区
+         * 隐藏 100% 失效。这条通道不注入目标进程、不需要 root，由无障碍覆盖层在
+         * App 自身进程按屏幕比例画黑固定 UI 区域，与引擎选择无关：
+         *  - eng=overlay：状态栏 / 导航栏照旧由遮盖层盖黑；
+         *  - eng=lsposed：系统栏交给 SystemUI 真隐藏（这里不重复画），
+         *    App 内区域由这里兜底，两条通道互补而不是互相覆盖。</p>
+         */
+        boolean appAreaOn = true;
+        /** 当前前台应用归属；NONE 表示不是四个目标视频 App，不画应用内区域。 */
+        VideoApps.Kind appKind = VideoApps.Kind.NONE;
+        /** 用户是否显式配置过该 App 的区域开关；没配过就按默认三区全画，保证开箱可用。 */
+        boolean appExplicit = false;
+        boolean appRight = true;
+        boolean appTop = true;
+        boolean appBottom = true;
+        boolean appCorner = false;
+        /** 配置文本里各 App 的区域开关原值，供 resolveApp() 按前台包名挑选。 */
+        final java.util.Map<String, Boolean> appSw = new java.util.HashMap<>();
+    }
+
+    /**
+     * v2.8.2：按当前前台包名挑出这一帧要画的应用内区域。
+     *
+     * <p>不进 config() 的 TTL 缓存：前台切换会立刻插一帧 tick，但配置文本有 2~3 秒
+     * 缓存，若把 appKind 一起缓存，切进抖音后要等缓存过期才画，用户会当成「没生效」。
+     * 这里每帧现算，只有几个布尔判断和一次前缀匹配，开销可忽略。</p>
+     *
+     * <p>兜底语义：该 App 四个区域开关全没开过（或全为 0）时，按默认三区全画。
+     * 真机日志里 B站四个 enable_bili_* 从来都是 0、快手也多为 0 —— 若严格按开关画，
+     * 用户装完依旧什么都看不到。稳定版先保证「装上就有防护」，需要精调再到
+     * 功能页按 App 逐区关闭，或直接关掉「应用内区域兜底」。</p>
+     */
+    private static void resolveApp(Cfg c, String fgPkg) {
+        VideoApps.Kind kind = VideoApps.of(fgPkg);
+        if (!c.appAreaOn || kind == VideoApps.Kind.NONE) {
+            c.appKind = VideoApps.Kind.NONE;
+            c.appRight = c.appTop = c.appBottom = c.appCorner = false;
+            return;
+        }
+        c.appKind = kind;
+        String p;
+        switch (kind) {
+            case DOUYIN:
+                p = "dy_";
+                break;
+            case DRAMA:
+                p = "dr_";
+                break;
+            case KUAISHOU:
+                p = "ks_";
+                break;
+            case BILIBILI:
+                p = "bi_";
+                break;
+            default:
+                c.appRight = c.appTop = c.appBottom = c.appCorner = false;
+                return;
+        }
+        boolean r = on(c, p + "right");
+        boolean t = on(c, p + "top");
+        boolean b = on(c, p + "bottom");
+        boolean corner = on(c, p + "corner");
+        c.appExplicit = r || t || b || corner;
+        if (!c.appExplicit) {
+            // 没显式配过（或全关）：右侧列 + 顶部默认画；corner 不默认画（容易盖住返回键）
+            r = true;
+            t = true;
+            // 红果底部是「完整观看 / 选集」等可点入口，盖住会点不进去，默认不画
+            b = kind != VideoApps.Kind.DRAMA;
+            corner = false;
+        }
+        c.appRight = r;
+        c.appTop = t;
+        c.appBottom = b;
+        c.appCorner = corner;
+    }
+
+    private static boolean on(Cfg c, String k) {
+        Boolean v = c.appSw.get(k);
+        return v != null && v;
+    }
+
+    /** 同一目标位可能由两个配置键合并（如 dy_corner = 右上角 || 左上角），用 OR 聚合。 */
+    private static void putSw(Cfg c, String k, String v, String srcKey, String dst) {
+        if (!srcKey.equals(k)) {
+            return;
+        }
+        boolean val = "1".equals(v);
+        Boolean prev = c.appSw.get(dst);
+        c.appSw.put(dst, (prev != null && prev) || val);
     }
 
     @Override
     protected void onServiceConnected() {
-        super.onServiceConnected();
-        connected = true;
-        lastError = "";
-        wm = (WindowManager) getSystemService(WINDOW_SERVICE);
-        power = (PowerManager) getSystemService(POWER_SERVICE);
-        keyguard = (KeyguardManager) getSystemService(KEYGUARD_SERVICE);
-        ConfStore.init(getApplicationContext());
-        metricsDirty = true;
-        instance = this;
-        // v2.7.5：不再一连接就把全屏覆盖层挂上去。旧版无论用户选哪条引擎都先 addView，
-        // LSPosed 用户等于白多一层全屏合成；现在由第一帧 step 判定「真的需要画」才建窗。
-        handler.removeCallbacks(tick);
-        phaseStart = SystemClock.uptimeMillis();
-        handler.post(tick);
-        Log.i(TAG, "service connected");
+        try {
+            super.onServiceConnected();
+            connected = true;
+            lastError = "";
+            wm = (WindowManager) getSystemService(WINDOW_SERVICE);
+            power = (PowerManager) getSystemService(POWER_SERVICE);
+            keyguard = (KeyguardManager) getSystemService(KEYGUARD_SERVICE);
+            ConfStore.init(getApplicationContext());
+            metricsDirty = true;
+            instance = this;
+            // v2.7.5：不再一连接就把全屏覆盖层挂上去。旧版无论用户选哪条引擎都先 addView，
+            // LSPosed 用户等于白多一层全屏合成；现在由第一帧 step 判定「真的需要画」才建窗。
+            handler.removeCallbacks(tick);
+            phaseStart = SystemClock.uptimeMillis();
+            handler.post(tick);
+            Log.i(TAG, "service connected");
+            maskDiagForce("connected");
+        } catch (Throwable t) {
+            reportCallbackCrash("onServiceConnected", t);
+        }
     }
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
-        if (event == null) {
-            return;
-        }
-        if (event.getEventType() != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            return;
-        }
-        CharSequence p = event.getPackageName();
-        if (p == null || p.length() == 0) {
-            return;
-        }
-        String pkg = p.toString();
-        // 无障碍设置页 / 权限弹窗也会发这个事件，它们不是「用户真正在用的应用」，
-        // 用来判名单会把结果带偏。过滤掉系统级包名后缀。
-        if (pkg.endsWith("permissioncontroller") || pkg.equals("com.android.settings")) {
-            return;
-        }
-        if (!pkg.equals(foregroundPkg)) {
-            foregroundPkg = pkg;
-            // v2.7.5：空转期间是 5 秒一帧，若只等下一帧，切进目标应用后要 5 秒才盖上，
-            // 用户会当成「没生效」。这里立刻插一帧，响应仍是一次事件驱动，不增加常驻唤醒。
-            handler.removeCallbacks(tick);
-            handler.post(tick);
+        try {
+            if (event == null) {
+                return;
+            }
+            if (event.getEventType() != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+                return;
+            }
+            CharSequence p = event.getPackageName();
+            if (p == null || p.length() == 0) {
+                return;
+            }
+            String pkg = p.toString();
+            // 无障碍设置页 / 权限弹窗也会发这个事件，它们不是「用户真正在用的应用」，
+            // 用来判名单会把结果带偏。过滤掉系统级包名后缀。
+            if (pkg.endsWith("permissioncontroller") || pkg.equals("com.android.settings")) {
+                return;
+            }
+            if (!pkg.equals(foregroundPkg)) {
+                foregroundPkg = pkg;
+                // v2.7.5：空转期间是 5 秒一帧，若只等下一帧，切进目标应用后要 5 秒才盖上，
+                // 用户会当成「没生效」。这里立刻插一帧，响应仍是一次事件驱动，不增加常驻唤醒。
+                handler.removeCallbacks(tick);
+                handler.post(tick);
+            }
+        } catch (Throwable t) {
+            reportCallbackCrash("onAccessibilityEvent", t);
         }
     }
 
@@ -213,34 +419,58 @@ public class BurnInMaskService extends AccessibilityService {
 
     @Override
     public void onConfigurationChanged(Configuration newConfig) {
-        super.onConfigurationChanged(newConfig);
-        // 旋转后状态栏高度 / 导航栏位置全变了，必须重算，否则会露边或盖住内容。
-        // v2.7.5：覆盖层可能因空闲被撤掉（maskView 为空），applyMask 会直接返回，
-        // 因此这里改成主动排一帧，由 step 决定要不要重建窗口并重算尺寸。
-        metricsDirty = true;
-        handler.removeCallbacks(tick);
-        handler.post(tick);
+        try {
+            super.onConfigurationChanged(newConfig);
+            // 旋转后状态栏高度 / 导航栏位置全变了，必须重算，否则会露边或盖住内容。
+            // v2.7.5：覆盖层可能因空闲被撤掉（maskView 为空），applyMask 会直接返回，
+            // 因此这里改成主动排一帧，由 step 决定要不要重建窗口并重算尺寸。
+            metricsDirty = true;
+            handler.removeCallbacks(tick);
+            handler.post(tick);
+        } catch (Throwable t) {
+            reportCallbackCrash("onConfigurationChanged", t);
+        }
     }
 
     @Override
     public boolean onUnbind(Intent intent) {
-        teardown();
-        return super.onUnbind(intent);
+        try {
+            teardown();
+            return super.onUnbind(intent);
+        } catch (Throwable t) {
+            reportCallbackCrash("onUnbind", t);
+            return false;
+        }
     }
 
     @Override
     public void onDestroy() {
-        if (instance == this) {
-            instance = null;
+        try {
+            if (instance == this) {
+                instance = null;
+            }
+            teardown();
+            super.onDestroy();
+        } catch (Throwable t) {
+            reportCallbackCrash("onDestroy", t);
         }
-        teardown();
-        super.onDestroy();
     }
 
     // ---- 窗口 ----
 
     /** 上次尝试添加覆盖层的时间，失败后按 3s 节流重试，避免每帧刷日志 */
     private long lastAttachTry = 0L;
+
+    /**
+     * v2.8.1 窗口滞回：mayDraw 转 false 后延迟撤窗。
+     *
+     * <p>真机日志里前台在名单内/外一秒一切换，mayDraw 跟着翻转，旧逻辑每帧
+     * addView / removeViewImmediate 一个全屏 TYPE_ACCESSIBILITY_OVERLAY ——
+     * ColorOS 上这种高频窗口增删是 framework 判崩的高发点。窗口留着时
+     * applyMask 会把 MaskView 置 INVISIBLE（不参与合成），多挂 3 秒不影响功耗。</p>
+     */
+    private static final long DETACH_HYSTERESIS_MS = 3000L;
+    private long lastMayDrawAt = 0L;
 
     /**
      * 确保覆盖层仍在窗口上：被系统移除 / 首次 addView 失败时自动重建。
@@ -300,10 +530,12 @@ public class BurnInMaskService extends AccessibilityService {
             wm.addView(maskView, lp);
             windowAttached = true;
             lastError = "";
+            maskDiagForce("window attached");
         } catch (Throwable t) {
             windowAttached = false;
             lastError = "覆盖层被系统拒绝：" + t.getClass().getSimpleName()
                     + (t.getMessage() == null ? "" : " " + t.getMessage());
+            maskDiagForce("window FAILED " + lastError);
             Log.w(TAG, "addView failed", t);
             maskView = null;
         }
@@ -324,8 +556,10 @@ public class BurnInMaskService extends AccessibilityService {
 
     private void teardown() {
         connected = false;
+        lastMayDrawAt = 0L;
         handler.removeCallbacks(tick);
         detachWindow();
+        maskDiagForce("teardown");
     }
 
     // ---- 状态机 ----
@@ -338,9 +572,13 @@ public class BurnInMaskService extends AccessibilityService {
                 next = step();
             } catch (Throwable t) {
                 // 状态机里任何异常都不许把服务打死：吞掉但记日志，下一帧继续
-                Log.w(TAG, "tick error", t);
+                reportCallbackCrash("step", t);
             }
-            handler.postDelayed(this, Math.max(200L, next));
+            try {
+                handler.postDelayed(this, Math.max(200L, next));
+            } catch (Throwable t) {
+                reportCallbackCrash("tick.postDelayed", t);
+            }
         }
     };
 
@@ -357,18 +595,43 @@ public class BurnInMaskService extends AccessibilityService {
         boolean screenOn = power == null || power.isInteractive();
         boolean locked = keyguard != null && keyguard.isKeyguardLocked();
         Cfg c = config(now);
+        resolveApp(c, foregroundPkg);
 
-        // 「这一帧有没有可能真的要画」——决定是否维持覆盖层窗口。
-        // 旧版无论什么引擎都先把全屏覆盖层 addView 上去（INVISIBLE 也是一层），
-        // LSPosed 用户等于白搭一层全屏合成，还会让系统认为本应用在持续绘制。
-        boolean mayDraw = screenOn && !locked && c.masterOn && c.maskAllowed
-                && ListRules.shouldIntervene(c.mode, c.list, foregroundPkg);
+        // v2.8.2：两条通道分开判，互不覆盖。
+        //  sysBar  —— 系统栏遮盖，只在 overlay 引擎下画；LSPosed 引擎的系统栏由
+        //             SystemUI 真隐藏负责，这里再画一条黑边只会重影。
+        //  appArea —— 应用内固定 UI 兜底，不看引擎、不要求目标进程被注入，
+        //             只要无障碍服务连着就能画。真机日志显示视频 App 进程零注入，
+        //             这一条是那些设备上唯一能生效的通道。
+        boolean intervene = ListRules.shouldIntervene(c.mode, c.list, foregroundPkg);
+        boolean sysBar = c.maskAllowed && (c.statusBarOn || c.navOn);
+        boolean appArea = c.appAreaOn && c.appKind != VideoApps.Kind.NONE
+                && (c.appRight || c.appTop || c.appBottom || c.appCorner);
+        boolean mayDraw = screenOn && !locked && c.masterOn && intervene
+                && (sysBar || appArea);
+        // v2.7.9：一条日志说清「为什么没盖」——是没开无障碍、引擎没切、
+        // 总闸关着、名单没命中，还是覆盖层被系统拒了。
+        maskDiag("screen=" + screenOn + " lock=" + locked
+                + " master=" + c.masterOn + " eng=" + c.engineName
+                + " mode=" + c.mode + " fg=" + foregroundPkg
+                + " hit=" + intervene + " mayDraw=" + mayDraw
+                + " win=" + windowAttached + " masking=" + masking
+                + " sb=" + c.statusBarOn + " nav=" + c.navOn
+                + " sys=" + sysBar + " app=" + VideoApps.label(c.appKind)
+                + " appOn=" + c.appAreaOn
+                + " areas=" + (c.appRight ? "R" : "-") + (c.appTop ? "T" : "-")
+                + (c.appBottom ? "B" : "-") + (c.appCorner ? "C" : "-")
+                + " fallback=" + (appArea && !sysBar)
+                + (lastError.isEmpty() ? "" : " err=" + lastError)
+                + (lastRegions.isEmpty() ? "" : " rects=" + lastRegions));
         if (preview || mayDraw) {
             // v2.7.4：覆盖层可能被系统撤掉（旋转 / 低内存 / 开机早期 addView 被拒）。
             // 旧版一辈子只 addView 一次，失败后 connected=true 但永远盖不上，
             // 用户只能去系统设置里把无障碍关开一次。这里轻量校验并自动重建。
+            lastMayDrawAt = now;
             ensureWindow();
-        } else if (windowAttached) {
+        } else if (windowAttached && now - lastMayDrawAt >= DETACH_HYSTERESIS_MS) {
+            // v2.8.1：短时不需要画不立刻撤窗，避免前台切换引发秒级 add/remove。
             detachWindow();
         }
 
@@ -419,7 +682,11 @@ public class BurnInMaskService extends AccessibilityService {
         cfgAt = now;
         Cfg c = new Cfg();
         try {
-            String text = ConfStore.read();
+            // v2.8.1：改用 ensureMirror()。ConfStore.read() 在镜像缺失时会
+            // execSuCapture（最长 4s），而 config() 跑在主线程 tick —— 一旦镜像
+            // 因清数据 / 首次安装读不到，每 3 秒一次 su 会直接把无障碍服务拖成 ANR。
+            // ensureMirror 只读应用内镜像 + 默认值，全程本地文件 IO，绝不触发 su。
+            String text = ConfStore.ensureMirror();
             if (text != null) {
                 ConfStore.Lists lists = ConfStore.readLists(text);
                 c.mode = lists.mode;
@@ -435,6 +702,7 @@ public class BurnInMaskService extends AccessibilityService {
                     if ("enable_status".equals(k)) {
                         c.masterOn = "1".equals(v);
                     } else if ("engine".equals(k)) {
+                        c.engineName = v;
                         c.maskAllowed = ConfStore.ENGINE_OVERLAY.equals(ConfStore.normEngine(v));
                     } else if ("enable_navigation".equals(k)) {
                         c.navOn = "1".equals(v);
@@ -444,6 +712,30 @@ public class BurnInMaskService extends AccessibilityService {
                         c.hideSec = clampDur(v, c.hideSec, 5);
                     } else if ("show_duration".equals(k)) {
                         c.showSec = clampDur(v, c.showSec, 1);
+                    } else if ("enable_app_overlay".equals(k)) {
+                        c.appAreaOn = "1".equals(v);
+                    } else {
+                        // v2.8.2：把各 App 的区域开关收进一张表，resolveApp() 按
+                        // 前台包名挑用。缺省键不进表 —— 缺键和显式 0 都算「没配过」，
+                        // 由兜底规则决定默认画哪几块。
+                        putSw(c, k, v, "enable_douyin_like", "dy_right");
+                        putSw(c, k, v, "enable_douyin_top", "dy_top");
+                        putSw(c, k, v, "enable_douyin_bottom", "dy_bottom");
+                        putSw(c, k, v, "enable_douyin_right_top", "dy_corner");
+                        putSw(c, k, v, "enable_douyin_left_top", "dy_corner");
+                        putSw(c, k, v, "enable_drama_like", "dr_right");
+                        putSw(c, k, v, "enable_drama_top", "dr_top");
+                        putSw(c, k, v, "enable_drama_bottom", "dr_bottom");
+                        putSw(c, k, v, "enable_drama_right_top", "dr_corner");
+                        putSw(c, k, v, "enable_drama_left_top", "dr_corner");
+                        putSw(c, k, v, "enable_ks_right", "ks_right");
+                        putSw(c, k, v, "enable_ks_top", "ks_top");
+                        putSw(c, k, v, "enable_ks_bottom", "ks_bottom");
+                        putSw(c, k, v, "enable_ks_corner", "ks_corner");
+                        putSw(c, k, v, "enable_bili_right", "bi_right");
+                        putSw(c, k, v, "enable_bili_top", "bi_top");
+                        putSw(c, k, v, "enable_bili_bottom", "bi_bottom");
+                        putSw(c, k, v, "enable_bili_corner", "bi_corner");
                     }
                 }
             }
@@ -487,25 +779,76 @@ public class BurnInMaskService extends AccessibilityService {
         // 真实存在但透明显示的状态栏判成「不可见」而漏遮。宁可多遮一条，也不要
         // 在用户以为已生效时静默失效 —— 漏遮的代价是烧屏，多遮的代价只是看视频时
         // 顶部有黑边，且用户可以自己关掉状态栏那一项。
-        if (c.masterOn && c.statusBarOn) {
+        // v2.8.2：系统栏两条只在 overlay 引擎下画。LSPosed 引擎的系统栏由 SystemUI
+        // 真隐藏负责，这里再画一条黑边就是重影；应用内区域则与引擎无关，照常画。
+        if (c.maskAllowed && c.masterOn && c.statusBarOn) {
             top = OverlayGeometry.statusBar(screenW, screenH, statusBarH);
         }
-        if (c.navOn) {
+        if (c.maskAllowed && c.navOn) {
             bottom = OverlayGeometry.navigationBar(screenW, screenH, navBarSize, navSide);
         }
-        if (top == null && bottom == null) {
-            // 两条都没算出来（尺寸异常 / 全都判为不可见）：不画，并记下原因
+        java.util.List<OverlayGeometry.Rect> areas = appRects(c);
+        if (top == null && bottom == null && areas.isEmpty()) {
+            // 一个区域都没算出来（尺寸异常 / 全都判为不可见）：不画，并记下原因
             maskView.setMasked(false);
             masking = false;
-            lastError = "无可遮盖区域（状态栏高 " + statusBarH + "px，导航栏 " + navBarSize + "px）";
+            lastError = "无可遮盖区域（状态栏高 " + statusBarH + "px，导航栏 "
+                    + navBarSize + "px，屏幕 " + screenW + "x" + screenH + "）";
             return;
         }
-        maskView.setRects(top, bottom);
+        maskView.setRects(top, bottom, areas);
         maskView.setMasked(true);
         masking = true;
         lastError = "";
         lastRegions = (top == null ? "状态栏：关闭" : "状态栏：" + top)
-                + "；" + (bottom == null ? "导航栏：关闭" : "导航栏：" + bottom);
+                + "；" + (bottom == null ? "导航栏：关闭" : "导航栏：" + bottom)
+                + "；应用内：" + (areas.isEmpty() ? "关闭" : "x" + areas.size()
+                + "(" + VideoApps.label(c.appKind) + " "
+                + (c.appRight ? "R" : "-") + (c.appTop ? "T" : "-")
+                + (c.appBottom ? "B" : "-") + (c.appCorner ? "C" : "-") + ")");
+    }
+
+    /**
+     * v2.8.2：按屏幕比例算出应用内固定 UI 区域。
+     *
+     * <p>比例来自真机竖屏截图（1080×2400 级）：右侧互动列从约 28% 高排到 92% 高、
+     * 贴右缘约 16% 宽；顶部标题/搜索栏在状态栏下方约 11% 高；底部导航/弹幕输入栏
+     * 在 90% 高以下。横屏沿用同一组比例（可能略宽，但宁可多遮一条也不漏遮 ——
+     * 漏遮的代价是烧屏，多遮只是边缘多一条黑边）。</p>
+     *
+     * <p>这些矩形画在 TYPE_ACCESSIBILITY_OVERLAY 上，带 FLAG_NOT_TOUCHABLE，
+     * 只挡住像素发光、不吃触摸，点赞/评论照样能点。</p>
+     */
+    private java.util.List<OverlayGeometry.Rect> appRects(Cfg c) {
+        java.util.List<OverlayGeometry.Rect> out = new java.util.ArrayList<>();
+        if (!c.appAreaOn || c.appKind == VideoApps.Kind.NONE || screenW <= 0 || screenH <= 0) {
+            return out;
+        }
+        int w = screenW;
+        int h = screenH;
+        int sb = Math.max(0, statusBarH);
+        if (c.appRight) {
+            addRect(out, (int) (w * 0.84f), (int) (h * 0.28f), w, (int) (h * 0.92f));
+        }
+        if (c.appTop) {
+            addRect(out, 0, sb, w, Math.max(sb + 8, (int) (h * 0.11f)));
+        }
+        if (c.appBottom) {
+            addRect(out, 0, (int) (h * 0.90f), w, h);
+        }
+        if (c.appCorner) {
+            addRect(out, (int) (w * 0.78f), sb, w, (int) (h * 0.20f));
+            addRect(out, 0, sb, (int) (w * 0.20f), (int) (h * 0.20f));
+        }
+        return out;
+    }
+
+    private static void addRect(java.util.List<OverlayGeometry.Rect> out,
+                                int l, int t, int r, int b) {
+        OverlayGeometry.Rect rect = new OverlayGeometry.Rect(l, t, r, b);
+        if (!rect.isEmpty()) {
+            out.add(rect);
+        }
     }
 
     private void refreshMetrics() {
@@ -614,6 +957,8 @@ public class BurnInMaskService extends AccessibilityService {
         private final Paint paint = new Paint();
         private OverlayGeometry.Rect top;
         private OverlayGeometry.Rect bottom;
+        /** v2.8.2：应用内固定 UI 区域（右侧列 / 顶部 / 底部 / 角落），与系统栏两块一起画。 */
+        private java.util.List<OverlayGeometry.Rect> appRects = java.util.Collections.emptyList();
         private boolean masked;
 
         MaskView(Context context) {
@@ -626,15 +971,20 @@ public class BurnInMaskService extends AccessibilityService {
             setVisibility(INVISIBLE);
         }
 
-        void setRects(OverlayGeometry.Rect top, OverlayGeometry.Rect bottom) {
+        void setRects(OverlayGeometry.Rect top, OverlayGeometry.Rect bottom,
+                      java.util.List<OverlayGeometry.Rect> areas) {
             // v2.7.5：矩形没变就不动。旧版每秒重算一次并直接覆盖字段，
             // 一旦给 setRects 补 invalidate（本版必需，否则改尺寸不重绘），
-            // 就会变成每秒一次无意义全屏重绘。
-            if (same(this.top, top) && same(this.bottom, bottom)) {
+            // 就会变成每秒一次无意义全屏重绘。v2.8.2 把应用内矩形纳入同一个比较。
+            java.util.List<OverlayGeometry.Rect> next =
+                    areas == null ? java.util.Collections.<OverlayGeometry.Rect>emptyList() : areas;
+            if (same(this.top, top) && same(this.bottom, bottom)
+                    && this.appRects.equals(next)) {
                 return;
             }
             this.top = top;
             this.bottom = bottom;
+            this.appRects = next;
             if (masked) {
                 invalidate();
             }
@@ -668,6 +1018,9 @@ public class BurnInMaskService extends AccessibilityService {
             }
             if (bottom != null) {
                 canvas.drawRect(bottom.left, bottom.top, bottom.right, bottom.bottom, paint);
+            }
+            for (OverlayGeometry.Rect r : appRects) {
+                canvas.drawRect(r.left, r.top, r.right, r.bottom, paint);
             }
         }
     }

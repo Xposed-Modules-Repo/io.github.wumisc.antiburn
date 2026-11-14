@@ -60,6 +60,8 @@ public final class Controller {
 
     /** 窗口视图被 SystemUI 重建后，重新抓取的节流时间戳 */
     private static long lastRescanAt = 0;
+    /** v2.7.9：全局扫描「没找到容器」日志的节流，避免全 View attach 热回调刷屏 */
+    private static long lastScanSkipAt = 0;
 
     /** 魅族 Flyme：状态栏布局与 AOSP 差异最大的一家，容器 id 优先级单独一套 */
     private static final boolean FLYME_ROM = detectFlyme();
@@ -69,44 +71,65 @@ public final class Controller {
 
     static void init(XC_LoadPackage.LoadPackageParam lpparam) {
         ClassLoader cl = lpparam.classLoader;
+        // v2.7.6：识别 ColorOS / 其它可能移除 StatusBarWindowView 的 ROM，
+        // 便于日志里直接确认「是不是走了全局扫描兜底」。
+        String romKey = ((android.os.Build.MANUFACTURER + " " + android.os.Build.BRAND + " "
+                + android.os.Build.DISPLAY).toLowerCase(java.util.Locale.ROOT));
+        boolean colorOs = romKey.contains("oppo") || romKey.contains("coloros")
+                || romKey.contains("realme") || romKey.contains("oneplus");
         XposedInit.diag("SYSINIT sdk=" + android.os.Build.VERSION.SDK_INT
                 + " release=" + android.os.Build.VERSION.RELEASE
                 + " brand=" + android.os.Build.BRAND + " device=" + android.os.Build.DEVICE
-                + " flyme=" + FLYME_ROM
+                + " flyme=" + FLYME_ROM + " coloros=" + colorOs
                 + " base.os=" + (android.os.Build.VERSION.BASE_OS == null ? "?" : android.os.Build.VERSION.BASE_OS));
 
         // ---- 状态栏窗口 ----
+        // v2.7.6：StatusBarWindowView 在 Android 14+ / 部分 OEM（ColorOS 等）上被移除或改名，
+        // 即便类还能被 findClassIfExists 找到，onAttachedToWindow 也可能没有可精确匹配的签名。
+        // 旧版这行 findAndHookMethod 直接抛出 NoSuchMethodError，异常发生在 hook「注册」阶段，
+        // 一路冒泡冲出 init()，导致后面的导航栏 hook 与全局 View 兜底扫描全部没装上去——
+        // 表现就是「模块注入了但完全不工作」。这里把「注册」也包住，
+        // 单个目标失败绝不能影响其余 hook 安装；真正的兜底永远靠下面的全局 View 扫描。
         Class<?> winCls = XposedHelpers.findClassIfExists(
                 "com.android.systemui.statusbar.window.StatusBarWindowView", cl);
         if (winCls != null) {
-            XposedHelpers.findAndHookMethod(winCls, "onAttachedToWindow",
-                    new XC_MethodHook() {
-                        @Override
-                        protected void afterHookedMethod(MethodHookParam param) {
-                            // Hook 回调里的异常会一路冒到宿主主线程：SystemUI 因此崩溃重启，
-                            // LSPosed 连崩几次就把模块丢进安全模式（用户看到的是「莫名其妙
-                            // 进了安全模式，所有模块都失效」）。宿主是别人的进程，
-                            // 我们没有任何理由让它替我们崩。
-                            try {
-                                View win = (View) param.thisObject;
-                                View bar = findStatusBarView(win);
-                                if (bar != null) {
-                                    statusView = bar;
-                                    findNotifyArea(bar);
-                                    Log.i(TAG, "status bar view found: " + desc(bar));
-                                } else {
-                                    // 兜底：找不到内容容器就用窗口本身（会连下拉面板一起隐藏，慎用）
-                                    statusView = win;
-                                    Log.w(TAG, "status_bar_container not found, fallback to window");
+            try {
+                XposedHelpers.findAndHookMethod(winCls, "onAttachedToWindow",
+                        new XC_MethodHook() {
+                            @Override
+                            protected void afterHookedMethod(MethodHookParam param) {
+                                // Hook 回调里的异常会一路冒到宿主主线程：SystemUI 因此崩溃重启，
+                                // LSPosed 连崩几次就把模块丢进安全模式（用户看到的是「莫名其妙
+                                // 进了安全模式，所有模块都失效」）。宿主是别人的进程，
+                                // 我们没有任何理由让它替我们崩。
+                                try {
+                                    View win = (View) param.thisObject;
+                                    View bar = findStatusBarView(win);
+                                    if (bar != null) {
+                                        statusView = bar;
+                                        findNotifyArea(bar);
+                                        Log.i(TAG, "status bar view found: " + desc(bar));
+                                    } else {
+                                        // 兜底：找不到内容容器就用窗口本身（会连下拉面板一起隐藏，慎用）
+                                        statusView = win;
+                                        Log.w(TAG, "status_bar_container not found, fallback to window");
+                                    }
+                                    startCycle();
+                                } catch (Throwable t) {
+                                    hookFail("StatusBarWindowView.attach", t);
                                 }
-                                startCycle();
-                            } catch (Throwable t) {
-                                hookFail("StatusBarWindowView.attach", t);
                             }
-                        }
-                    });
+                        });
+            } catch (Throwable t) {
+                // 注册阶段失败（类在但方法找不到 / 不可 hook）：吞掉并继续，
+                // 不能让它杀掉后续的导航栏 hook 和全局 View 兜底扫描。
+                Log.w(TAG, "hook StatusBarWindowView failed, skip: " + t);
+                XposedInit.diag("HOOK-SKIP StatusBarWindowView "
+                        + t.getClass().getSimpleName()
+                        + (t.getMessage() == null ? "" : ": " + t.getMessage()));
+            }
         } else {
-            Log.e(TAG, "StatusBarWindowView not found");
+            Log.w(TAG, "StatusBarWindowView not found (use global scan fallback)");
         }
 
         // ---- 状态栏本体（Flyme 专用补充）----
@@ -222,13 +245,31 @@ public final class Controller {
                                     startCycle();
                                     return;
                                 }
-                                // 状态栏兜底：类名含 StatusBar 且非导航（HyperOS3 类名若不同也能抓）
+                                // 状态栏兜底：类名含 StatusBar（或资源 id 命中）且非导航。
+                                // v2.7.6：ColorOS / 新 HyperOS 的状态栏根类名可能不含 "StatusBar"，
+                                // 改为「类名 OR 资源 id」双识别；且 findStatusBarView 解析不到
+                                // 内容容器时，直接用抓到的根视图作为状态栏（退化成整条栏透明，
+                                // 仍可防烧屏），避免「找到了根却因 id 不在已知列表而放跑」。
                                 if (statusView == null && isStatusBarWindow(v)) {
-                                    View bar = findStatusBarView(v);
-                                    if (bar != null) {
+                                    // v2.7.9：绝不退化用 v 本身（可能只是单个图标 View）。
+                                    // 从整棵窗口树按 id / 几何找真正的状态栏容器。
+                                    View bar = findStatusBarContainer(v);
+                                    if (bar != null && isPlausibleStatusBar(bar)) {
                                         statusView = bar;
+                                        findNotifyArea(statusView);
                                         Log.i(TAG, "status bar view caught (View scan): " + desc(bar));
+                                        XposedInit.diagForce("SYS status container " + desc(bar));
                                         startCycle();
+                                    } else {
+                                        // 保持 statusView=null，让后续 attach / 5 秒 RESCAN
+                                        // / rescanWindows 继续找；节流，避免热回调刷屏。
+                                        long nowSkip = SystemClock.elapsedRealtime();
+                                        if (nowSkip - lastScanSkipAt > 3000L) {
+                                            lastScanSkipAt = nowSkip;
+                                            XposedInit.diag("SYS scan skip "
+                                                    + v.getClass().getSimpleName()
+                                                    + " (no status bar container in tree)");
+                                        }
                                     }
                                 }
                             } catch (Throwable t) {
@@ -270,10 +311,16 @@ public final class Controller {
             // 既不误伤通知，又能把时钟 / 电量 / 信号一起透明掉。
             // 不再把 notification_icon_area 当状态栏候选：它是通知图标区本身，
             // 选中它等于「只隐藏通知、留下时钟」，与设计意图正好相反。
+            // v2.7.9：补 ColorOS 15 / Oplus / 一加可能改名的状态栏容器 id。
+            // AOSP 14+ 把状态栏窗口拆成多段后，status_bar_contents 未必还在，
+            // 多列几个候选比「找不到就退化用叶子」稳妥得多。
             String[] iconIds = FLYME_ROM
                     ? new String[]{"status_bar", "mz_status_bar", "status_bar_contents",
-                    "status_bar_icons"}
+                    "status_bar_icons", "status_bar_container", "phone_status_bar"}
+                    // 只列「整条栏」级容器；不收 system_icons / status_bar_start_side
+                    // 这类局部区域，否则会抓成半条栏（右侧图标区）继续烧左侧时钟。
                     : new String[]{"status_bar_contents", "status_bar_icons", "status_bar",
+                    "status_bar_container", "phone_status_bar", "oplus_status_bar",
                     "mz_status_bar"};
             for (String id : iconIds) {
                 int rid = idOf(root, id);
@@ -291,6 +338,133 @@ public final class Controller {
             Log.w(TAG, "find by id error", t);
         }
         return null;
+    }
+
+    /**
+     * v2.7.9 真机修复（OPPO Find X8s+ / ColorOS 15 / Android 15）。
+     *
+     * <p>日志实锤：{@code sv=SingleBindableStatusBarIconView@0.0 dim=0} ——
+     * 周期在跑、{@code setAlpha(0)} 也真的生效（alpha 从 1.0 变 0.0），
+     * 屏幕却毫无变化。原因是全局 View 扫描把 ColorOS 承载「单个状态栏图标」
+     * 的 {@code SingleBindableStatusBarIconView} 当成了整条状态栏：
+     * 它类名含 "StatusBar"、又比真正的窗口根更早 attach，旧版
+     * {@code isStatusBarWindow()} 直接放行，再被「退化用根视图」把它设成
+     * statusView。结果只透明了几十像素宽的一个图标。</p>
+     *
+     * <p>所以：既不是临时 root / LSPosed 权限不够，也不是 ROM 隐藏不了，
+     * 是抓错了对象。这里改成从<b>整棵窗口树</b>找真正的容器：先按 id，
+     * 再按几何（横贯全屏、贴顶、矮条、ViewGroup、非图标类）兜底。
+     * 找不到就返回 null，绝不退化用叶子 View。</p>
+     */
+    private static View findStatusBarContainer(View v) {
+        if (v == null) {
+            return null;
+        }
+        View root = v.getRootView();
+        View byId = findStatusBarView(root != null ? root : v);
+        if (byId == null && root != null && root != v) {
+            byId = findStatusBarView(v);
+        }
+        // 只接受「整条栏」级容器。某些 ROM 只剩 status_bar_icons 这类局部区域 id，
+        // 宽度不足屏宽 40%：直接返回会被 checkViewsAlive 每轮判不合格丢弃，
+        // 形成「重扫→命中→丢弃」空转。不合格就继续走几何兜底找横贯全屏的那条。
+        if (byId != null && isPlausibleStatusBar(byId)) {
+            return byId;
+        }
+        // id 一个都不认 / 命中的是局部区域：按几何找状态栏那条横贯全屏的窄条
+        return findBarByGeometry(root != null ? root : v);
+    }
+
+    /** 明确的「图标 / 单项 / 通知 / 锁屏条」类名，绝不可能是整条状态栏容器。
+     *  用简单类名，避免包名里恰好带这些词造成误伤。 */
+    private static boolean isIconLike(View v) {
+        String n = v.getClass().getSimpleName();
+        String[] bad = {"Icon", "Bindable", "Single", "Item", "Dot", "Wifi", "Battery",
+                "Clock", "Network", "Signal", "Mobile", "Slice", "Chip", "Logo",
+                "Operator", "Carrier", "Keyguard", "HeadsUp", "Notification"};
+        for (String b : bad) {
+            if (n.contains(b)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 抓到的 statusView 是否合格（自愈用）。
+     *
+     * <p>刻意<b>不用</b>类名黑名单：按 id 找到的合法容器（如 StatusBarIconContainer、
+     * NotificationIconArea）类名同样含 "Icon"/"Notification"，用类名否决会把它们
+     * 误杀成「每轮丢弃、永远抓不到」。这里只用两个与命名无关的硬判据：</p>
+     * ① 必须是 ViewGroup（单个图标 View 是叶子）；
+     * ② 已 layout 时宽度必须接近屏宽——状态栏横贯全屏，单个图标只有几十 px。
+     * width=0（attach 早期还没量过）时先信任，等 layout 后下一轮再判。
+     */
+    private static boolean isPlausibleStatusBar(View v) {
+        if (v == null || !(v instanceof android.view.ViewGroup)) {
+            return false;
+        }
+        try {
+            int w = v.getWidth();
+            if (w > 0) {
+                int sw = v.getResources().getDisplayMetrics().widthPixels;
+                if (sw > 0 && w < sw * 0.4f) {
+                    return false; // 太窄 = 某个图标 / 侧边小容器，不是整条栏
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return true;
+    }
+
+    /** 几何兜底：在窗口树里找「横贯全屏 + 贴顶 + 矮条」的 ViewGroup。
+     *  状态栏就是这样一条，单个图标不是。attach 早期 width 可能为 0，
+     *  那时返回 null，交给 5 秒后的 rescanWindows（此时已 layout）再找。 */
+    private static View findBarByGeometry(View root) {
+        if (!(root instanceof android.view.ViewGroup)) {
+            return null;
+        }
+        try {
+            int sw = root.getResources().getDisplayMetrics().widthPixels;
+            if (sw <= 0) {
+                return null;
+            }
+            View best = null;
+            int bestTop = Integer.MAX_VALUE;
+            java.util.ArrayDeque<View> q = new java.util.ArrayDeque<>();
+            q.add(root);
+            int visited = 0;
+            while (!q.isEmpty() && visited < 500) {
+                View v = q.poll();
+                if (v == null) {
+                    continue;
+                }
+                visited++;
+                if (v instanceof android.view.ViewGroup) {
+                    int w = v.getWidth();
+                    int h = v.getHeight();
+                    int[] loc = new int[2];
+                    try {
+                        v.getLocationOnScreen(loc);
+                    } catch (Throwable ignored) {
+                    }
+                    // 贴顶(loc[1]<=4)、横贯全屏、高度不超过 220px（状态栏量级）
+                    if (w >= (int) (sw * 0.8f) && h > 0 && h <= 220
+                            && loc[1] <= 4 && loc[1] < bestTop && !isIconLike(v)) {
+                        best = v;
+                        bestTop = loc[1];
+                    }
+                    android.view.ViewGroup g = (android.view.ViewGroup) v;
+                    for (int i = 0; i < g.getChildCount(); i++) {
+                        q.add(g.getChildAt(i));
+                    }
+                }
+            }
+            return best;
+        } catch (Throwable t) {
+            Log.w(TAG, "geometry scan failed", t);
+            return null;
+        }
     }
 
     /**
@@ -373,12 +547,35 @@ public final class Controller {
         return false;
     }
 
-    /** 判断是否状态栏窗口根（类名含 StatusBar 且非导航），用于 View 扫描兜底 */
+    /** 判断是否状态栏窗口根，用于 View 扫描兜底。
+     *  v2.7.6：识别条件从「纯类名」扩展为「类名 OR 资源 id」——
+     *  ColorOS / 新 HyperOS 的状态栏根可能叫别的名字（如 SuperStatusBarView、
+     *  KeyguardStatusBarView 之外的自定义根），但资源 id 仍沿用 AOSP 的
+     *  status_bar / phone_status_bar / status_bar_container 等，按 id 命中更稳。 */
     private static boolean isStatusBarWindow(View v) {
+        // v2.7.9：先排除图标 / 单项 / 通知 / 锁屏条。ColorOS 15 的
+        // SingleBindableStatusBarIconView 类名含 "StatusBar"，旧版会把它
+        // 误判成窗口根（真机日志 sv=...IconView@0.0 实锤）。
+        if (v == null || isIconLike(v) || !(v instanceof android.view.ViewGroup)) {
+            return false;
+        }
         String n = v.getClass().getName();
         if (n.contains("StatusBar") && !n.contains("NavigationBar")) {
-            // 只把"可能是窗口根"的容器作为候选，避免误伤普通 StatusBarView 子项
             return true;
+        }
+        // 次选：按资源 id 识别（排除通知图标区本身，避免把通知节点当状态栏根）
+        try {
+            int id = v.getId();
+            if (id != android.view.View.NO_ID) {
+                String name = v.getResources().getResourceEntryName(id);
+                if (name != null && (name.equals("status_bar")
+                        || name.equals("phone_status_bar")
+                        || name.equals("status_bar_container")
+                        || name.equals("mz_status_bar"))) {
+                    return true;
+                }
+            }
+        } catch (Throwable ignored) {
         }
         return false;
     }
@@ -502,6 +699,17 @@ public final class Controller {
      * 这里每轮校验一次 attach 状态，掉了就丢掉旧引用并主动重扫。</p>
      */
     private static void checkViewsAlive() {
+        // v2.7.9：抓错对象的自愈。旧版 / 升级前的 statusView 可能是一个
+        // 已 attach 的图标 View：isAttachedToWindow() 恒 true，旧逻辑永远不会纠正，
+        // 引擎会一直「成功地把一个图标设透明」却毫无视觉效果。
+        if (statusView != null && !isPlausibleStatusBar(statusView)) {
+            XposedInit.diagForce("SYS BAD STATUS VIEW " + desc(statusView)
+                    + ", drop & re-acquire");
+            statusView = null;
+            notifyArea = null;
+            dimmed.clear();
+            hidden = false;
+        }
         if (statusView != null && !statusView.isAttachedToWindow()) {
             XposedInit.diag("SYS STATUS VIEW DETACHED, re-acquire");
             statusView = null;
@@ -552,13 +760,19 @@ public final class Controller {
                 }
                 View root = (View) o;
                 String n = root.getClass().getName();
-                if (statusView == null && n.contains("StatusBar")) {
-                    View bar = findStatusBarView(root);
-                    statusView = bar != null ? bar : root;
-                    findNotifyArea(statusView);
-                    XposedInit.diagForce("SYS rescan status=" + desc(statusView));
-                    startCycle();
-                } else if (navView == null && n.contains("NavigationBar")) {
+                // v2.7.9：不再靠 n.contains("StatusBar") 猜窗口根（ColorOS 的
+                // 窗口根可能叫 DecorView / 自定义名）。对每个窗口根都尝试按 id
+                // + 几何找真正的状态栏容器；此时视图已 layout，几何兜底才有效。
+                if (statusView == null) {
+                    View bar = findStatusBarContainer(root);
+                    if (bar != null && isPlausibleStatusBar(bar)) {
+                        statusView = bar;
+                        findNotifyArea(statusView);
+                        XposedInit.diagForce("SYS rescan status=" + desc(statusView));
+                        startCycle();
+                    }
+                }
+                if (navView == null && n.contains("NavigationBar")) {
                     navView = root;
                     XposedInit.diagForce("SYS rescan nav=" + desc(root));
                     startCycle();
@@ -640,10 +854,13 @@ public final class Controller {
         // 现在改成「状态真的变了立刻记，没变化 30 秒记一次心跳」——排障信息一条不少，
         // 写盘次数降到 1/6。
         long nowWl = SystemClock.elapsedRealtime();
+        // v2.7.7：把视图/alpha/相位状态并入签名——状态一变立刻落盘一条，
+        // 不再只靠 logcat。ColorOS 15 上「周期在跑但屏幕没反应」就靠这几个字段区分
+        // 「视图没抓到」和「抓到了但 setAlpha 不生效」。
         String diagSig = top + "|" + Config.listMode + "|" + intervene + "|" + inList
                 + "|" + Config.enableStatus + Config.enableNav + Config.enableShift
                 + Config.enableStatusBar + "|" + Config.uiStyle + "|" + Config.lastRev
-                + "|" + livePause;
+                + "|" + livePause + hideDiag();
         boolean diagChanged = !diagSig.equals(lastDiagSig);
         if (diagChanged || nowWl - lastWlDiag >= 30000) {
             lastWlDiag = nowWl;
@@ -660,7 +877,8 @@ public final class Controller {
                     // SystemUI 里还是旧 Hook 在动手」，没有这个字段只能靠版本号猜。
                     + " eng=" + Config.engine
                     + " lp=" + livePause
-                    + " ver=" + BuildConfig.VERSION_NAME);
+                    + " ver=" + BuildConfig.VERSION_NAME
+                    + hideDiag());
         }
 
         // 暂停条件：灭屏 / 该前台包按当前名单模式不需要干预。
@@ -746,6 +964,30 @@ public final class Controller {
     /** 上一次 applyHide 时两个系统栏开关的状态，用于「开关变了立刻重画」 */
     private static boolean lastStatusBarSwitch = true;
     private static boolean lastNavSwitch = false;
+
+    /**
+     * v2.7.7：把「周期相位 / 视图 / alpha / 已透明子视图数」压成一段可落盘的状态串。
+     *
+     * <p>旧版这些结论只走 Log.i(logcat)，用户导出的 antiburn.log 里一条都没有，
+     * 排障只能靠猜「到底抓到视图没、alpha 改没改」。字段含义：</p>
+     *  hid=  true 表示当前处于隐藏相位；
+     *  cyc=  hide/show 秒数（周期配置是否合理）；
+     *  sv=none           状态栏视图没抓到 → applyHide 被整个跳过（最常见的「没效果」）；
+     *  sv=类名@alpha     抓到了；alpha=0 说明我们改成功，仍看不见就是 ROM 图层问题；
+     *  nv=   同上（导航栏）；后缀 (det) 表示视图已 detach；
+     *  dim=  本轮被透明化的子视图数（dimAlong 有没有真的动手）。
+     */
+    private static String hideDiag() {
+        String s = statusView == null ? "none"
+                : statusView.getClass().getSimpleName() + "@" + statusView.getAlpha()
+                + (statusView.isAttachedToWindow() ? "" : "(det)");
+        String n = navView == null ? "none"
+                : navView.getClass().getSimpleName() + "@" + navView.getAlpha()
+                + (navView.isAttachedToWindow() ? "" : "(det)");
+        return " hid=" + hidden + " cyc=" + Config.hideSec + "/" + Config.showSec
+                + " sv=" + s + " nv=" + n + " dim=" + dimmed.size()
+                + " svok=" + isPlausibleStatusBar(statusView);
+    }
 
     private static void applyHide() {
         // 状态栏：用 alpha=0 透明化而非 GONE。

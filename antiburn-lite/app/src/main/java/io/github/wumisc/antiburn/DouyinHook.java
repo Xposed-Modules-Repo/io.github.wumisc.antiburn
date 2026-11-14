@@ -84,6 +84,11 @@ public final class DouyinHook {
     /** v2.6.8：快手 / B站 进程。复用同一套已验证的几何识别骨架，用视频区域开关 + 各自总开关。 */
     private static volatile boolean isVideoApp = false;
     private static volatile boolean isKuaishou = false;
+    /** v2.8.0：显式记录 B站进程（含 com.bilibili.app.* 变体），不靠「非快手即 B站」的隐含推断。 */
+    private static volatile boolean isBilibili = false;
+    /** v2.8.0：视频进程状态诊断的上一条签名与时间戳，做状态变化 + 心跳节流，避免刷屏。 */
+    private static volatile String lastHookSig = "";
+    private static volatile long lastHookDiagAt = 0L;
     /**
      * v2.7：当前是否直播间的唯一判定结果，由 rescan 在收集完节点后一次性算出并提交。
      * 旧版 anyEnabled 用 isLiveStrong()、hideEnabled 用 isLive()、rescan 另有一套 local live，
@@ -133,11 +138,18 @@ public final class DouyinHook {
 
     static void init(XC_LoadPackage.LoadPackageParam lpparam) {
         try {
-            isDrama = lpparam.packageName != null && lpparam.packageName.startsWith("com.phoenix.read");
+            // v2.8.0：与 XposedInit 共用 VideoApps 唯一真源。旧版这里用精确 equals 认
+            // tv.danmaku.bili，B站渠道包 com.bilibili.app.in 即使被注入也会掉进「抖音」
+            // 分支用错开关；isVideoApp 也无法覆盖变体。
+            VideoApps.Kind kind = VideoApps.of(lpparam.packageName);
+            isDrama = kind == VideoApps.Kind.DRAMA;
+            isKuaishou = kind == VideoApps.Kind.KUAISHOU;
+            isBilibili = kind == VideoApps.Kind.BILIBILI;
+            isVideoApp = isKuaishou || isBilibili;
             String pn = lpparam.packageName == null ? "" : lpparam.packageName;
-            isKuaishou = "com.smile.gifmaker".equals(pn);
-            isVideoApp = isKuaishou || "tv.danmaku.bili".equals(pn);
             selfPkg = pn;
+            // 注入即无条件落盘：带真实包名与识别出的类型，一条就能确认「进程有没有被注入」。
+            XposedInit.diagForce("HOOK-ATTACH pkg=" + pn + " kind=" + VideoApps.label(kind));
             // 用 onResume（而非 onCreate）绑定当前页：新建/返回切换都能把布局监听迁移到当前前台页，
             // 单例监听 + 主动移除旧监听，避免每个 Activity 累积 addOnGlobalLayoutListener 造成 Activity 泄漏。
             XposedHelpers.findAndHookMethod(Activity.class, "onResume",
@@ -1304,12 +1316,70 @@ public final class DouyinHook {
         }
     };
 
+    /**
+     * v2.8.0：视频进程状态快照，无条件落盘（diagForce），供用户导出日志一次定位
+     * 「没注入 / 引擎让位 / 名单豁免 / 开关没开 / 几何没扫到 / 没进隐藏相位」中的哪一环。
+     * 与 SystemUI 的 SYS 行、遮盖服务的 MASK 行同一套「状态签名 + 30s 心跳」节流。
+     */
+    private static void hookDiag() {
+        long now = SystemClock.elapsedRealtime();
+        boolean overlay = ConfStore.ENGINE_OVERLAY.equals(Config.engine);
+        boolean itv = Config.shouldIntervene(selfPkg);
+        boolean master = isVideoApp
+                ? (isKuaishou ? Config.enableKuaishou : Config.enableBilibili)
+                : Config.enableStatus;
+        // 各 App 自己的分区开关位串：抖音6 / 红果5 / 快手·B站4
+        String sw;
+        if (isVideoApp) {
+            boolean r = isKuaishou ? Config.enableKsRight : Config.enableBiliRight;
+            boolean t = isKuaishou ? Config.enableKsTop : Config.enableBiliTop;
+            boolean b = isKuaishou ? Config.enableKsBottom : Config.enableBiliBottom;
+            boolean c = isKuaishou ? Config.enableKsCorner : Config.enableBiliCorner;
+            sw = bit(master) + bit(r) + bit(t) + bit(b) + bit(c);
+        } else if (isDrama) {
+            sw = bit(Config.enableStatus) + bit(Config.enableDramaTop) + bit(Config.enableDramaLike)
+                    + bit(Config.enableDramaRt) + bit(Config.enableDramaLt)
+                    + bit(Config.enableDramaSwipe);
+        } else {
+            sw = bit(Config.enableStatus) + bit(Config.enableDouyinTop) + bit(Config.enableDouyinBottom)
+                    + bit(Config.enableDouyinLike) + bit(Config.enableDouyinRt)
+                    + bit(Config.enableDouyinLt) + bit(Config.enableLive);
+        }
+        // 几何识别命中数：区域开关开了却扫不到容器，就是「失效」最常见的下一环
+        String hit = "R=x" + rightList.size() + " T=" + (topBar != null ? 1 : 0)
+                + " B=x" + bottomList.size() + " rt=" + (rightTop != null ? 1 : 0)
+                + " lt=" + (leftTop != null ? 1 : 0) + " plus=x" + centerPlusList.size();
+        String sig = " app=" + VideoApps.label(VideoApps.of(selfPkg)) + " pkg=" + selfPkg
+                + " ver=" + BuildConfig.VERSION_NAME
+                + " eng=" + Config.engine + " ov=" + overlay
+                + " lm=" + Config.listMode + " itv=" + itv
+                + " status=" + Config.enableStatus + " sw=" + sw
+                + " " + hit
+                + " hid=" + hidden + " cyc=" + Config.hideSec + "/" + Config.showSec
+                + " live=" + livePaused + " vlive=" + videoLivePage;
+        if (sig.equals(lastHookSig) && now - lastHookDiagAt < 30_000L) {
+            return;
+        }
+        lastHookSig = sig;
+        lastHookDiagAt = now;
+        XposedInit.diagForce("HOOK" + sig);
+    }
+
+    private static String bit(boolean v) {
+        return v ? "1" : "0";
+    }
+
     private static void tick() {
         // 宿主 Context 供 ConfigProvider 跨进程读配置使用
         if (currentDecor != null) {
             Config.attach(currentDecor.getContext());
         }
         Config.reload();
+        // v2.8.0：应用内分区隐藏此前是排障盲区 —— 所有状态只走受 enableLog 控制的
+        // diag()（默认关），视频进程又常拿不到 su，导出的日志里连一条都没有。
+        // 这里无条件落盘一条带「引擎/名单/开关/各区域命中数/隐藏相位」的快照，
+        // 签名变化或 30s 心跳才写，既照亮盲区又不刷屏。
+        hookDiag();
 
         // 兜底重扫：主要靠布局监听（事件驱动）即时抓新容器；这里每 2s 兜底一次，
         // 防布局监听覆盖不到的翻页场景漏藏。节流避免高频全树遍历（省电）。

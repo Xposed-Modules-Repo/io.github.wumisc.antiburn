@@ -80,7 +80,10 @@ public class XposedInit implements IXposedHookLoadPackage {
      * 这是判断「模块有没有被注入」的唯一依据，不能被配置链路故障连带弄丢。
      */
     public static void diagForce(String s) {
-        write(s);
+        // v2.8.0：关键事件（注入 / HOOK 状态）在视频 App 进程里常常只能靠 su 兜底落盘，
+        // 旧版和 diag() 共用 10s 节流，注入日志会与紧随其后的事件挤在同一窗口被吞掉，
+        // 表现为「日志里一条 INJECTED Douyin 都没有」。force=true 跳过节流。
+        write(s, true);
     }
 
     /**
@@ -94,10 +97,10 @@ public class XposedInit implements IXposedHookLoadPackage {
         } catch (Throwable ignored) {
             // Config 未初始化时按开启处理
         }
-        write(s);
+        write(s, false);
     }
 
-    private static void write(String s) {
+    private static void write(String s, boolean force) {
         if (QUEUED.get() > 512) {
             return; // 写盘严重滞后时丢弃，绝不阻塞调用线程
         }
@@ -107,7 +110,7 @@ public class XposedInit implements IXposedHookLoadPackage {
         try {
             LOG_WRITER.execute(() -> {
                 try {
-                    writeNow(origin, s);
+                    writeNow(origin, s, force);
                 } finally {
                     QUEUED.decrementAndGet();
                 }
@@ -118,7 +121,7 @@ public class XposedInit implements IXposedHookLoadPackage {
         }
     }
 
-    private static void writeNow(String origin, String s) {
+    private static void writeNow(String origin, String s, boolean force) {
         String line = System.currentTimeMillis() + " [" + origin + "] " + s + "\n";
         String path = logPath();
         if (path != null) {
@@ -148,18 +151,42 @@ public class XposedInit implements IXposedHookLoadPackage {
         // 只要直写路径没成功，任何进程都允许低频 su 兜底。
         {
             long now = System.currentTimeMillis();
-            if (now - lastSuWrite > SU_WRITE_INTERVAL_MS) {
+            if (force || now - lastSuWrite > SU_WRITE_INTERVAL_MS) {
                 lastSuWrite = now;
                 String b64 = Base64.encodeToString(
                         line.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
                 // 两个目录都补一份：兜底目录保证一定有，用户目录方便直接取
-                ConfStore.execSu("mkdir -p \"" + ConfStore.LOG_DIR_FALLBACK + "\" \""
+                boolean suOk = ConfStore.execSu("mkdir -p \"" + ConfStore.LOG_DIR_FALLBACK + "\" \""
                         + ConfStore.LOG_DIR + "\" 2>/dev/null; "
                         + "echo " + b64 + " | base64 -d >> \"" + ConfStore.LOG_DIR_FALLBACK
                         + "/antiburn.log\" 2>/dev/null; "
                         + "echo " + b64 + " | base64 -d >> \"" + ConfStore.LOG_FILE
                         + "\" 2>/dev/null; true");
+                // v2.8.2「改日志」：su 在临时 root / 普通 App 进程里经常拿不到，
+                // INJECTED / HOOK 这类关键行会整批丢失，导出的日志只剩 SystemUI 心跳。
+                // 再走一次 Provider 回传，由 App 进程代写（尽力而为，失败静默）。
+                if (!suOk) {
+                    providerLog(line);
+                }
             }
+        }
+    }
+
+    /** 被注入进程拿不到 su 时，把日志行交回 App 进程的 ConfigProvider 写入。 */
+    private static void providerLog(String line) {
+        try {
+            android.content.Context ctx = (android.content.Context) Class.forName(
+                    "android.app.ActivityThread").getMethod("currentApplication").invoke(null);
+            if (ctx == null) {
+                return;
+            }
+            android.os.Bundle b = new android.os.Bundle();
+            b.putString(ConfigProvider.KEY_TOKEN, ConfigProvider.TOKEN);
+            b.putString(ConfigProvider.KEY_LOG, line);
+            ctx.getContentResolver().call(
+                    android.net.Uri.parse("content://" + ConfigProvider.AUTHORITY),
+                    ConfigProvider.METHOD_PUT_LOG, null, b);
+        } catch (Throwable ignored) {
         }
     }
 
@@ -250,8 +277,19 @@ public class XposedInit implements IXposedHookLoadPackage {
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) {
         String pkg = lpparam.packageName;
         String proc = lpparam.processName;
+        // v2.8.0：包名识别收敛到 VideoApps 单一真源。渠道包 / 变体包
+        // （真机实证：抖音 com.ss.android.ugc.aweme.mobile、B站 com.bilibili.app.in）
+        // 此前被精确 equals 漏掉，LSPosed 不注入这些进程，App 内分区隐藏 100% 失效。
+        VideoApps.Kind kind = VideoApps.of(pkg);
         if ("com.android.systemui".equals(pkg)) {
             diagForce("INJECTED SystemUI process=" + proc);
+            // v2.8.2「改日志」：一次性写清这一版要靠什么判断「有没有注入」。
+            // 真机日志里若只有 INJECTED SystemUI、没有对应视频 App 的 INJECTED /
+            // HOOK-ATTACH，就说明 LSPosed 没把模块注入那些进程，DouyinHook 整条链
+            // 跑不到，真隐藏必然失效 —— 此时去看导出日志末尾的 SELF 汇总行与 MASK 行。
+            diagForce("SCOPE ver=" + BuildConfig.VERSION_NAME
+                    + " targets=douyin,phoenix.read,kuaishou,bilibili"
+                    + " hint=视频App进程需出现 INJECTED <app> 或 HOOK-ATTACH；否则开启无障碍服务使用应用内区域兜底");
             Log.i(TAG, "loaded into SystemUI, starting...");
             try {
                 Controller.init(lpparam);
@@ -259,8 +297,8 @@ public class XposedInit implements IXposedHookLoadPackage {
                 Log.e(TAG, "init failed", t);
                 diagForce("INIT FAILED SystemUI: " + Log.getStackTraceString(t));
             }
-        } else if ("com.ss.android.ugc.aweme".equals(pkg)) {
-            diagForce("INJECTED Douyin process=" + proc);
+        } else if (kind == VideoApps.Kind.DOUYIN) {
+            diagForce("INJECTED Douyin process=" + proc + " pkg=" + pkg);
             Log.i(TAG, "loaded into Douyin, starting...");
             try {
                 DouyinHook.init(lpparam);
@@ -268,10 +306,10 @@ public class XposedInit implements IXposedHookLoadPackage {
                 Log.e(TAG, "douyin init failed", t);
                 diagForce("INIT FAILED Douyin: " + Log.getStackTraceString(t));
             }
-        } else if ("com.phoenix.read".equals(pkg) || "com.phoenix.read.oversea.gp".equals(pkg)) {
+        } else if (kind == VideoApps.Kind.DRAMA) {
             // 红果短剧（抖音旗下，国内版 com.phoenix.read / 谷歌版 com.phoenix.read.oversea.gp）：
             // 复用抖音同一套视频页各区域隐藏逻辑
-            diagForce("INJECTED Drama process=" + proc);
+            diagForce("INJECTED Drama process=" + proc + " pkg=" + pkg);
             Log.i(TAG, "loaded into Hongguo Drama, starting...");
             try {
                 DouyinHook.init(lpparam);
@@ -279,12 +317,12 @@ public class XposedInit implements IXposedHookLoadPackage {
                 Log.e(TAG, "drama init failed", t);
                 diagForce("INIT FAILED Drama: " + Log.getStackTraceString(t));
             }
-        } else if ("com.smile.gifmaker".equals(pkg)) {
+        } else if (kind == VideoApps.Kind.KUAISHOU) {
             // 快手（v2.6.8）：正式接入周期隐藏。复用 DouyinHook 已验证的几何识别
             // （右侧列 / 顶部 / 底部 / 角落），不写快手专属阈值、不误伤视频画面；
             // 由快手总开关 + 共用区域开关门控，遮盖引擎下整体让位。
             // 探针保留：诊断日志开启时导出 View 树，供真机把几何阈值精调到实际坐标。
-            diagForce("INJECTED Kuaishou process=" + proc + " stage=2 hide-ready");
+            diagForce("INJECTED Kuaishou process=" + proc + " pkg=" + pkg + " stage=2 hide-ready");
             Log.i(TAG, "loaded into Kuaishou, hiding enabled (stage 2)...");
             try {
                 DouyinHook.init(lpparam);
@@ -298,9 +336,9 @@ public class XposedInit implements IXposedHookLoadPackage {
                 Log.e(TAG, "kuaishou probe init failed", t);
                 diagForce("PROBE FAILED Kuaishou: " + Log.getStackTraceString(t));
             }
-        } else if ("tv.danmaku.bili".equals(pkg)) {
+        } else if (kind == VideoApps.Kind.BILIBILI) {
             // 哔哩哔哩（v2.6.8）：与快手同一套路径，几何识别 + 周期隐藏 + 诊断探针。
-            diagForce("INJECTED Bilibili process=" + proc + " stage=2 hide-ready");
+            diagForce("INJECTED Bilibili process=" + proc + " pkg=" + pkg + " stage=2 hide-ready");
             Log.i(TAG, "loaded into Bilibili, hiding enabled (stage 2)...");
             try {
                 DouyinHook.init(lpparam);

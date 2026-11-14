@@ -24,6 +24,9 @@ public final class ConfigProvider extends ContentProvider {
     public static final String AUTHORITY = "io.github.wumisc.antiburn.config";
     public static final String METHOD_GET = "antiburn_get_conf";
     public static final String KEY_CONF = "conf";
+    /** v2.8.2：被注入进程写不出公共日志时的回传通道，由 App 进程代写。 */
+    public static final String METHOD_PUT_LOG = "antiburn_put_log";
+    public static final String KEY_LOG = "log";
     /** Provider 是 exported 的：要求调用方带模块内约定的 token，防止任意 App 读走配置全文 */
     public static final String KEY_TOKEN = "token";
     public static final String TOKEN = "antiburn-hook-v25";
@@ -39,12 +42,22 @@ public final class ConfigProvider extends ContentProvider {
 
     @Override
     public Bundle call(String method, String arg, Bundle extras) {
-        if (!METHOD_GET.equals(method)) {
-            return null;
-        }
         // 模块 APK 同时加载进 App 与 hook 进程，两边共享这个常量；
         // 第三方 App 直接 call() 不带 token 时返回 null。
         if (extras == null || !TOKEN.equals(extras.getString(KEY_TOKEN))) {
+            return null;
+        }
+        // v2.8.2「改日志」：视频 App 进程常拿不到 su，直写 /sdcard 又被分区存储挡住，
+        // INJECTED / HOOK 这类关键行会整批丢失，导出日志里只剩 SystemUI 的 SYS 心跳。
+        // 这里让 App 进程代写一行，是可观测性的最后一层兜底。
+        if (METHOD_PUT_LOG.equals(method)) {
+            String line = extras.getString(KEY_LOG);
+            if (line != null && !line.isEmpty() && line.length() < 4096) {
+                appendLog(line);
+            }
+            return null;
+        }
+        if (!METHOD_GET.equals(method)) {
             return null;
         }
         // 只读应用内镜像：provider 是导出的，不能在 Binder 线程里被任意应用触发 su。
@@ -57,6 +70,22 @@ public final class ConfigProvider extends ContentProvider {
         Bundle b = new Bundle();
         b.putString(KEY_CONF, text);
         return b;
+    }
+
+    /** 只追加、不创建目录结构之外的东西；失败静默，绝不因写日志影响配置读取。 */
+    private void appendLog(String line) {
+        try {
+            java.io.File f = new java.io.File(ConfStore.LOG_FILE);
+            java.io.File dir = f.getParentFile();
+            if (dir != null && !dir.exists()) {
+                //noinspection ResultOfMethodCallIgnored
+                dir.mkdirs();
+            }
+            try (java.io.FileOutputStream fo = new java.io.FileOutputStream(f, true)) {
+                fo.write(line.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            }
+        } catch (Throwable ignored) {
+        }
     }
 
     @Override

@@ -9,18 +9,29 @@
       加入作用域后，用户需在 LSPosed 管理器重新勾选新增的两项并重启，
       否则不会注入（v2.6.1 已踩过「作用域没勾导致 lsp 模式不可用」）。
 
-      变体包名「只登记、不启用」：以下均为待确认项，真机日志未出现，
-      擅自启用会在 LSPosed 管理器里列出用户根本没安装的应用，也不做无谓注入：
-        快手极速版 / 快手国际版
-        B站 HD / 概念版 / 国际版 / 白色版
-      待 Step 1 真机核验准确包名后，再逐条决定是否加入 xposed_scope。
+      v2.8.0：真机日志实证用户 OPPO ColorOS 设备装的抖音是
+      com.ss.android.ugc.aweme.mobile、B站是 com.bilibili.app.in —— 都不在旧的 6 项清单里，
+      LSPosed 因此不注入这两个进程，App 内分区隐藏 100% 失效。现已把渠道包 / 极速版 /
+      HD / 概念版一并登记。xposed_scope 只是「推荐作用域」，LSPosed 会与设备上已安装的
+      应用取交集展示，列出未安装的项不会造成无谓注入；若你的包名仍不在列表，请在
+      LSPosed 管理器里对本模块手动勾选该应用（VideoApps 已用前缀匹配覆盖绝大多数变体）。
     -->
     <string-array name="xposed_scope">
         <item>com.android.systemui</item>
+        <!-- 抖音：主包 + 真机实证的渠道包 .mobile（OPPO）+ 极速版 -->
         <item>com.ss.android.ugc.aweme</item>
+        <item>com.ss.android.ugc.aweme.mobile</item>
+        <item>com.ss.android.ugc.aweme.lite</item>
+        <!-- 红果短剧：国内版 + 谷歌版 -->
         <item>com.phoenix.read</item>
         <item>com.phoenix.read.oversea.gp</item>
+        <!-- 快手：主包 + 极速版 -->
         <item>com.smile.gifmaker</item>
+        <item>com.kuaishou.nebula</item>
+        <!-- 哔哩哔哩：主包 + 真机实证的渠道包 com.bilibili.app.in（OPPO）+ HD + 概念版 + 国际版 -->
         <item>tv.danmaku.bili</item>
+        <item>com.bilibili.app.in</item>
+        <item>tv.danmaku.bilibilihd</item>
+        <item>com.bilibili.app.blue</item>
     </string-array>
 </resources>

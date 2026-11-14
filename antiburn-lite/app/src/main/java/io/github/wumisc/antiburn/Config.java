@@ -77,6 +77,8 @@ public final class Config {
      */
     public static volatile boolean enableStatusBar = true;
     public static volatile boolean enableLog = false;
+    /** v2.8.2：应用内区域兜底遮盖；Config 侧留存并打进 CONF apply，真正消费方是 BurnInMaskService。 */
+    public static volatile boolean enableAppOverlay = true;
     /** 目标 UI 适配方案（conf 里的 ui_style，与 profiles/*.json 对应）。默认按机型识别。 */
     public static volatile String uiStyle = UiStyle.detect(
             android.os.Build.MANUFACTURER, android.os.Build.BRAND,
@@ -568,8 +570,28 @@ public final class Config {
                 + " wl=" + list.size() + " lm=" + listMode
                 + " w=" + whiteCount + " b=" + blackCount + " fetch=" + fetchState
                 + " cache=" + (cacheText != null ? "ok" : "none")
-                + " eng=" + engine
+                + " eng=" + engine + " ao=" + enableAppOverlay
+                // v2.8.2「改日志」：把各 App 分区开关位串一起打出来。旧日志只有
+                // status/nav/shift，真机排障时无法判断「区域开关到底有没有读到新值」，
+                // 只能反复让用户猜。位序固定，见各二级页的排列顺序。
+                + " dsw=" + bits(enableDouyinTop, enableDouyinBottom, enableDouyinLike,
+                        enableDouyinRt, enableDouyinLt)
+                + " dr=" + bits(enableDramaTop, enableDramaLike, enableDramaRt,
+                        enableDramaLt, enableDramaSwipe)
+                + " ks=" + bits(enableKuaishou, enableKsRight, enableKsTop,
+                        enableKsBottom, enableKsCorner)
+                + " bi=" + bits(enableBilibili, enableBiliRight, enableBiliTop,
+                        enableBiliBottom, enableBiliCorner)
                 + " ver=" + BuildConfig.VERSION_NAME + staleTag());
+    }
+
+    /** 把一组开关压成 0101 位串，日志里比五个 key=value 短得多也更好比对。 */
+    private static String bits(boolean... v) {
+        StringBuilder sb = new StringBuilder();
+        for (boolean b : v) {
+            sb.append(b ? '1' : '0');
+        }
+        return sb.toString();
     }
 
     /**
@@ -698,6 +720,7 @@ public final class Config {
         boolean biR = enableBiliRight, biT = enableBiliTop, biB = enableBiliBottom, biC = enableBiliCorner;
         boolean live = enableLive, poem = enablePoem, ball = enableBall;
         boolean ic = enableIcon, lg = enableLog;
+        boolean ao = enableAppOverlay;
         boolean sb = enableStatusBar;
         String style = uiStyle;
         String custom = customPoems;
@@ -793,6 +816,7 @@ public final class Config {
                 case "enable_icon": ic = "1".equals(v); break;
                 case "enable_status_bar": sb = "1".equals(v); break;
                 case "enable_log": lg = "1".equals(v); break;
+                case "enable_app_overlay": ao = "1".equals(v); break;
                 case "custom_poems":
                     customDecoded = ConfStore.decodeValue(v);
                     break;
@@ -869,6 +893,7 @@ public final class Config {
         enableIcon = ic;
         enableStatusBar = sb;
         enableLog = lg;
+        enableAppOverlay = ao;
         uiStyle = style;
         customPoems = custom;
         if (appVerRaw != null) {

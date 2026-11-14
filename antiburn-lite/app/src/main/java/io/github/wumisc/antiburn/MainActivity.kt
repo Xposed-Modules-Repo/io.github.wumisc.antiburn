@@ -50,6 +50,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -96,7 +97,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * 防止烧屏 · 精简磁贴版 v2.0
+ * 防止烧屏 · v2.0 起
+ *
+ * v2.7.8：功能页由两列磁贴 + 五个横向 tab 改为单行列表，五个分类各进
+ *       一个二级菜单；关于页新增「功能建议」二级页与 GitHub 提交按钮。
  *
  * v1.8：功能页改为磁贴式开关，抖音 / 红果分别独立成一张磁贴页；
  *       保存条新增「重启系统界面」，改完一键让 SystemUI 重新注入生效。
@@ -162,6 +166,11 @@ data class AbState(
     val enablePoem: Boolean = false,
     val enableBall: Boolean = false,
     val enableLog: Boolean = false,
+    /**
+     * v2.8.2 稳定版：应用内固定区域兜底遮盖，默认开。
+     * 不依赖 LSPosed 把模块注入抖音 / 快手 / B站进程，只要无障碍服务连着就能生效。
+     */
+    val enableAppOverlay: Boolean = true,
     val enableDouyinTop: Boolean = false,
     val enableDouyinBottom: Boolean = false,
     val enableDouyinLike: Boolean = false,
@@ -245,6 +254,8 @@ private val AbStateSaver = listSaver(
             s.enableKsBottom, s.enableKsCorner,
             s.enableBiliRight, s.enableBiliTop,
             s.enableBiliBottom, s.enableBiliCorner,
+            // v2.8.2：应用内区域兜底。索引 38，追加在末尾不动旧索引。
+            s.enableAppOverlay,
         )
     },
     restore = { l: List<Any> ->
@@ -304,6 +315,8 @@ private val AbStateSaver = listSaver(
                 enableBiliTop = Bool(35),
                 enableBiliBottom = Bool(36),
                 enableBiliCorner = Bool(37),
+                // v2.8.2：旧 Bundle 只有 38 项时取默认 true，升级即获得兜底防护
+                enableAppOverlay = Bool(38, true),
             )
         }
     },
@@ -366,6 +379,8 @@ object AbConf {
             enablePoem = false,
             enableBall = b(map["enable_ball"]),
             enableLog = b(map["enable_log"]),
+            // 缺键（旧配置升级）默认开，保证装上就有兜底防护
+            enableAppOverlay = b(map["enable_app_overlay"], true),
             enableDouyinTop = b(map["enable_douyin_top"]),
             enableDouyinBottom = b(map["enable_douyin_bottom"]),
             enableDouyinLike = b(map["enable_douyin_like"]),
@@ -438,6 +453,7 @@ object AbConf {
         lines["enable_poem"] = if (s.enablePoem) "1" else "0"
         lines["enable_ball"] = if (s.enableBall) "1" else "0"
         lines["enable_log"] = if (s.enableLog) "1" else "0"
+        lines["enable_app_overlay"] = if (s.enableAppOverlay) "1" else "0"
         lines["enable_douyin_top"] = if (s.enableDouyinTop) "1" else "0"
         lines["enable_douyin_bottom"] = if (s.enableDouyinBottom) "1" else "0"
         lines["enable_douyin_like"] = if (s.enableDouyinLike) "1" else "0"
@@ -510,6 +526,7 @@ object AbConf {
         putB("enable_poem", old.enablePoem, new.enablePoem)
         putB("enable_ball", old.enableBall, new.enableBall)
         putB("enable_log", old.enableLog, new.enableLog)
+        putB("enable_app_overlay", old.enableAppOverlay, new.enableAppOverlay)
         putB("enable_douyin_top", old.enableDouyinTop, new.enableDouyinTop)
         putB("enable_douyin_bottom", old.enableDouyinBottom, new.enableDouyinBottom)
         putB("enable_douyin_like", old.enableDouyinLike, new.enableDouyinLike)
@@ -612,8 +629,6 @@ private fun BurnInProtectApp() {
             scope.launch { pagerState.animateScrollToPage(index) }
         }
     }
-    // 功能页内部子页：0=通用 1=抖音 2=红果（抖音/红果各是一整页磁贴）
-    var featurePage by rememberSaveable { mutableIntStateOf(0) }
     // 二级菜单栈：null=主界面；thanks/donate/cycle 各是一个独立二级页。
     // 用 saveable 保存，旋转/深浅色切换后不会退回主页。
     var subPage by rememberSaveable { mutableStateOf<String?>(null) }
@@ -780,7 +795,7 @@ private fun BurnInProtectApp() {
         }
     }
 
-    // 函数式更新：回调里读到的永远是最新 state，同一重组内连点多个磁贴不会互相覆盖
+    // 函数式更新：回调里读到的永远是最新 state，同一重组内连点多个开关行不会互相覆盖
     val onStateChange: ((AbState) -> AbState) -> Unit = { update ->
         val newState = update(state)
         state = newState
@@ -967,10 +982,8 @@ private fun BurnInProtectApp() {
                         )
                         1 -> FeaturesPage(
                             state = state,
-                            onStateChange = onStateChange,
+                            onOpen = openSub,
                             saveBar = saveBar,
-                            featurePage = featurePage,
-                            onFeaturePageChange = { featurePage = it },
                         )
                         2 -> AboutPage(onOpen = openSub, onOpenUrl = openUrl)
                     }
@@ -1023,6 +1036,9 @@ private fun BurnInProtectApp() {
                     page = subPage!!,
                     onBack = { subPage = null },
                     onOpenUrl = openUrl,
+                    state = state,
+                    onStateChange = onStateChange,
+                    saveBar = saveBar,
                 )
             }
         }
@@ -1261,6 +1277,29 @@ private fun EngineCard(
                 color = sub,
                 modifier = Modifier.padding(top = 4.dp),
             )
+
+            // v2.7.7：ColorOS 15 / Android 15 的状态栏改由独立图层自绘，
+            // LSPosed 引擎对 SystemUI 状态栏 View 调 setAlpha(0) 不会再影响真正绘制的那一层
+            // （真机表现：日志里周期在跑、屏幕毫无变化）。这类设备、以及「临时 root」
+            // （重启后 root 丢失 → 模块不加载）都必须用无障碍遮盖引擎。直接在卡片上点明，
+            // 别让用户在两条引擎之间反复试、反复重启。
+            val romHint = (Build.MANUFACTURER + " " + Build.BRAND + " " + Build.DISPLAY)
+                .lowercase()
+            val oplusLayered = Build.VERSION.SDK_INT >= 35
+                    && (romHint.contains("oppo") || romHint.contains("oneplus")
+                    || romHint.contains("realme") || romHint.contains("coloros")
+                    || romHint.contains("oplus"))
+            if (oplusLayered && !overlay) {
+                Text(
+                    "⚠ 检测到 ColorOS / Android 15：本系统状态栏为独立图层，" +
+                            "LSPosed 引擎的隐藏在此机型不生效（日志在跑、屏幕没反应）。" +
+                            "请点下方「无障碍遮盖」并去系统设置开启本应用的无障碍服务。" +
+                            "临时 root 重启后模块会失效，也建议用这条引擎。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = UiPalette.accent(dark),
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+            }
 
             Row(
                 Modifier.fillMaxWidth().padding(top = 10.dp),
@@ -1808,7 +1847,7 @@ private fun HomeTilePage(
 
         Spacer(Modifier.height(12.dp))
 
-        // 周期时长已移到「功能 → 通用」磁贴，点磁贴弹小窗调整，首页不再放第二处入口。
+        // 周期时长在「功能 → 通用」二级页，点单行 ListRow 弹小窗调整，首页不再放第二处入口。
         Card(
             Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(18.dp),
@@ -1882,44 +1921,23 @@ private fun HomeTilePage(
     }
 }
 
-// ---- 功能：磁贴式开关；抖音 / 红果 各自独立成一页 ----
+// ---- 功能：一行一行的分组入口 + 二级菜单 ----
 
 /**
- * 一个磁贴的数据。enabled=false 表示常驻不可切换（如红果底部剧集入口）。
- * navClick 不为空时是「入口磁贴」：点击进二级菜单，不显示开关状态。
+ * 功能页：与关于页一致的单行列表（ListRow），点开一项进二级菜单。
  *
- * <p>参数顺序有硬约束：**onToggle 必须是最后一个**。所有调用点都写成
- * <code>TileItem(a, b, c, checked) { toggle() }</code> 的尾随 lambda 形式，
- * Kotlin 把尾随 lambda 绑给「最后一个参数」。v2.9 重排时把 navClick 挪到了末尾，
- * 于是二十多个功能磁贴的尾随 lambda 全被绑成 navClick，onToggle 退化成空实现。</p>
- *
- * <p>后果不是点不动（TileCard 里 nav != null 时也会 invoke），而是
- * <code>isEntry = navClick != null</code> 恒为真 —— 每个磁贴右上角都显示「›」、
- * 永远不显示「已开启 / 已关闭」。用户看不出开关状态，只好反复点，
- * 于是一个本来开着的东西被点成关闭，反馈成「改一下设置它自己就关了」。
- * 真机日志里 shift 从 true 变 false 只隔 2 秒，正是这么来的。</p>
+ * <p>v2.7.8 之前这里是两列磁贴 + 五个横向 tab：tab 与外层 HorizontalPager
+ * 抢左右滑动手势，磁贴只有「已开启/已关闭」两态、放不下说明文字，
+ * 且抖音/红果的开关在免 root 遮盖引擎下没置灰（假开关）。
+ * 改成列表后入口与内容分离，副标题直接给出已开启数量。</p>
  */
-private data class TileItem(
-    val title: String,
-    val glyph: String,
-    val subtitle: String,
-    val checked: Boolean,
-    val enabled: Boolean = true,
-    val navClick: (() -> Unit)? = null,
-    val onToggle: (Boolean) -> Unit = {},
-)
-
 @Composable
 private fun FeaturesPage(
     state: AbState,
-    onStateChange: ((AbState) -> AbState) -> Unit,
+    onOpen: (String) -> Unit,
     saveBar: @Composable () -> Unit,
-    featurePage: Int,
-    onFeaturePageChange: (Int) -> Unit,
 ) {
     val dark = isSystemInDarkTheme()
-    // 周期时长点磁贴弹小窗，不再跳二级页；避免和首页入口两处状态不一致。
-    var showCycleDialog by remember { mutableStateOf(false) }
     Column(
         Modifier
             .fillMaxSize()
@@ -1929,195 +1947,219 @@ private fun FeaturesPage(
     ) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.Bottom) {
-            Text("功能磁贴", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold,
+            Text("功能", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold,
                 color = UiPalette.ink(dark))
             Text("为生民立命", style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.outline)
         }
-        Text("点击磁贴即可开关；带 › 的磁贴会打开设置小窗",
+        Text("按应用分组设置，点开一项逐条调整 · 开关改动即时保存",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant)
 
         saveBar()
         Spacer(Modifier.height(10.dp))
 
-        // 子页切换：通用 / 抖音 / 红果 / 快手 / B站。五个 tab 一行放不下，
-        // 改用横向滚动；weight 在 infinite width 的滚动容器里会失效，故用固定宽度。
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
-            listOf("通用", "抖音", "红果", "快手", "B站").forEachIndexed { index, label ->
-                Box(Modifier.width(76.dp).padding(horizontal = 4.dp)) {
-                    if (index == featurePage) {
-                        Button(onClick = { onFeaturePageChange(index) }, modifier = Modifier.fillMaxWidth()) {
-                            Text(label)
-                        }
-                    } else {
-                        OutlinedButton(onClick = { onFeaturePageChange(index) }, modifier = Modifier.fillMaxWidth()) {
-                            Text(label)
-                        }
-                    }
-                }
-            }
-        }
-        Spacer(Modifier.height(6.dp))
+        val generalOn = listOf(
+            state.enableStatusBar, state.enableNav, state.enableLog, state.enableBall,
+        ).count { it }
+        ListRow("通用", "系统栏 / 日志 / 悬浮球 / 周期时长 · 已开启 $generalOn/4 项",
+            { onOpen("feat-general") }, dark)
 
-        when (featurePage) {
-            0 -> {
-                GroupTitle("系统栏与通用")
-                // v2.7：删除原「状态栏图标」磁贴。它错绑了 enableStatus（总闸），
-                // 点一下等于把整个模块关掉，与首页总开关重复且严重误导
-                // （日志里 status 反复 0↔1 正来源于此）。状态栏图标隐藏本就是
-                // 总闸开启后的固有行为（hideStatusKeepNotify），无需第二个入口。
-                //
-                // v2.6.4：上面这个结论被真机推翻了。删掉之后状态栏变成「总闸一开必隐藏」，
-                // 用户想把状态栏留下、只隐藏导航栏时无路可走，反馈成
-                // 「总开关一开，状态栏导航栏百分百一起隐藏」。这次不绑总闸，
-                // 绑独立的 enable_status_bar（默认 true，老配置行为不变）。
-                TileGrid(
-                    listOf(
-                        TileItem("状态栏", "栏", "顶部图标周期性隐藏", state.enableStatusBar) {
-                            onStateChange { s -> s.copy(enableStatusBar = !s.enableStatusBar) }
-                        },
-                        TileItem("导航栏", "导", "底部系统导航栏", state.enableNav) {
-                            onStateChange { s -> s.copy(enableNav = !s.enableNav) }
-                        },
-                        // v2.6.5：按需求删除「状态栏偏移」开关。它在真机上反复引发
-                        // 「改一下设置就自己关掉」的反馈（v2.9 磁贴参数绑错的那次）。
-                        // 像素微移是视觉无感的温和防护，改为内置常开、不再暴露开关：
-                        // AbState / Config / Controller 链路原样保留，避免动 Saver 索引
-                        // 让老用户升级后 Bundle 恢复错位。字段值在 load/save 固定为开。
-                        TileItem("诊断日志", "志", "写 diag.log 排查", state.enableLog) {
-                            onStateChange { s -> s.copy(enableLog = !s.enableLog) }
-                        },
-                        TileItem("悬浮球", "球", "点击切换隐藏控件", state.enableBall) {
-                            onStateChange { s -> s.copy(enableBall = !s.enableBall) }
-                        },
-                        // v2.6.5：周期时长从首页 ListRow 挪到这里。它是全功能页唯一
-                        // 有意的「入口磁贴」，用命名参数 navClick 显式标注，点开弹小窗，
-                        // 不会像 2.9 那次被尾随 lambda 误绑成一整片的入口。
-                        TileItem(
-                            "周期时长", "时", "隐藏 ${state.hideSec}s · 显示 ${state.showSec}s",
-                            false, navClick = { showCycleDialog = true },
-                        ),
-                    )
-                )
+        val douyinOn = listOf(
+            state.enableDouyinTop, state.enableDouyinBottom, state.enableDouyinLike,
+            state.enableDouyinRt, state.enableDouyinLt, state.enableLive,
+        ).count { it }
+        ListRow("抖音", "视频页六个区域 · 已开启 $douyinOn/6 项",
+            { onOpen("feat-douyin") }, dark)
 
-                // v2.6.5：名单卡片只在首页保留一份，此处不再重复。
-                // 同一份设置在两个页面各摆一张卡片时，两处入口的展开状态、滚动位置
-                // 互不同步，用户会以为是两套名单；且功能页这张的表单会把页面撑长，
-                // 压掉下方抖音 / 红果子页的可见性。
-                RoadmapCard(dark)
-            }
-            1 -> {
-                GroupTitle("抖音 · 视频页六个区域")
-                TileGrid(
-                    listOf(
-                        TileItem("顶部导航", "顶", "直播/团购/关注/商城", state.enableDouyinTop) {
-                            onStateChange { s -> s.copy(enableDouyinTop = !s.enableDouyinTop) }
-                        },
-                        TileItem("底部导航", "底", "首页/朋友/消息/我", state.enableDouyinBottom) {
-                            onStateChange { s -> s.copy(enableDouyinBottom = !s.enableDouyinBottom) }
-                        },
-                        TileItem("右侧按钮列", "赞", "点赞/评论/收藏/分享", state.enableDouyinLike) {
-                            onStateChange { s -> s.copy(enableDouyinLike = !s.enableDouyinLike) }
-                        },
-                        TileItem("右上角", "右", "搜索/分享/更多", state.enableDouyinRt) {
-                            onStateChange { s -> s.copy(enableDouyinRt = !s.enableDouyinRt) }
-                        },
-                        TileItem("左上角", "左", "三横线菜单按钮", state.enableDouyinLt) {
-                            onStateChange { s -> s.copy(enableDouyinLt = !s.enableDouyinLt) }
-                        },
-                        TileItem("直播间隐藏", "播", "直播页顶栏/底栏/右下", state.enableLive) {
-                            onStateChange { s -> s.copy(enableLive = !s.enableLive) }
-                        },
-                    )
-                )
-                HintText("打开后，抖音进程内对应区域会按周期隐藏。若直播黑屏，可关闭「直播间隐藏」。")
-            }
-            2 -> {
-                GroupTitle("红果短剧 · 视频页区域")
-                TileGrid(
-                    listOf(
-                        TileItem("顶部区域", "顶", "视频页顶部栏", state.enableDramaTop) {
-                            onStateChange { s -> s.copy(enableDramaTop = !s.enableDramaTop) }
-                        },
-                        TileItem("右侧按钮", "赞", "点赞/收藏等按钮列", state.enableDramaLike) {
-                            onStateChange { s -> s.copy(enableDramaLike = !s.enableDramaLike) }
-                        },
-                        TileItem("右上角", "右", "右上角操作按钮", state.enableDramaRt) {
-                            onStateChange { s -> s.copy(enableDramaRt = !s.enableDramaRt) }
-                        },
-                        TileItem("左上角", "左", "左上角菜单按钮", state.enableDramaLt) {
-                            onStateChange { s -> s.copy(enableDramaLt = !s.enableDramaLt) }
-                        },
-                        // v2.6.6：右侧中部竖排「左滑查看详情 «」引导条，按文案识别单独隐藏。
-                        TileItem("左滑查看详情", "滑", "右侧竖排引导文字", state.enableDramaSwipe) {
-                            onStateChange { s -> s.copy(enableDramaSwipe = !s.enableDramaSwipe) }
-                        },
-                        TileItem("底部入口", "底", "剧集/选集入口，始终常驻", false, enabled = false) { },
-                    )
-                )
-                HintText("红果底部是「完整观看 / 选集」等功能入口，模块刻意不隐藏，避免点不进去。")
-                HintText("「左滑查看详情」按文案识别引导条，仅 LSPosed 引擎下生效；免 root 遮盖引擎只能盖系统栏，无法隐藏 App 内控件。")
-            }
-            3 -> {
-                VideoAppSubPage(
-                    state = state,
-                    onStateChange = onStateChange,
-                    dark = dark,
-                    appLabel = "快手",
-                    glyph = "快",
-                    master = state.enableKuaishou,
-                    onMaster = { on -> onStateChange { s -> s.copy(enableKuaishou = on) } },
-                    right = state.enableKsRight,
-                    top = state.enableKsTop,
-                    bottom = state.enableKsBottom,
-                    corner = state.enableKsCorner,
-                    onRight = { onStateChange { s -> s.copy(enableKsRight = !s.enableKsRight) } },
-                    onTop = { onStateChange { s -> s.copy(enableKsTop = !s.enableKsTop) } },
-                    onBottom = { onStateChange { s -> s.copy(enableKsBottom = !s.enableKsBottom) } },
-                    onCorner = { onStateChange { s -> s.copy(enableKsCorner = !s.enableKsCorner) } },
-                )
-            }
-            4 -> {
-                VideoAppSubPage(
-                    state = state,
-                    onStateChange = onStateChange,
-                    dark = dark,
-                    appLabel = "哔哩哔哩",
-                    glyph = "B",
-                    master = state.enableBilibili,
-                    onMaster = { on -> onStateChange { s -> s.copy(enableBilibili = on) } },
-                    right = state.enableBiliRight,
-                    top = state.enableBiliTop,
-                    bottom = state.enableBiliBottom,
-                    corner = state.enableBiliCorner,
-                    onRight = { onStateChange { s -> s.copy(enableBiliRight = !s.enableBiliRight) } },
-                    onTop = { onStateChange { s -> s.copy(enableBiliTop = !s.enableBiliTop) } },
-                    onBottom = { onStateChange { s -> s.copy(enableBiliBottom = !s.enableBiliBottom) } },
-                    onCorner = { onStateChange { s -> s.copy(enableBiliCorner = !s.enableBiliCorner) } },
-                )
-            }
-        }
-        Spacer(Modifier.height(8.dp))
+        val dramaOn = listOf(
+            state.enableDramaTop, state.enableDramaLike, state.enableDramaRt,
+            state.enableDramaLt, state.enableDramaSwipe,
+        ).count { it }
+        ListRow("红果", "短剧视频页五个区域 · 已开启 $dramaOn/5 项",
+            { onOpen("feat-drama") }, dark)
 
-        // 周期时长：点「通用」里的入口磁贴就地弹小窗，不再跳二级页。
-        if (showCycleDialog) {
-            CycleDialog(
-                state = state,
-                onStateChange = onStateChange,
-                dark = dark,
-                onDismiss = { showCycleDialog = false },
-            )
-        }
+        val ksOn = listOf(
+            state.enableKuaishou, state.enableKsRight, state.enableKsTop,
+            state.enableKsBottom, state.enableKsCorner,
+        ).count { it }
+        ListRow("快手", "总开关 + 四个区域 · 已开启 $ksOn/5 项",
+            { onOpen("feat-kuaishou") }, dark)
+
+        val biliOn = listOf(
+            state.enableBilibili, state.enableBiliRight, state.enableBiliTop,
+            state.enableBiliBottom, state.enableBiliCorner,
+        ).count { it }
+        ListRow("B站", "总开关 + 四个区域 · 已开启 $biliOn/5 项",
+            { onOpen("feat-bilibili") }, dark)
+
+        Spacer(Modifier.height(14.dp))
+        RoadmapCard(dark)
     }
 }
 
 /**
- * 快手 / 哔哩哔哩共用子页（v2.6.8）。
+ * 开关行：标题 + 副标题 + 右侧 Switch，整行可点，底部细分隔线。
+ * 与关于页 ListRow 同一套排版，深浅色一致。
  *
- * <p>四个区域开关两 App 共用一份配置，总开关各自独立。免 root 遮盖引擎下整页置灰：
- * 它只能按周期盖黑系统栏，无法隐藏 App 内固定控件 —— 不放假开关是硬规矩
- * （v2.6.3 status=false、v2.6.5 占位卡都踩过「装了没效果」的坑）。</p>
+ * <p>所有调用点一律用命名参数传 onCheckedChange。v2.9 那次事故是
+ * 六参 TileItem 的尾随 lambda 被绑到最后一个参数 navClick，二十多个
+ * 开关的 onToggle 集体退化成空实现。这里从签名上就不留尾随 lambda
+ * 的误绑空间，且 checked 由 state 直接给出，开关值不会自己漂移。</p>
+ */
+@Composable
+private fun OptionRow(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    dark: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    enabled: Boolean = true,
+    disabledLabel: String = "",
+) {
+    val ink = if (enabled) UiPalette.ink(dark) else MaterialTheme.colorScheme.outline
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(enabled = enabled) { onCheckedChange(!checked) }
+            .padding(horizontal = 4.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold, color = ink)
+            if (subtitle.isNotEmpty()) {
+                Text(subtitle, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 3.dp))
+            }
+        }
+        Spacer(Modifier.width(10.dp))
+        if (enabled) {
+            Switch(checked = checked, onCheckedChange = onCheckedChange)
+        } else {
+            Text(if (disabledLabel.isNotEmpty()) disabledLabel else "常驻",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.outline)
+        }
+    }
+    Box(Modifier.fillMaxWidth().height(1.dp)
+        .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.18f)))
+}
+
+/** 免 root 遮盖引擎下统一的能力边界提示：置灰开关，不放假入口。 */
+@Composable
+private fun OverlayNotice(dark: Boolean, appLabel: String) {
+    Card(
+        Modifier.fillMaxWidth().padding(bottom = 8.dp),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = UiPalette.warn(dark).copy(alpha = 0.12f)),
+    ) {
+        Text("当前是免 root 遮盖引擎。系统栏照常按周期盖黑；$appLabel 内固定控件不做真隐藏，但「通用 › 应用内区域兜底」会用覆盖层按屏幕比例遮盖右侧按钮列 / 顶部 / 底部，两种引擎下都能防烧屏。这里的开关只对 LSPosed 真隐藏生效。",
+            style = MaterialTheme.typography.bodySmall,
+            color = UiPalette.warn(dark),
+            modifier = Modifier.padding(14.dp))
+    }
+}
+
+@Composable
+private fun GeneralFeaturePage(
+    state: AbState,
+    onStateChange: ((AbState) -> AbState) -> Unit,
+    dark: Boolean,
+) {
+    var showCycleDialog by remember { mutableStateOf(false) }
+    GroupTitle("系统栏与通用")
+    OptionRow("状态栏", "顶部图标周期性隐藏", checked = state.enableStatusBar, dark = dark,
+        onCheckedChange = { on -> onStateChange { s -> s.copy(enableStatusBar = on) } })
+    OptionRow("导航栏", "底部系统导航栏", checked = state.enableNav, dark = dark,
+        onCheckedChange = { on -> onStateChange { s -> s.copy(enableNav = on) } })
+    OptionRow("诊断日志", "写 diag.log 排查，出问题请先打开它", checked = state.enableLog, dark = dark,
+        onCheckedChange = { on -> onStateChange { s -> s.copy(enableLog = on) } })
+    OptionRow("悬浮球", "点击切换隐藏控件", checked = state.enableBall, dark = dark,
+        onCheckedChange = { on -> onStateChange { s -> s.copy(enableBall = on) } })
+    OptionRow("应用内区域兜底", "无需 Root / 无需注入，遮盖右侧按钮列、顶部标题、底部导航",
+        checked = state.enableAppOverlay, dark = dark,
+        onCheckedChange = { on -> onStateChange { s -> s.copy(enableAppOverlay = on) } })
+    ListRow("周期时长", "隐藏 ${state.hideSec}s · 显示 ${state.showSec}s",
+        { showCycleDialog = true }, dark, trailing = "›")
+    HintText("像素微移是视觉无感的温和防护，内置常开，不单独提供开关。")
+    HintText("「应用内区域兜底」由无障碍覆盖层绘制，需要在系统设置里为本应用开启无障碍服务。它不要求 LSPosed 把模块注入抖音 / 快手 / B站进程，因此在这类设备上往往是最有效的一条通道；与真隐藏同时开启也不冲突，覆盖层不吃触摸，点赞评论照常可点。")
+    HintText("各 App 的区域开关未逐个配置时，兜底默认按「右侧按钮列 + 顶部标题 + 底部导航」三区遮盖；需要精调请到对应 App 的二级页逐区开关，或直接关闭本项。")
+    if (showCycleDialog) {
+        CycleDialog(
+            state = state,
+            onStateChange = onStateChange,
+            dark = dark,
+            onDismiss = { showCycleDialog = false },
+        )
+    }
+}
+
+@Composable
+private fun DouyinFeaturePage(
+    state: AbState,
+    onStateChange: ((AbState) -> AbState) -> Unit,
+    dark: Boolean,
+) {
+    val overlay = state.isOverlay
+    if (overlay) OverlayNotice(dark, "抖音")
+    GroupTitle("抖音 · 视频页六个区域")
+    OptionRow("顶部导航", "直播/团购/关注/商城", checked = state.enableDouyinTop, dark = dark,
+        enabled = !overlay,
+        onCheckedChange = { on -> onStateChange { s -> s.copy(enableDouyinTop = on) } })
+    OptionRow("底部导航", "首页/朋友/消息/我", checked = state.enableDouyinBottom, dark = dark,
+        enabled = !overlay,
+        onCheckedChange = { on -> onStateChange { s -> s.copy(enableDouyinBottom = on) } })
+    OptionRow("右侧按钮列", "点赞/评论/收藏/分享", checked = state.enableDouyinLike, dark = dark,
+        enabled = !overlay,
+        onCheckedChange = { on -> onStateChange { s -> s.copy(enableDouyinLike = on) } })
+    OptionRow("右上角", "搜索/分享/更多", checked = state.enableDouyinRt, dark = dark,
+        enabled = !overlay,
+        onCheckedChange = { on -> onStateChange { s -> s.copy(enableDouyinRt = on) } })
+    OptionRow("左上角", "三横线菜单按钮", checked = state.enableDouyinLt, dark = dark,
+        enabled = !overlay,
+        onCheckedChange = { on -> onStateChange { s -> s.copy(enableDouyinLt = on) } })
+    OptionRow("直播间隐藏", "直播页顶栏/底栏/右下", checked = state.enableLive, dark = dark,
+        enabled = !overlay,
+        onCheckedChange = { on -> onStateChange { s -> s.copy(enableLive = on) } })
+    HintText("打开后，抖音进程内对应区域会按周期隐藏。若直播黑屏，可关闭「直播间隐藏」。")
+    HintText("以上开关控制 LSPosed 真隐藏（需要模块注入抖音进程）。若真机日志里没有 INJECTED Douyin，请到「通用」开启「应用内区域兜底」：它由无障碍覆盖层按屏幕比例遮盖同样几块区域，不要求注入。")
+}
+
+@Composable
+private fun DramaFeaturePage(
+    state: AbState,
+    onStateChange: ((AbState) -> AbState) -> Unit,
+    dark: Boolean,
+) {
+    val overlay = state.isOverlay
+    if (overlay) OverlayNotice(dark, "红果短剧")
+    GroupTitle("红果短剧 · 视频页区域")
+    OptionRow("顶部区域", "视频页顶部栏", checked = state.enableDramaTop, dark = dark,
+        enabled = !overlay,
+        onCheckedChange = { on -> onStateChange { s -> s.copy(enableDramaTop = on) } })
+    OptionRow("右侧按钮", "点赞/收藏等按钮列", checked = state.enableDramaLike, dark = dark,
+        enabled = !overlay,
+        onCheckedChange = { on -> onStateChange { s -> s.copy(enableDramaLike = on) } })
+    OptionRow("右上角", "右上角操作按钮", checked = state.enableDramaRt, dark = dark,
+        enabled = !overlay,
+        onCheckedChange = { on -> onStateChange { s -> s.copy(enableDramaRt = on) } })
+    OptionRow("左上角", "左上角菜单按钮", checked = state.enableDramaLt, dark = dark,
+        enabled = !overlay,
+        onCheckedChange = { on -> onStateChange { s -> s.copy(enableDramaLt = on) } })
+    OptionRow("左滑查看详情", "右侧竖排引导文字，按文案识别", checked = state.enableDramaSwipe,
+        dark = dark, enabled = !overlay,
+        onCheckedChange = { on -> onStateChange { s -> s.copy(enableDramaSwipe = on) } })
+    OptionRow("底部入口", "剧集/选集入口，模块刻意不隐藏", checked = false, dark = dark,
+        enabled = false, disabledLabel = "始终常驻", onCheckedChange = {})
+    HintText("红果底部是「完整观看 / 选集」等功能入口，模块刻意不隐藏，避免点不进去。")
+    HintText("「左滑查看详情」按文案识别引导条，仅 LSPosed 引擎下生效。应用内三区的兜底遮盖走「通用 › 应用内区域兜底」，不需要 root。")
+}
+
+/**
+ * 快手 / 哔哩哔哩共用子页：各一套独立开关，互不影响。
+ * 免 root 遮盖引擎下整页置灰，不放假开关。
  */
 @Composable
 private fun VideoAppSubPage(
@@ -2125,48 +2167,43 @@ private fun VideoAppSubPage(
     onStateChange: ((AbState) -> AbState) -> Unit,
     dark: Boolean,
     appLabel: String,
-    glyph: String,
-    master: Boolean,
-    onMaster: (Boolean) -> Unit,
-    right: Boolean,
-    top: Boolean,
-    bottom: Boolean,
-    corner: Boolean,
-    onRight: () -> Unit,
-    onTop: () -> Unit,
-    onBottom: () -> Unit,
-    onCorner: () -> Unit,
+    isKuaishou: Boolean,
 ) {
     val overlay = state.isOverlay
+    if (overlay) OverlayNotice(dark, appLabel)
     GroupTitle("$appLabel · 视频页区域")
-    if (overlay) {
-        Card(
-            Modifier.fillMaxWidth().padding(bottom = 8.dp),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = UiPalette.warn(dark).copy(alpha = 0.12f)),
-        ) {
-            Text("当前是免 root 遮盖引擎，只能按周期盖黑系统栏，无法隐藏 $appLabel 内固定控件。请在首页「运行方式」切换到 LSPosed 模块后使用。",
-                style = MaterialTheme.typography.bodySmall,
-                color = UiPalette.warn(dark),
-                modifier = Modifier.padding(14.dp))
-        }
-    }
-    TileGrid(
-        listOf(
-            TileItem("$appLabel 总开关", glyph, "关则本应用所有区域都不隐藏", master,
-                enabled = !overlay) { onMaster(!master) },
-            TileItem("右侧互动列", "赞", "点赞/评论/投币/收藏/分享", right,
-                enabled = !overlay) { onRight() },
-            TileItem("顶部工具栏", "顶", "返回/搜索/更多/台标", top,
-                enabled = !overlay) { onTop() },
-            TileItem("底部操作栏", "底", "标签栏/进度条/弹幕输入框", bottom,
-                enabled = !overlay) { onBottom() },
-            TileItem("角落按钮", "角", "右上/左上角常驻按钮", corner,
-                enabled = !overlay) { onCorner() },
-        )
-    )
-    HintText("快手与哔哩哔哩各一套独立开关，互不影响。仅 LSPosed 引擎（root + 框架）下生效。")
-    HintText("升级后需在 LSPosed 管理器重新勾选「快手」「哔哩哔哩」作用域并重启，否则不会注入。打开诊断日志可查 SCAN app= 命中数。")
+    val master = if (isKuaishou) state.enableKuaishou else state.enableBilibili
+    val right = if (isKuaishou) state.enableKsRight else state.enableBiliRight
+    val top = if (isKuaishou) state.enableKsTop else state.enableBiliTop
+    val bottom = if (isKuaishou) state.enableKsBottom else state.enableBiliBottom
+    val corner = if (isKuaishou) state.enableKsCorner else state.enableBiliCorner
+    OptionRow("$appLabel 总开关", "关则本应用所有区域都不隐藏", checked = master, dark = dark,
+        enabled = !overlay,
+        onCheckedChange = { on -> onStateChange { s ->
+            if (isKuaishou) s.copy(enableKuaishou = on) else s.copy(enableBilibili = on)
+        } })
+    OptionRow("右侧互动列", "点赞/评论/投币/收藏/分享", checked = right, dark = dark,
+        enabled = !overlay,
+        onCheckedChange = { on -> onStateChange { s ->
+            if (isKuaishou) s.copy(enableKsRight = on) else s.copy(enableBiliRight = on)
+        } })
+    OptionRow("顶部工具栏", "返回/搜索/更多/台标", checked = top, dark = dark,
+        enabled = !overlay,
+        onCheckedChange = { on -> onStateChange { s ->
+            if (isKuaishou) s.copy(enableKsTop = on) else s.copy(enableBiliTop = on)
+        } })
+    OptionRow("底部操作栏", "标签栏/进度条/弹幕输入框", checked = bottom, dark = dark,
+        enabled = !overlay,
+        onCheckedChange = { on -> onStateChange { s ->
+            if (isKuaishou) s.copy(enableKsBottom = on) else s.copy(enableBiliBottom = on)
+        } })
+    OptionRow("角落按钮", "右上/左上角常驻按钮", checked = corner, dark = dark,
+        enabled = !overlay,
+        onCheckedChange = { on -> onStateChange { s ->
+            if (isKuaishou) s.copy(enableKsCorner = on) else s.copy(enableBiliCorner = on)
+        } })
+    HintText("快手与哔哩哔哩各一套独立开关，互不影响。这里的开关控制 LSPosed 真隐藏，也决定兜底遮盖优先画哪几块区域；四个都关时兜底按默认三区全画。")
+    HintText("若真机日志里没有 INJECTED Kuaishou / Bilibili，说明模块没被注入该进程，真隐藏不会生效 —— 请在「通用」开启「应用内区域兜底」，它不要求注入。")
 }
 
 @Composable
@@ -2174,90 +2211,6 @@ private fun HintText(text: String) {
     Text(text, style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(top = 6.dp, bottom = 4.dp))
-}
-
-/** 两列磁贴网格；用普通 Row/Column 而不是 LazyGrid，避免在 verticalScroll 里出现无限高度。 */
-@Composable
-private fun TileGrid(items: List<TileItem>) {
-    Column(Modifier.fillMaxWidth()) {
-        items.chunked(2).forEach { row ->
-            Row(Modifier.fillMaxWidth().padding(bottom = 10.dp)) {
-                row.forEach { item ->
-                    Box(Modifier.weight(1f).padding(horizontal = 5.dp)) {
-                        TileCard(item)
-                    }
-                }
-                if (row.size == 1) {
-                    Spacer(Modifier.weight(1f).padding(horizontal = 5.dp))
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun TileCard(item: TileItem) {
-    val dark = isSystemInDarkTheme()
-    val isEntry = item.navClick != null
-    val active = item.enabled && item.checked
-    val container = when {
-        !item.enabled -> UiPalette.surface(dark, 0.18f)
-        item.checked -> MaterialTheme.colorScheme.primaryContainer
-        else -> UiPalette.surface(dark, 0.45f)
-    }
-    val nav = item.navClick
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = 116.dp)
-            .clickable(enabled = item.enabled) {
-                if (nav != null) nav.invoke() else item.onToggle(!item.checked)
-            },
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = container),
-    ) {
-        Column(Modifier.padding(12.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    Modifier
-                        .size(30.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(
-                            if (active || isEntry) UiPalette.accent(dark)
-                            else MaterialTheme.colorScheme.outline.copy(alpha = 0.22f)
-                        ),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        item.glyph,
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = if (active || isEntry) MaterialTheme.colorScheme.onPrimary
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Spacer(Modifier.weight(1f))
-                Text(
-                    when {
-                        isEntry -> "›"
-                        !item.enabled -> "常驻"
-                        item.checked -> "已开启"
-                        else -> "已关闭"
-                    },
-                    style = if (isEntry) MaterialTheme.typography.titleMedium
-                    else MaterialTheme.typography.labelSmall,
-                    color = if (active || isEntry) UiPalette.accent(dark)
-                    else MaterialTheme.colorScheme.outline,
-                )
-            }
-            Spacer(Modifier.height(10.dp))
-            Text(item.title, style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold, maxLines = 1, color = UiPalette.ink(dark))
-            Text(item.subtitle, style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2,
-                modifier = Modifier.padding(top = 2.dp))
-        }
-    }
 }
 
 @Composable
@@ -2327,6 +2280,10 @@ private val THANKS = listOf(
 /** 项目仓库地址（GitHub）——关于页「项目地址」点击跳转。 */
 private const val PROJECT_URL = "https://github.com/Xposed-Modules-Repo/io.github.wumisc.antiburn"
 
+/** 功能建议：GitHub 新建 Issue 页。按钮会追加标题与正文模板参数。 */
+private const val PROJECT_ISSUES_URL =
+    "https://github.com/Xposed-Modules-Repo/io.github.wumisc.antiburn/issues/new"
+
 /**
  * 致敬名单：本模块借鉴过的开源项目。只放确有依赖/参考关系的仓库，
  * 链接经可用性校验，点击用系统浏览器打开。加项目只改这张表一行。
@@ -2369,7 +2326,7 @@ private fun AboutPage(onOpen: (String) -> Unit, onOpenUrl: (String) -> Unit) {
                     color = MaterialTheme.colorScheme.outline)
             }
         }
-        Text("护眼防烧屏 · 精简磁贴版 v" + BuildConfig.VERSION_NAME,
+        Text("护眼防烧屏 · v" + BuildConfig.VERSION_NAME,
             style = MaterialTheme.typography.titleMedium,
             color = UiPalette.accent(dark), fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(top = 12.dp))
@@ -2383,6 +2340,7 @@ private fun AboutPage(onOpen: (String) -> Unit, onOpenUrl: (String) -> Unit) {
         ListRow("感谢名单", "${THANKS.size} 位朋友的支持与建议", { onOpen("thanks") }, dark)
         ListRow("支持捐赠", "支付宝 / 微信 · 金额随意，心意最重", { onOpen("donate") }, dark)
         ListRow("致敬名单", "${CREDITS.size} 个借鉴过的开源项目 · 点击查看", { onOpen("credit") }, dark)
+        ListRow("功能建议", "想加功能、适配新机型？来 GitHub 提一个", { onOpen("suggest") }, dark)
         // v2.7：项目地址单独一行，点击直接跳 GitHub；不进二级菜单，减少一层跳转
         ListRow("项目地址", "github.com/Xposed-Modules-Repo/…", { onOpenUrl(PROJECT_URL) }, dark,
             trailing = "↗")
@@ -2408,12 +2366,21 @@ private fun SubPageHost(
     page: String,
     onBack: () -> Unit,
     onOpenUrl: (String) -> Unit,
+    state: AbState,
+    onStateChange: ((AbState) -> AbState) -> Unit,
+    saveBar: @Composable () -> Unit,
 ) {
     val dark = isSystemInDarkTheme()
     val title = when (page) {
         "thanks" -> "感谢名单"
         "donate" -> "支持捐赠"
         "credit" -> "致敬名单"
+        "suggest" -> "功能建议"
+        "feat-general" -> "通用"
+        "feat-douyin" -> "抖音"
+        "feat-drama" -> "红果短剧"
+        "feat-kuaishou" -> "快手"
+        "feat-bilibili" -> "哔哩哔哩"
         else -> "设置"
     }
     Column(
@@ -2442,13 +2409,76 @@ private fun SubPageHost(
                 .padding(bottom = 40.dp),
         ) {
             Spacer(Modifier.height(14.dp))
+            // 功能二级页会即时保存，顶部给一条状态反馈；关于类页面不需要。
+            if (page.startsWith("feat-")) saveBar()
             when (page) {
                 "thanks" -> ThanksPage(dark)
                 "donate" -> DonatePage(dark)
                 "credit" -> CreditPage(dark, onOpenUrl)
+                "suggest" -> SuggestPage(dark, onOpenUrl)
+                "feat-general" -> GeneralFeaturePage(state, onStateChange, dark)
+                "feat-douyin" -> DouyinFeaturePage(state, onStateChange, dark)
+                "feat-drama" -> DramaFeaturePage(state, onStateChange, dark)
+                "feat-kuaishou" -> VideoAppSubPage(state, onStateChange, dark, "快手",
+                    isKuaishou = true)
+                "feat-bilibili" -> VideoAppSubPage(state, onStateChange, dark, "哔哩哔哩",
+                    isKuaishou = false)
+                else -> Text("页面不存在，请返回上一页。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
+}
+
+/** 功能建议二级页：讲清楚怎么提、提什么，再给一个直达 GitHub 新建 Issue 的按钮。 */
+@Composable
+private fun SuggestPage(dark: Boolean, onOpenUrl: (String) -> Unit) {
+    Text("想加新功能、适配新机型，或者觉得哪里不好用，都欢迎提。建议写得越具体，越容易落地。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Spacer(Modifier.height(6.dp))
+    GroupTitle("提之前可以先看看")
+    listOf(
+        "适配新机型" to "写清机型、系统版本与 ROM（如 ColorOS 15、Flyme 11），附一张状态栏截图最好",
+        "新增功能" to "说清想解决什么问题、期望怎么开关，比只写「加个 XX」更容易实现",
+        "问题反馈" to "附首页「日志」按钮导出的诊断日志与复现步骤，能省掉大量来回确认",
+        "能力边界" to "LSPosed 真隐藏需要模块注入目标 App 进程；未注入时由无障碍「应用内区域兜底」按屏幕比例遮盖，免 root 也能防护",
+    ).forEach { (itemTitle, desc) ->
+        Column(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 10.dp)) {
+            Text(itemTitle, style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold, color = UiPalette.ink(dark))
+            Text(desc, style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 3.dp))
+        }
+        Box(Modifier.fillMaxWidth().height(1.dp)
+            .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.18f)))
+    }
+    Spacer(Modifier.height(18.dp))
+    Button(
+        onClick = {
+            val url = Uri.parse(PROJECT_ISSUES_URL).buildUpon()
+                .appendQueryParameter("title", "[功能建议] ")
+                .appendQueryParameter(
+                    "body",
+                    "设备机型：\n系统版本：\n模块版本：" + BuildConfig.VERSION_NAME
+                            + "\n\n想要的功能：\n为什么需要：\n",
+                )
+                .build().toString()
+            onOpenUrl(url)
+        },
+        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+        shape = RoundedCornerShape(14.dp),
+    ) {
+        Text("前往 GitHub 提交建议 ↗", fontWeight = FontWeight.Bold)
+    }
+    Spacer(Modifier.height(10.dp))
+    Text("按钮会打开发布页新建 Issue，标题已带「功能建议」标签，正文附了填写模板。没有 GitHub 账号，也可以在酷安同名帖下留言。",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.outline,
+        modifier = Modifier.fillMaxWidth())
+    Spacer(Modifier.height(14.dp))
 }
 
 /** 感谢名单二级页：单行列表，不用卡片。 */
@@ -2594,11 +2624,11 @@ private fun RoadmapCard(dark: Boolean) {
         Column(Modifier.padding(16.dp)) {
             Text("短视频应用适配", style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.Bold, color = UiPalette.ink(dark))
-            Text("快手、哔哩哔哩已支持：在功能页切到「快手」「B站」子页开启对应开关。",
+            Text("快手、哔哩哔哩已支持：在功能页点开「快手」「B站」逐项开启对应开关。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 6.dp))
-            Text("仅 LSPosed 引擎可隐藏 App 内固定控件；免 root 遮盖引擎只能盖黑系统栏。升级后需在 LSPosed 管理器重新勾选两个作用域并重启。",
+            Text("LSPosed 真隐藏需模块注入目标进程；未注入时由「应用内区域兜底」用无障碍覆盖层按屏幕比例遮盖，不依赖 root 与作用域勾选。",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.outline,
                 modifier = Modifier.padding(top = 6.dp))
@@ -2614,7 +2644,7 @@ private fun RoadmapCard(dark: Boolean) {
  * 周期时长小窗（v2.6.5）。
  *
  * <p>以前是首页 ListRow 跳一个二级页：要先回首页、再进二级页、改完再返回。
- * 现在入口放在「功能 → 通用」磁贴，点开就在这页弹窗调，改完点保存自动关窗。
+ * 现在入口放在「功能 → 通用」二级页，点开就在这页弹窗调，改完点保存自动关窗。
  * 内容复用 CyclePage，滑条与保存逻辑只有一份，避免两处漂移。</p>
  */
 @Composable
@@ -2659,8 +2689,7 @@ private fun CyclePage(
     var show by remember(state.showSec) { mutableIntStateOf(state.showSec) }
     val changed = hide != state.hideSec || show != state.showSec
 
-    Text("一个周期 = 隐藏时长 + 显示时长。LSPosed 引擎下状态栏/导航栏与抖音、红果短剧" +
-            "各区域周期性隐藏，无障碍遮盖引擎下按周期盖黑系统栏，如此往复防止固定像素常亮。",
+    Text("一个周期 = 隐藏时长 + 显示时长。系统栏、导航栏与抖音、红果短剧、快手、B站 的固定区域都按同一节奏周期性隐藏或盖黑，如此往复防止固定像素常亮。",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant)
 

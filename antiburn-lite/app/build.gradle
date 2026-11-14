@@ -12,8 +12,8 @@ android {
         applicationId "io.github.wumisc.antiburn"
         minSdk 33
         targetSdk 37
-        versionCode 38
-        versionName "2.7.5"
+        versionCode 45
+        versionName "2.8.2"
     }
 
     compileOptions {

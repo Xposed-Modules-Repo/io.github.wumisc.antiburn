@@ -204,15 +204,16 @@ public class ListModeTest {
         }
         check(chipsCalls == 1, "T-15a 名单卡片全 App 只出现 1 处", "调用点=" + chipsCalls);
 
-        String features = slice(main, "private fun FeaturesPage", "private fun TileGrid");
+        String features = slice(main, "private fun FeaturesPage", "private fun AboutPage");
         check(!features.contains("ListModeChips("), "T-15b 功能页不再重复渲染名单卡片", "");
         check(!features.contains("activeList"), "T-15c 功能页不再引用名单文本", "");
 
-        check(!main.contains("TileItem(\"状态栏偏移\""),
-                "T-15d 通用页已删除「状态栏偏移」磁贴（像素微移改内置常开）", "");
-        String features2 = slice(main, "private fun FeaturesPage", "private fun TileGrid");
-        check(features2.contains("\"周期时长\", \"时\"") && main.contains("CycleDialog("),
-                "T-15e 周期时长改为通用磁贴 + 弹窗小窗", "");
+        check(!main.contains("OptionRow(\"状态栏偏移\""),
+                "T-15d 通用二级页已无「状态栏偏移」开关（像素微移改内置常开）", "");
+        String features2 = slice(main, "private fun FeaturesPage", "private fun AboutPage");
+        check(features2.contains("ListRow(\"周期时长\"") && main.contains("CycleDialog(")
+                        && main.contains("if (showCycleDialog)"),
+                "T-15e 周期时长在通用二级页 + 弹窗小窗", "");
 
         check(main.contains("tabProgress = {"), "T-15f 导航栏接收连续页进度", "");
         check(main.contains("currentPageOffsetFraction"), "T-15g 进度源含页内偏移（否则仍是整页跳）", "");

@@ -218,6 +218,11 @@ public final class ConfStore {
         // 缺 engine 的旧配置按 lsposed 解释（normEngine 兜底），这里写出来是为了
         // 让用户能在 conf 里直接看到这一项存在，而不是只有 UI 上能改。
         sb.append(KEY_ENGINE).append('=').append(ENGINE_LSPOSED).append('\n');
+        // v2.8.2 稳定版：应用内固定区域兜底遮盖，默认开。
+        // 与引擎选择无关：即使 LSPosed 没把模块注入目标视频 App 进程（真机日志实证），
+        // 只要无障碍服务连着，右侧按钮列 / 顶部标题 / 底部导航就能周期变黑。
+        // 已有配置缺这个键时，BurnInMaskService.Cfg 同样按 true 处理，升级即生效。
+        sb.append("enable_app_overlay=1\n");
         return sb.toString();
     }
 
@@ -755,6 +760,8 @@ public final class ConfStore {
                 + " \"" + LOG_DIR_FALLBACK + "\"/*.log"
                 + " \"" + LOG_FILE + "\" 2>/dev/null; } "
                 + "| grep -E '^[0-9]{10,}' "
+                // v2.8.2：过滤掉上一次导出追加的自检行，避免每点一次「日志」就多一条历史汇总
+                + "| grep -v '] SELF ver=' "
                 + "| sort -n -s -k1,1 "
                 + "| awk '!seen[$0]++' "
                 + "| tail -n 4000 > \"" + LOG_FILE + ".tmp\" 2>/dev/null; "
@@ -765,7 +772,86 @@ public final class ConfStore {
                 + "chmod 0666 \"" + LOG_FILE + "\" 2>/dev/null; "
                 + "wc -l \"" + LOG_FILE + "\" 2>/dev/null; true";
         String out = execSuCapture(cmd);
+        appendSelfCheck();
         return out == null ? "" : out.trim();
+    }
+
+    /**
+     * v2.8.2「改日志」：导出时追加一行自检汇总，把「模块到底注没注入视频 App」写死在日志里。
+     *
+     * <p>真机排障反复卡在同一处：用户说「抖音失效、快手只生效一次、B站只有右侧生效」，
+     * 但日志里只有 SystemUI 的 SYS 心跳，一条 INJECTED / HOOK-ATTACH / HOOK 都没有，
+     * 单看正文根本分不清是「没注入」「注入了没写日志」还是「开关没开」。现在导出时
+     * 直接统计各 App 的注入记录数并给出结论，不需要再靠猜：
+     *  - hook=NONE  → LSPosed 没把模块注入任何视频 App 进程，DouyinHook 整条链跑不到，
+     *                 真隐藏 100% 不生效；此时唯一能用的是无障碍「应用内区域兜底」；
+     *  - hook=alive → 真隐藏通道活着，再看 HOOK app= 里的 sw= / R= / T= / B= 定位
+     *                 是开关没开还是几何没扫到。</p>
+     */
+    private static void appendSelfCheck() {
+        try {
+            File f = new File(LOG_FILE);
+            if (!f.exists() || f.length() == 0) {
+                return;
+            }
+            StringBuilder sb = new StringBuilder();
+            try (java.io.BufferedReader br = new java.io.BufferedReader(
+                    new java.io.FileReader(f))) {
+                String line;
+                while ((line = br.readLine()) != null) {
+                    sb.append(line).append('\n');
+                }
+            }
+            String all = sb.toString();
+            int dy = occurrences(all, "INJECTED Douyin")
+                    + occurrences(all, "HOOK-ATTACH pkg=com.ss.android");
+            int dr = occurrences(all, "INJECTED Drama")
+                    + occurrences(all, "HOOK-ATTACH pkg=com.phoenix.read");
+            int ks = occurrences(all, "INJECTED Kuaishou")
+                    + occurrences(all, "HOOK-ATTACH pkg=com.smile.gifmaker");
+            int bi = occurrences(all, "INJECTED Bilibili")
+                    + occurrences(all, "HOOK-ATTACH pkg=tv.danmaku.bili")
+                    + occurrences(all, "HOOK-ATTACH pkg=com.bilibili.app");
+            int hdiag = occurrences(all, "HOOK app=");
+            int mask = occurrences(all, "MASK ");
+            boolean overlayOn = true;
+            try {
+                String conf = ensureMirror();
+                if (conf != null) {
+                    for (String l : conf.split("\n")) {
+                        String t = l.trim();
+                        if (t.startsWith("enable_app_overlay=")) {
+                            overlayOn = t.endsWith("=1");
+                        }
+                    }
+                }
+            } catch (Throwable ignored) {
+            }
+            boolean injected = dy > 0 || dr > 0 || ks > 0 || bi > 0 || hdiag > 0;
+            String hint = injected
+                    ? "hook=alive（各 App 真隐藏通道可用，继续看 HOOK app= 的 sw/R/T/B）"
+                    : "hook=NONE（LSPosed 未注入任何视频 App 进程，真隐藏不会生效）；请开启无障碍服务，由「应用内区域兜底」接管";
+            String line = System.currentTimeMillis() + " [app/self] SELF ver="
+                    + BuildConfig.VERSION_NAME
+                    + " inject=douyin:" + dy + " drama:" + dr + " kuaishou:" + ks
+                    + " bilibili:" + bi + " hookdiag:" + hdiag + " mask:" + mask
+                    + " app_overlay=" + (overlayOn ? 1 : 0)
+                    + " " + hint + "\n";
+            try (java.io.FileOutputStream fo = new java.io.FileOutputStream(f, true)) {
+                fo.write(line.getBytes("UTF-8"));
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static int occurrences(String s, String needle) {
+        int n = 0;
+        int i = 0;
+        while ((i = s.indexOf(needle, i)) >= 0) {
+            n++;
+            i += needle.length();
+        }
+        return n;
     }
 
     // ---- 名单模式（v2.8）----

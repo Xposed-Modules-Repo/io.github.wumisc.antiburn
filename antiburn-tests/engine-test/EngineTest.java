@@ -287,8 +287,8 @@ public class EngineTest {
         check(xml.contains("canRetrieveWindowContent=\"true\""), "声明可读窗口内容", "");
 
         // v2.6.5 占位 -> v2.6.7 Step 1 诊断 -> v2.6.8 正式接入真隐藏。
-        // 作用域仍是两个日志确认过的主包（共 6 项），变体只登记不启用；
-        // 功能页改为两个真子页，6 个新键全链路接通，overlay 引擎下置灰。
+        // v2.8.0：作用域补入真机实证渠道包（抖音 .mobile / B站 com.bilibili.app.in）
+        // 与常见变体，修复「变体包进程根本不注入」；功能页两个真子页，overlay 下置灰。
         String scope = read(moduleDir.resolve("res/values/arrays.xml").toString());
         int sa = scope.indexOf("<string-array name=\"xposed_scope\">");
         int sb = scope.indexOf("</string-array>", sa + 1);
@@ -302,9 +302,11 @@ public class EngineTest {
         check(scopeBlock.contains("<item>com.smile.gifmaker</item>")
                         && scopeBlock.contains("<item>tv.danmaku.bili</item>"),
                 "作用域含快手/B站两个主包（真隐藏已接入）", "");
-        check(itemCount == 6 && !scopeBlock.contains("nebula")
-                        && !scopeBlock.contains("bilibilihd") && !scopeBlock.contains("app.blue"),
-                "作用域恰好 6 项，变体包未启用", "item 数=" + itemCount);
+        check(scopeBlock.contains("<item>com.ss.android.ugc.aweme.mobile</item>")
+                        && scopeBlock.contains("<item>com.bilibili.app.in</item>")
+                        && scopeBlock.contains("nebula") && scopeBlock.contains("bilibilihd")
+                        && scopeBlock.contains("app.blue"),
+                "作用域已启用真机实证渠道包与常见变体（v2.8.0 修复变体不注入）", "item 数=" + itemCount);
         check(main.contains("RoadmapCard(dark)") && main.contains("快手") && main.contains("哔哩哔哩"),
                 "功能页说明卡点名两个应用", "");
         check(main.contains("VideoAppSubPage(") && main.contains("state.enableKuaishou")
