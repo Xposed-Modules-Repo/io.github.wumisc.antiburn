@@ -133,6 +133,35 @@ final class LspScope {
         }
     }
 
+    /**
+     * 打开副本数据库。
+     *
+     * <p><b>v2.8.8 的根因修正</b>：v2.8.5 / v2.8.6 都用 {@code OPEN_READONLY} 打开，
+     * 而 LSPosed 的配置库是 <b>WAL 模式</b>。WAL 库在只读句柄下必须先建立
+     * {@code <db>-shm} 共享内存索引，只读打开建不了这个文件，SQLite 直接返回
+     * {@code SQLITE_CANTOPEN(14)}，Java 侧抛基类 {@code SQLiteException} ——
+     * 日志里那句 {@code error=open:SQLiteException} 与 SELinux、属主、chcon 全都无关，
+     * 前两版一直往权限方向查，方向错了。</p>
+     *
+     * <p>副本位于应用私有目录，改为 {@code OPEN_READWRITE} 打开：SQLite 能正常建 shm、
+     * 重放 WAL，读到的也是「刚勾完还没 checkpoint」的最新作用域；原库在
+     * {@code /data/adb/lspd/} 下，改的是副本，管理器那份不受任何影响。</p>
+     *
+     * <p>若 READWRITE 仍失败，多半是搬过来的 WAL/SHM 是被写了一半的快照，
+     * 删掉让 SQLite 用主文件 + 新建 shm 再来一次。</p>
+     */
+    private static SQLiteDatabase open(File copy) {
+        try {
+            return SQLiteDatabase.openDatabase(copy.getAbsolutePath(), null,
+                    SQLiteDatabase.OPEN_READWRITE);
+        } catch (Throwable first) {
+            new File(copy.getPath() + "-wal").delete();
+            new File(copy.getPath() + "-shm").delete();
+            return SQLiteDatabase.openDatabase(copy.getAbsolutePath(), null,
+                    SQLiteDatabase.OPEN_READWRITE);
+        }
+    }
+
     /** {@code modules} 表里存包名的列；不同 LSPosed 版本列名有过变化，按 pragma 现查。 */
     private static String pkgColumn(SQLiteDatabase d, String table) {
         List<String> cols = new ArrayList<>();
@@ -219,8 +248,7 @@ final class LspScope {
             r.copied = true;
             SQLiteDatabase d = null;
             try {
-                d = SQLiteDatabase.openDatabase(copy.getAbsolutePath(), null,
-                        SQLiteDatabase.OPEN_READONLY);
+                d = open(copy);
                 r.opened = true;
                 if (!hasTable(d, "modules")) {
                     r.error = "schema";
@@ -254,7 +282,18 @@ final class LspScope {
                     }
                 }
             } catch (Throwable t) {
-                r.error = "open:" + t.getClass().getSimpleName();
+                // v2.8.8：只记异常类名会把 SQLITE_CANTOPEN(14)、文件损坏、schema 不符
+                // 全糊成一句 SQLiteException，够不着根因。带上 message 与副本字节数。
+                String msg = t.getMessage();
+                if (msg == null) {
+                    msg = "";
+                }
+                msg = msg.replace('\n', ' ').trim();
+                if (msg.length() > 90) {
+                    msg = msg.substring(0, 90);
+                }
+                r.error = "open:" + t.getClass().getSimpleName()
+                        + ":" + msg + ":len=" + copy.length();
             } finally {
                 if (d != null) {
                     try {
@@ -337,6 +376,15 @@ final class LspScope {
     static String diagnose(Context ctx) {
         Report r = probe(ctx);
         StringBuilder sb = new StringBuilder();
+        // v2.8.8：先给注入证据。ENTER 是 handleLoadPackage 的第一行、走 diagForce，
+        // 它没命中的包，后面作用域勾得再对也白搭 —— 顺序不能反着讲。
+        String hits = ConfStore.enterHits();
+        sb.append("注入证据（ENTER 命中的进程）：").append(hits).append('\n');
+        if (!hits.contains("OK:")) {
+            sb.append("  → 四个视频 App 一个都没命中，模块代码从未进过这些进程。\n")
+                    .append("    这不是定位算法的问题，是 LSPosed 没加载模块。\n");
+        }
+        sb.append('\n');
         sb.append("配置库：").append(r.db == null ? "未找到" : r.db).append('\n');
         if (r.error != null) {
             switch (r.error) {
@@ -355,6 +403,15 @@ final class LspScope {
                 default:
                     sb.append("\n读取失败：").append(r.error);
                     break;
+            }
+            // 即便读不到作用域，也把设备上装的目标 App 列出来 ——
+            // 用户至少能照着名单去 LSPosed 里逐个勾，不必猜自己装的是哪个渠道包。
+            Set<String> installed = installedTargets(ctx);
+            if (!installed.isEmpty()) {
+                sb.append("\n\n设备上已安装的目标应用（照此在 LSPosed 作用域里勾选）：\n");
+                for (String p : installed) {
+                    sb.append("  · ").append(zh(p)).append(' ').append(p).append('\n');
+                }
             }
             return sb.toString();
         }

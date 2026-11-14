@@ -797,29 +797,7 @@ public final class ConfStore {
         try {
             // v2.8.3：App 进程读不到 /storage/emulated/0/Android/... 时（分区存储），
             // 退回 su cat。旧版只做直读，读失败就 return，SELF 因此从未出现。
-            String all = "";
-            File f = new File(LOG_FILE);
-            try {
-                if (f.exists() && f.length() > 0) {
-                    StringBuilder sb = new StringBuilder();
-                    try (java.io.BufferedReader br = new java.io.BufferedReader(
-                            new java.io.FileReader(f))) {
-                        String line;
-                        while ((line = br.readLine()) != null) {
-                            sb.append(line).append('\n');
-                        }
-                    }
-                    all = sb.toString();
-                }
-            } catch (Throwable ignored) {
-            }
-            if (all.isEmpty()) {
-                String via = execSuCapture("cat \"" + LOG_FILE + "\" 2>/dev/null; "
-                        + "cat \"" + LOG_DIR_FALLBACK + "/antiburn.log\" 2>/dev/null");
-                if (via != null) {
-                    all = via;
-                }
-            }
+            String all = readAllLogs();
             if (all.isEmpty()) {
                 return;
             }
@@ -834,30 +812,25 @@ public final class ConfStore {
                     + occurrences(all, "HOOK-ATTACH pkg=com.bilibili.app");
             int hdiag = occurrences(all, "HOOK app=");
             int mask = occurrences(all, "MASK ");
-            boolean overlayOn = true;
-            try {
-                String conf = ensureMirror();
-                if (conf != null) {
-                    for (String l : conf.split("\n")) {
-                        String t = l.trim();
-                        if (t.startsWith("enable_app_overlay=")) {
-                            overlayOn = t.endsWith("=1");
-                        }
-                    }
-                }
-            } catch (Throwable ignored) {
-            }
             boolean injected = dy > 0 || dr > 0 || ks > 0 || bi > 0 || hdiag > 0;
             String hint = injected
                     ? "hook=alive（各 App 真隐藏通道可用，继续看 HOOK app= 的 sw/R/T/B）"
-                    : "hook=NONE（LSPosed 未注入任何视频 App 进程，真隐藏不会生效）；请开启无障碍服务，由「应用内区域兜底」接管";
+                    : "hook=NONE（LSPosed 没把模块加载进视频 App 进程，位置微移一行都没执行）；"
+                    + "处理：功能 › 通用 › 作用域自检，勾上打 ✗ 的 App → 强行停止该 App 再打开";
             int ovl = occurrences(all, "OVL on app=") + occurrences(all, "OVL window attached");
+            // v2.8.8：enter= 直接给出 handleLoadPackage 的命中进程。
+            // 以前要翻几百行才能确认「模块到底进没进抖音」，现在第一行就能判。
+            String enter = enterSummary(all);
             String line = System.currentTimeMillis() + " [app/self] SELF ver="
                     + BuildConfig.VERSION_NAME
                     + " inject=douyin:" + dy + " drama:" + dr + " kuaishou:" + ks
                     + " bilibili:" + bi + " hookdiag:" + hdiag + " mask:" + mask
                     + " ovl:" + ovl
-                    + " app_overlay=" + (overlayOn ? 1 : 0)
+                    // 盖黑通道已于 v2.8.6 在编译期拆除，这里恒 0。
+                    // v2.8.7 之前读的是镜像文件里的历史值，于是日志出现 app_overlay=1
+                    // 而实际生效的 ao=false，两者互相矛盾，把排查带偏过一轮。
+                    + " app_overlay=0"
+                    + " enter=" + enter
                     + " " + hint;
             appendRaw(line);
         } catch (Throwable ignored) {
@@ -996,6 +969,94 @@ public final class ConfStore {
             appendSelfCheck();
         } catch (Throwable ignored) {
         }
+    }
+
+    /**
+     * 读回整份日志。文件直接可读时走普通 IO，读不到再走 root ——
+     * 分区存储下 App 进程直写 {@code /storage/emulated/0/Android/data/...} 会被拦，
+     * 但读自己曾写入的路径通常没问题，两条路都留。
+     */
+    private static String readAllLogs() {
+        File f = new File(LOG_FILE);
+        try {
+            if (f.exists() && f.length() > 0) {
+                StringBuilder sb = new StringBuilder();
+                try (java.io.BufferedReader br = new java.io.BufferedReader(
+                        new java.io.FileReader(f))) {
+                    String line;
+                    while ((line = br.readLine()) != null) {
+                        sb.append(line).append('\n');
+                    }
+                }
+                if (sb.length() > 0) {
+                    return sb.toString();
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        String via = execSuCapture("cat \"" + LOG_FILE + "\" 2>/dev/null; "
+                + "cat \"" + LOG_DIR_FALLBACK + "/antiburn.log\" 2>/dev/null");
+        return via == null ? "" : via;
+    }
+
+    /** v2.8.8：作用域自检复用同一份 ENTER 摘要。 */
+    static String enterHits() {
+        return enterSummary(readAllLogs());
+    }
+
+    /**
+     * v2.8.8：把日志里 {@code ENTER pkg=} 的命中压成短标签。
+     *
+     * <p>{@code ENTER} 是 {@code handleLoadPackage} 的第一行、走 {@code diagForce}，
+     * 只要 LSPosed 把模块加载进某个进程就一定会打这一行。以前要翻几百行日志才能确认
+     * 「模块到底进没进抖音」，现在每次启动写 SELF 时把命中包名一起带上，
+     * 第一行就能判：出现 {@code OK:com.ss.android.ugc.aweme} 才算注入通了。</p>
+     */
+    private static String enterSummary(String all) {
+        java.util.LinkedHashSet<String> hits = new java.util.LinkedHashSet<>();
+        String key = "ENTER pkg=";
+        int i = 0;
+        while (i < all.length()) {
+            int at = all.indexOf(key, i);
+            if (at < 0) {
+                break;
+            }
+            int s = at + key.length();
+            int e = s;
+            while (e < all.length()) {
+                char ch = all.charAt(e);
+                if (ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t') {
+                    break;
+                }
+                e++;
+            }
+            String p = all.substring(s, e);
+            i = e;
+            if (p.isEmpty()) {
+                continue;
+            }
+            if ("com.android.systemui".equals(p)) {
+                hits.add("sysui");
+            } else if ("io.github.wumisc.antiburn".equals(p)) {
+                hits.add("self");
+            } else if ("system".equals(p)) {
+                hits.add("sys");
+            } else if (VideoApps.isTarget(p)) {
+                // 命中目标包说明这一步真过去了，标 OK 最醒目
+                hits.add("OK:" + p);
+            }
+        }
+        if (hits.isEmpty()) {
+            return "none";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (String h : hits) {
+            if (sb.length() > 0) {
+                sb.append(',');
+            }
+            sb.append(h);
+        }
+        return sb.toString();
     }
 
     private static int occurrences(String s, String needle) {
