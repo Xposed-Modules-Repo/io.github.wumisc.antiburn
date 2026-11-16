@@ -60,6 +60,9 @@ public class XposedInit implements IXposedHookLoadPackage {
     /** 上次探测全部失败的时间戳；超过冷却期允许重探（App 可能刚建好目录） */
     private static volatile long probeFailAt = 0L;
     private static volatile long lastSuWrite = 0L;
+    /** 上次经 Provider 回传日志的时间（v2.9.1：普通行 5 秒节流，关键行不限） */
+    private static volatile long lastProviderAt = 0L;
+    private static final long PROVIDER_LOG_INTERVAL_MS = 5_000L;
 
     /**
      * 写日志用的单线程：Controller.tick() 跑在 SystemUI 主线程，旧版 diag() 直接同步 fopen/fwrite，
@@ -124,6 +127,7 @@ public class XposedInit implements IXposedHookLoadPackage {
     private static void writeNow(String origin, String s, boolean force) {
         String line = System.currentTimeMillis() + " [" + origin + "] " + s + "\n";
         String path = logPath();
+        boolean directOk = false;
         if (path != null) {
             try {
                 File f = new File(path);
@@ -138,46 +142,75 @@ public class XposedInit implements IXposedHookLoadPackage {
                 try (FileOutputStream fo = new FileOutputStream(f, true)) {
                     fo.write(line.getBytes(StandardCharsets.UTF_8));
                 }
-                return;
+                directOk = true;
             } catch (Throwable ignored) {
                 // 路径突然不可写（存储卸载 / 权限变更）时落到下面的兜底
             }
         }
-        Log.i(TAG, "DIAG " + s);
-        // 抖音 / 红果是普通 app，写不了 /sdcard；用 root 通道低频补一条，
-        // 保证「打开开关后仍然没有任何日志」这种事不再发生。
-        // v2.5：不再依赖 myUid()==SYSTEM_UID 判断。国产 ROM 的 SystemUI 未必是
-        // uid 1000，旧判断会让这些设备「直写失败后连 su 兜底都不试」，等于没有日志。
-        // 只要直写路径没成功，任何进程都允许低频 su 兜底。
-        {
+        // v2.9.5「日志黑洞」真因（评审独立复核确认）：旧版在这里直接 `return;`，
+        // 直写成功的进程（模块自身 / SystemUI）永远执行不到函数尾部的 providerLog()，
+        // 与下面「回传统一放到下面」的注释自相矛盾。视频 App 进程直写通常失败、
+        // 能走到回传，但只要 logPath() 探测到任一可写路径就同样被短路。
+        // 现在改成标记 directOk：su 兜底只在直写失败时跑，Provider 回传无条件执行。
+        // 重复行由 ConfStore.exportLogs() 的 `awk '!seen[$0]++'` 整行去重，不会刷屏。
+        if (!directOk) {
+            Log.i(TAG, "DIAG " + s);
+            // 抖音 / 红果是普通 app，写不了 /sdcard；用 root 通道低频补一条，
+            // 保证「打开开关后仍然没有任何日志」这种事不再发生。
+            // v2.5：不再依赖 myUid()==SYSTEM_UID 判断。国产 ROM 的 SystemUI 未必是
+            // uid 1000，旧判断会让这些设备「直写失败后连 su 兜底都不试」，等于没有日志。
             long now = System.currentTimeMillis();
             if (force || now - lastSuWrite > SU_WRITE_INTERVAL_MS) {
                 lastSuWrite = now;
                 String b64 = Base64.encodeToString(
                         line.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
                 // 两个目录都补一份：兜底目录保证一定有，用户目录方便直接取
-                boolean suOk = ConfStore.execSu("mkdir -p \"" + ConfStore.LOG_DIR_FALLBACK + "\" \""
+                ConfStore.execSu("mkdir -p \"" + ConfStore.LOG_DIR_FALLBACK + "\" \""
                         + ConfStore.LOG_DIR + "\" 2>/dev/null; "
                         + "echo " + b64 + " | base64 -d >> \"" + ConfStore.LOG_DIR_FALLBACK
                         + "/antiburn.log\" 2>/dev/null; "
                         + "echo " + b64 + " | base64 -d >> \"" + ConfStore.LOG_FILE
                         + "\" 2>/dev/null; true");
-                // v2.8.2「改日志」：su 在临时 root / 普通 App 进程里经常拿不到，
-                // INJECTED / HOOK 这类关键行会整批丢失，导出的日志只剩 SystemUI 心跳。
-                // 再走一次 Provider 回传，由 App 进程代写（尽力而为，失败静默）。
-                if (!suOk) {
-                    providerLog(line);
-                }
+                // v2.9.1：su 命令结尾 `; true` 使 execSu 恒成功，不能再拿它当回传条件；
+                // 回传已移到下面，不看 suOk、也不受 10 秒 su 节流约束。
             }
+        }
+        // 无条件回传：关键行（force）不限流，普通行 5 秒节流。
+        // 被注入进程把 ENTER / INJECTED / HOOK 交回 App 进程的 ConfigProvider，
+        // 落到私有 files/hook-injected.log，导出时由 su 合并进用户可见日志。
+        long nowForLog = System.currentTimeMillis();
+        if (force || nowForLog - lastProviderAt > PROVIDER_LOG_INTERVAL_MS) {
+            lastProviderAt = nowForLog;
+            providerLog(line);
         }
     }
 
     /** 被注入进程拿不到 su 时，把日志行交回 App 进程的 ConfigProvider 写入。 */
-    private static void providerLog(String line) {
+    private static void providerLog(final String line) {
+        providerLog(line, 0);
+    }
+
+    /**
+     * @param attempt 0=首次；失败后延迟 1.5s 重试一次。
+     *                LSPosed 的 handleLoadPackage 偶尔早于 Application.attach，
+     *                此时 currentApplication() 为 null，第一次必然拿不到 Context，
+     *                而「注入证据」恰恰是启动那几百毫秒里写的，不能就这么丢掉。
+     */
+    private static void providerLog(final String line, final int attempt) {
         try {
-            android.content.Context ctx = (android.content.Context) Class.forName(
-                    "android.app.ActivityThread").getMethod("currentApplication").invoke(null);
+            android.content.Context ctx = currentApplication();
             if (ctx == null) {
+                if (attempt == 0) {
+                    Thread t = new Thread(() -> {
+                        try {
+                            Thread.sleep(1500L);
+                        } catch (InterruptedException ignored) {
+                        }
+                        providerLog(line, 1);
+                    }, "antiburn-provider-retry");
+                    t.setDaemon(true);
+                    t.start();
+                }
                 return;
             }
             android.os.Bundle b = new android.os.Bundle();
@@ -187,6 +220,33 @@ public class XposedInit implements IXposedHookLoadPackage {
                     android.net.Uri.parse("content://" + ConfigProvider.AUTHORITY),
                     ConfigProvider.METHOD_PUT_LOG, null, b);
         } catch (Throwable ignored) {
+        }
+    }
+
+    /**
+     * 取当前进程的 Application。
+     *
+     * <p>v2.9.3：原先只有一条 `ActivityThread.currentApplication()` 的反射。Android 11+
+     * 的隐藏 API 限制会把它挡在 untrusted_app（抖音 / 快手 / 红果 / B站 全是）外面 ——
+     * 异常被静默吞掉，于是「注入进程的日志一条都进不了文件」，SELF 里 inject 恒为 0。
+     * 现在优先用 Xposed 自己提供的 {@code AndroidAppHelper.currentApplication()}：
+     * 它是模块进程内的公开入口，不受隐藏 API 名单限制。</p>
+     */
+    private static android.content.Context currentApplication() {
+        try {
+            android.content.Context c = android.app.AndroidAppHelper.currentApplication();
+            if (c != null) {
+                return c;
+            }
+        } catch (Throwable ignored) {
+            // 非 Xposed 环境 / 类不存在时走下面的反射兜底
+        }
+        try {
+            Object c = Class.forName("android.app.ActivityThread")
+                    .getMethod("currentApplication").invoke(null);
+            return (android.content.Context) c;
+        } catch (Throwable ignored) {
+            return null;
         }
     }
 

@@ -903,9 +903,13 @@ public final class Config {
         enableKsBottom = ksB;
         enableKsCorner = ksC;
         enableBiliRight = biR;
-        enableBiliTop = biT;
-        enableBiliBottom = biB;
-        enableBiliCorner = biC;
+        // v2.9.2：B站只保留右侧点赞/收藏/评论一个区域。
+        // 顶部 / 底部 / 角落三项在 B站 8.9x 上识别不到稳定容器，开关打开了也不会有
+        // 任何效果，UI 已删掉入口。这里在加载时统一归零，避免旧配置残留「已开启」
+        // 让用户以为该区域在保护、实际什么都没做。
+        enableBiliTop = false;
+        enableBiliBottom = false;
+        enableBiliCorner = false;
         enableLive = live;
         enablePoem = poem;
         enableBall = ball;

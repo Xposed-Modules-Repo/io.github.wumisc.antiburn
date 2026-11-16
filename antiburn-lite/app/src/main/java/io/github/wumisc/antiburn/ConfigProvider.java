@@ -30,6 +30,29 @@ public final class ConfigProvider extends ContentProvider {
     /** Provider 是 exported 的：要求调用方带模块内约定的 token，防止任意 App 读走配置全文 */
     public static final String KEY_TOKEN = "token";
     public static final String TOKEN = "antiburn-hook-v25";
+    /** 注入痕迹存储：key = douyin / drama / kuaishou / bilibili，value = 最近一次见到注入的时间戳 */
+    public static final String INJECT_PREFS = "antiburn_inject";
+
+    /**
+     * v2.9.4：注入进程日志的「App 内镜像」文件名。
+     * 被 hook 的进程经本 Provider 回传的行先落到这里，导出时再由 su 合并进用户可见日志。
+     */
+    public static final String HOOK_LOG_FILE = "hook-injected.log";
+    /** 镜像文件上限：超过就重新写，避免长期使用无限膨胀 */
+    private static final long HOOK_LOG_MAX_BYTES = 512 * 1024L;
+
+    /** 最近一次见到该 App 的注入痕迹；0 = 从未见过（v2.9.1） */
+    public static long lastInject(Context ctx, String kind) {
+        if (ctx == null || kind == null) {
+            return 0L;
+        }
+        try {
+            return ctx.getSharedPreferences(INJECT_PREFS, Context.MODE_PRIVATE)
+                    .getLong(kind, 0L);
+        } catch (Throwable t) {
+            return 0L;
+        }
+    }
 
     @Override
     public boolean onCreate() {
@@ -54,6 +77,7 @@ public final class ConfigProvider extends ContentProvider {
             String line = extras.getString(KEY_LOG);
             if (line != null && !line.isEmpty() && line.length() < 4096) {
                 appendLog(line);
+                noteInject(line);
             }
             return null;
         }
@@ -72,14 +96,92 @@ public final class ConfigProvider extends ContentProvider {
         return b;
     }
 
+    /**
+     * v2.9.1：把「哪个视频 App 真的被注入了」记进 SharedPreferences，供首页直接展示。
+     *
+     * <p>此前这个结论只能靠翻日志里的 INJECTED 行，而注入进程写日志的通道本身
+     * 就在漏（su 恒成功、Provider 从不触发），于是用户和开发者都在猜。
+     * 现在注入进程每写一条 ENTER / INJECTED / HOOK-ATTACH，App 进程顺手记一次时间戳，
+     * 首页一屏就能看出「抖音已注入、快手没注入」——没注入就是 LSPosed 作用域没勾，
+     * 不用再猜是识别规则坏了还是开关没开。</p>
+     */
+    private void noteInject(String line) {
+        try {
+            String kind = null;
+            int i = line.indexOf("INJECTED ");
+            if (i >= 0) {
+                String rest = line.substring(i + 9);
+                if (rest.startsWith("Douyin")) {
+                    kind = "douyin";
+                } else if (rest.startsWith("Drama")) {
+                    kind = "drama";
+                } else if (rest.startsWith("Kuaishou")) {
+                    kind = "kuaishou";
+                } else if (rest.startsWith("Bilibili")) {
+                    kind = "bilibili";
+                }
+            }
+            if (kind == null) {
+                // ENTER / HOOK-ATTACH 都带 pkg=，用同一个真源归类，避免两处各写一份判断
+                int p = line.indexOf("pkg=");
+                if (p > 0) {
+                    String pkg = line.substring(p + 4).trim();
+                    int sp = pkg.indexOf(' ');
+                    if (sp > 0) {
+                        pkg = pkg.substring(0, sp);
+                    }
+                    switch (VideoApps.of(pkg)) {
+                        case DOUYIN: kind = "douyin"; break;
+                        case DRAMA: kind = "drama"; break;
+                        case KUAISHOU: kind = "kuaishou"; break;
+                        case BILIBILI: kind = "bilibili"; break;
+                        default: kind = null; break;
+                    }
+                }
+            }
+            if (kind == null) {
+                return;
+            }
+            Context ctx = getContext();
+            if (ctx == null) {
+                return;
+            }
+            ctx.getSharedPreferences(INJECT_PREFS, Context.MODE_PRIVATE)
+                    .edit()
+                    .putLong(kind, System.currentTimeMillis())
+                    .apply();
+        } catch (Throwable ignored) {
+            // 记录注入痕迹失败不得影响日志落盘
+        }
+    }
+
     /** 只追加、不创建目录结构之外的东西；失败静默，绝不因写日志影响配置读取。 */
+    /**
+     * v2.9.4「日志黑洞」真因修复。
+     *
+     * <p>旧实现直接写 {@link ConfStore#LOG_FILE}
+     * （{@code /storage/emulated/0/Android/Prevent burn-in/antiburn.log}）。可这里跑在
+     * <b>App 进程</b>，Android 11+ 分区存储下普通应用用 Java File API 根本写不进
+     * {@code /sdcard/Android/} 下的自定义目录；异常又被 {@code catch} 静默吞掉。于是
+     * 被注入的抖音 / 快手 / 红果 / B站 进程明明成功 {@code call()} 回来了，
+     * {@code ENTER / INJECTED / HOOK-ATTACH / HOOK} 却一行都进不了导出日志，只剩
+     * SystemUI 的心跳 —— 前几版一直在「没勾作用域 / 没注入 / 规则没扫到」之间猜，
+     * 证据从来没落盘。（{@code noteInject} 写 SharedPreferences 是成功的，所以首页
+     * 「注入状态」能显示「已注入」，这恰好反证 Provider 调用本身没问题。）</p>
+     *
+     * <p>现在写 App 私有 {@code files/} 目录（无需任何权限、不受分区存储限制），
+     * 由 {@link ConfStore#exportLogs()} 用 su 把这个文件一起 cat 进用户可见日志。</p>
+     */
     private void appendLog(String line) {
         try {
-            java.io.File f = new java.io.File(ConfStore.LOG_FILE);
-            java.io.File dir = f.getParentFile();
-            if (dir != null && !dir.exists()) {
+            Context ctx = getContext();
+            if (ctx == null) {
+                return;
+            }
+            java.io.File f = new java.io.File(ctx.getFilesDir(), HOOK_LOG_FILE);
+            if (f.length() > HOOK_LOG_MAX_BYTES) {
                 //noinspection ResultOfMethodCallIgnored
-                dir.mkdirs();
+                f.delete();
             }
             try (java.io.FileOutputStream fo = new java.io.FileOutputStream(f, true)) {
                 fo.write(line.getBytes(java.nio.charset.StandardCharsets.UTF_8));

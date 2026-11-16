@@ -733,6 +733,22 @@ public final class ConfStore {
      * <p>Android 11+ 普通应用无法在 /sdcard/Android/ 下建目录，只能借 su；
      * 同时把兜底目录设成 0777，保证 SystemUI(system uid) 也有地方可写。</p>
      */
+    /**
+     * v2.9.4：被注入进程回传日志的 App 私有镜像路径。
+     * 只有 App 进程自己知道这个路径，导出时由 su（root 可读任意路径）合并进用户可见日志。
+     */
+    public static String hookLogFile() {
+        Context c = appCtx;
+        if (c == null) {
+            return null;
+        }
+        try {
+            return new File(c.getFilesDir(), ConfigProvider.HOOK_LOG_FILE).getAbsolutePath();
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
     public static boolean prepareSharedDirs() {
         // 路径含空格，必须整体加引号，否则 shell 会当成两个参数
         String cmd = "mkdir -p \"" + LOG_DIR + "\" \"" + LOG_DIR_FALLBACK + "\" 2>/dev/null; "
@@ -759,8 +775,13 @@ public final class ConfStore {
     public static String exportLogs() {
         File audit = auditFile();
         String auditSrc = audit == null ? "" : " \"" + audit.getAbsolutePath() + "\"";
+        // v2.9.4：合并「注入进程日志镜像」。此前它写在 /sdcard/Android 下被分区存储
+        // 挡住、异常被吞，四个视频 App 的 ENTER/INJECTED/HOOK 一行都进不了导出日志。
+        // 现在由 App 进程写私有 files 目录，这里用 su 把它一起 cat 进来。
+        String hookSrc = hookLogFile();
+        String hookLogSrc = hookSrc == null ? "" : " \"" + hookSrc + "\"";
         String cmd = "mkdir -p \"" + LOG_DIR + "\" 2>/dev/null; "
-                + "{ cat" + auditSrc
+                + "{ cat" + auditSrc + hookLogSrc
                 + " \"" + LOG_DIR + "\"/antiburn*.log"
                 + " \"" + LOG_DIR_FALLBACK + "\"/*.log"
                 + " \"" + LOG_FILE + "\" 2>/dev/null; } "
@@ -815,7 +836,7 @@ public final class ConfStore {
             boolean injected = dy > 0 || dr > 0 || ks > 0 || bi > 0 || hdiag > 0;
             String hint = injected
                     ? "hook=alive（各 App 真隐藏通道可用，继续看 HOOK app= 的 sw/R/T/B）"
-                    : "hook=NONE（LSPosed 没把模块加载进视频 App 进程，位置微移一行都没执行）；"
+                    : "hook=NONE（LSPosed 没把模块加载进视频 App 进程，真隐藏一行都没执行）；"
                     + "处理：功能 › 通用 › 作用域自检，勾上打 ✗ 的 App → 强行停止该 App 再打开";
             int ovl = occurrences(all, "OVL on app=") + occurrences(all, "OVL window attached");
             // v2.8.8：enter= 直接给出 handleLoadPackage 的命中进程。
