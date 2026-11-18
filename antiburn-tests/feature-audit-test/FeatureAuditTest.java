@@ -1780,6 +1780,7 @@ public class FeatureAuditTest {
         // v3.0.1 仅做可观测性修复，锚点随版递增为 vc61 / 3.0.1；
         // v3.0.2 修三处几何识别 bug，锚点递增为 vc62 / 3.0.2；
         // v3.0.3 右上角安全修复 + 两处只读探测，锚点递增为 vc63 / 3.0.3。
+        // v3.0.4~v3.0.9 依次递增；v3.0.10 相位 tick 与设置页轮询降频，锚点递增为 vc70 / 3.0.10。
         System.out.println("== T-42 3.0 稳定版版本号 / 发布契约 ==");
         check(versionAtLeast(gradle, 60, "3.0"),
                 "T-42a 版本号升到 vc60 / 3.0 稳定版（Obtainium 递增识别）", "");
@@ -1787,9 +1788,9 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 68
-                    && "3.0.8".equals(nm.group(1));
-            check(ok, "T-42b versionCode 恰为 68 / versionName 恰为 3.0.8（非区间，锁死发布锚点）", "");
+                    && Integer.parseInt(cm.group(1)) == 70
+                    && "3.0.10".equals(nm.group(1));
+            check(ok, "T-42b versionCode 恰为 70 / versionName 恰为 3.0.10（非区间，锁死发布锚点）", "");
         }
         check(hook297raw.contains("SAFE_RESTORE") && hook297raw.contains("DRAMA_PAYWALL_HIDE"),
                 "T-42c 3.0 沿用 v2.9.7/v2.9.6 定稿功能（恢复路径 + 红果弹窗均在）", "");
@@ -1863,8 +1864,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 68
-                    && "3.0.8".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 70
+                    && "3.0.10".equals(nm.group(1));
             // 与 T-42b 断言同源，是发布前的双重防回退锁，不冒充新增不变量（评审建议改标签）。
             check(ok, "T-43c P3 版本锚点与 T-42b 双重锁定（发布前防回退，非新增不变量）", "");
         }
@@ -1902,9 +1903,9 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 68
-                    && "3.0.8".equals(nm.group(1));
-            check(ok, "T-44c 版本号恰为 68 / 3.0.8（发布锚点）", "");
+                    && Integer.parseInt(cm.group(1)) == 70
+                    && "3.0.10".equals(nm.group(1));
+            check(ok, "T-44c 版本号恰为 70 / 3.0.10（发布锚点）", "");
         }
 
         // ---------- T-45 v3.0.3 右上角安全修复 + 两处只读探测越界防护 ----------
@@ -1945,9 +1946,9 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 68
-                    && "3.0.8".equals(nm.group(1));
-            check(ok, "T-45c 版本号恰为 68 / 3.0.8（发布锚点）", "");
+                    && Integer.parseInt(cm.group(1)) == 70
+                    && "3.0.10".equals(nm.group(1));
+            check(ok, "T-45c 版本号恰为 70 / 3.0.10（发布锚点）", "");
         }
 
         // ---------- T-46 v3.0.4 快手右侧作者栏放行（用户授权绕 rw>=0.30 红线） ----------
@@ -2022,14 +2023,14 @@ public class FeatureAuditTest {
             // ⑤ 版本锚点 + 辅助方法只读性
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
-            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 68
-                    && "3.0.8".equals(nm.group(1));
+            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 70
+                    && "3.0.10".equals(nm.group(1));
             String helper = stripComments(slice(dy304raw, "private static boolean hasChildByClass(View v, String target)",
                     "private static int scoreRight(ViewGroup g)"));
             boolean readonly = helper.contains("MAX_DEPTH") && helper.contains("catch (Throwable")
                     && !helper.contains("setVisibility") && !helper.contains("setAlpha")
                     && !helper.contains("setTranslation");
-            check(ver && readonly, "T-46e 版本 68/3.0.8；hasChildByClass 有深度上限+异常收敛且只读", "");
+            check(ver && readonly, "T-46e 版本 70/3.0.10；hasChildByClass 有深度上限+异常收敛且只读", "");
         }
 
         // ---------- T-47 v3.0.5 底部标题栏只读探针 TDUMP ----------
@@ -2067,9 +2068,9 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 68
-                    && "3.0.8".equals(nm.group(1));
-            check(ok, "T-47c 版本号恰为 68 / 3.0.8（v3.0.8 发布锚点）", "");
+                    && Integer.parseInt(cm.group(1)) == 70
+                    && "3.0.10".equals(nm.group(1));
+            check(ok, "T-47c 版本号恰为 70 / 3.0.10（v3.0.9 发布锚点）", "");
         }
 
         // ---------- T-48 v3.0.6 三处精准隐藏（红点禁藏为开发门禁，缺一即失败） ----------
@@ -2331,12 +2332,12 @@ public class FeatureAuditTest {
                     "T-48-UPG 升级回归：三新键默认 false，老配置缺键三功能全关", "");
         }
         {
-            // VER 版本锚点：六处旧断言已同步 68/3.0.8（精确相等）
+            // VER 版本锚点：七处旧断言已同步 70/3.0.10（此前 69/3.0.9、68/3.0.8 依次同步，精确相等）
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ver = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 68 && "3.0.8".equals(nm.group(1));
-            check(ver, "T-48-VER 版本锚点 68/3.0.8（T-42b~T-47c 六处已同步）", "");
+                    && Integer.parseInt(cm.group(1)) == 70 && "3.0.10".equals(nm.group(1));
+            check(ver, "T-48-VER 版本锚点 70/3.0.10（T-42b~T-47c 六处已同步）", "");
         }
 
         // ---------- T-49 v3.0.7 定向隐藏通道 THH 测试锁（安全命门确定性守卫） ----------
@@ -2574,6 +2575,210 @@ public class FeatureAuditTest {
                     && count(gate, "GAP_RESET_MS\\s*=\\s*4000L") == 1;
             check(gateClassExists && constants && count(dy307, "new ThhLiveGate\\(\\)") == 1,
                     "T-50-W4 ThhLiveGate 常量锁定 2/3/500/4000 + Hook 恰实例化 1 次", "");
+        }
+
+        // ---------- T-51 v3.0.9 卡片精简 / 轮询合并 / 导航栏微移值回退（真守卫） ----------
+        // 数量断言一律 count(regex)（Pattern.find 真计数），禁止 countLiteral("A|B") 空断言
+        // —— v3.0.6 R2 教训。变异实证只在内存副本上做，不落盘、不改源码。
+        System.out.println();
+        System.out.println("== T-51 v3.0.9 卡片精简 / 轮询合并 / 导航栏微移值回退 ==");
+        String act309 = read(dir.resolve("MainActivity.kt"));
+        {
+            // A1 开机自启卡：裸 token 计数 == 0，同时覆盖「定义」与「调用」两侧。
+            int card = count(act309, "BootStatusCard");
+            check(card == 0,
+                    "T-51-A1 MainActivity.kt 无 BootStatusCard 定义与调用（count==0）",
+                    "count=" + card);
+        }
+        {
+            // A2 5s 轮询点：合并后 ≤ 2（首页注入状态卡 + 红果二级页各一处）。
+            int polls = count(act309, "delay\\s*\\(\\s*5_000\\s*\\)");
+            check(polls <= 2,
+                    "T-51-A2 delay(5_000) 轮询点计数 ≤ 2",
+                    "count=" + polls);
+        }
+        {
+            // A3 navMicroSec 固定 45（原防烧屏节奏）且不被 rememberSaveable 托管：
+            //    只锁该声明行本身——subPage/state 等别处合法使用 rememberSaveable，
+            //    全文零命中会假 FAIL，必须把 rememberSaveable 与 navMicroSec 绑定判定。
+            int fixed45 = count(act309, "(?m)^[ \\t]*val[ \\t]+navMicroSec[ \\t]*=[ \\t]*45[ \\t]*$");
+            int boundSaveable = count(act309,
+                    "navMicroSec[^\\n]*rememberSaveable|rememberSaveable[^\\n]*navMicroSec");
+            check(fixed45 == 1 && boundSaveable == 0,
+                    "T-51-A3 navMicroSec 固定值 45（原防烧屏节奏）且声明不绑 rememberSaveable",
+                    "fixed45=" + fixed45 + " boundSaveable=" + boundSaveable);
+        }
+        {
+            // A4 onSelfCheck 正向守卫：名单卡按钮依赖，删自启卡时不得连带删除。
+            int decl = count(act309, "onSelfCheck[ \\t]*:[ \\t]*\\(\\)[ \\t]*->[ \\t]*Unit");
+            int used = count(act309, "onClick[ \\t]*=[ \\t]*onSelfCheck");
+            check(decl >= 1 && used >= 1,
+                    "T-51-A4 onSelfCheck 参数与按钮绑定仍在（名单卡依赖，防误删）",
+                    "decl=" + decl + " onClick=" + used);
+        }
+        {
+            // A5 变异实证（内存变异，不落盘）：
+            //    变异①恢复 BootStatusCard 定义 → A1 的 count>0，断言必 FAIL；
+            //    变异②navMicroSec 固定 45 改成其他值（如 200）→ A3 的 fixed45==0，断言必 FAIL。
+            //    本项证明 A1/A3 是真守卫而非空断言。
+            String mutantCard = act309 + "\nfun BootStatusCard() {}\n";
+            String mutantNav = act309.replace("val navMicroSec = 45", "val navMicroSec = 200");
+            boolean cardCaught = count(mutantCard, "BootStatusCard") > 0;
+            boolean navCaught = count(mutantNav,
+                    "(?m)^[ \\t]*val[ \\t]+navMicroSec[ \\t]*=[ \\t]*45[ \\t]*$") == 0;
+            check(cardCaught && navCaught,
+                    "T-51-M 变异实证：恢复 BootStatusCard→A1 FAIL；navMicroSec 45 改成 200→A3 FAIL",
+                    "cardCaught=" + cardCaught + " navCaught=" + navCaught);
+        }
+
+        // ---------- T-52 v3.0.10 功耗优化（P1 相位 tick 常量化 / P2 前端轮询 / P3 零改 / 变异实证） ----------
+        // 公共约定（照抄 T-51 教训）：数量断言一律 count(regex)（Pattern.find 真计数），
+        // 禁止 countLiteral("A|B") 空断言 —— v3.0.6 R2 教训；变异实证只在内存副本上做，不落盘、不污染真源。
+        // A5 变异 β 用字面 String.replace，不用未转义的 replaceFirst 正则（评审 design-review 问题 1）。
+        System.out.println();
+        System.out.println("== T-52 v3.0.10 相位 tick 常量化 / 轮询降频 / 越界零改 ==");
+        String ctrl310 = read(dir.resolve("Controller.java"));
+        String act310 = read(dir.resolve("MainActivity.kt"));
+        String dy310 = read(dir.resolve("DouyinHook.java"));
+        String cfg310 = read(dir.resolve("Config.java"));
+        String a1DeclRx = "private[ \\t]+static[ \\t]+final[ \\t]+long[ \\t]+MIN_TICK_MS[ \\t]*=[ \\t]*3000L[ \\t]*;";
+        String a3OldRx = "delay\\s*\\(\\s*5_000\\s*\\)";
+        String a3UseRx = "delay\\(STATUS_REFRESH_MS\\)";
+
+        // A1 · P1 常量声明 + 唯一接线 + 旧值清零（Math.min(2000L 必须归零）
+        {
+            int decl = count(ctrl310, a1DeclRx);
+            int used = count(ctrl310,
+                    "scheduleCycle\\(Math\\.min\\(MIN_TICK_MS,[ \\t]*Math\\.max\\(100L, remain\\)\\)\\)");
+            int old2000 = count(ctrl310, "Math\\.min\\(2000L");
+            check(decl == 1 && used == 1 && old2000 == 0,
+                    "T-52-A1 MIN_TICK_MS 声明==1 / 接线==1 / 旧 Math.min(2000L)==0",
+                    "decl=" + decl + " used=" + used + " old2000=" + old2000);
+        }
+        // A1-d · 全局替换误伤守卫：异常兜底与直播暂停两处 scheduleCycle(2000) 必须恰好还在
+        {
+            int pause2000 = count(ctrl310, "scheduleCycle\\(2000\\)");
+            check(pause2000 == 2,
+                    "T-52-A1-d 异常兜底/直播暂停两处 scheduleCycle(2000) 未误改（count==2）",
+                    "count=" + pause2000);
+        }
+
+        // A2 · 越界七段函数体 raw slice：锚点 hits==1 + 行数 + sha256 逐字锁（基线见 design-backend §4.2）
+        {
+            String[] a2From = {
+                    "long hideMs = Math.max(1, Config.hideSec) * 1000L;",
+                    "if (shouldHide) {",
+                    "if (!intervene || livePause) {",
+                    "if (Config.enableShift) {",
+                    "private static void updateOverlay(String top, boolean show) {",
+                    "private static void applyHide() {",
+                    "private static void applyShow() {"
+            };
+            String[] a2To = {
+                    "if (shouldHide) {",
+                    "// v2.8.3：应用内区域覆盖层",
+                    "// 统一周期相位",
+                    "// 调度：",
+                    "/** 上一次应用到 PixelShift",
+                    "private static void applyShow() {",
+                    "/**\n     * 暂停原因"
+            };
+            int[] a2Lines = {5, 16, 18, 20, 11, 129, 41};
+            String[] a2Sha = {
+                    "b1e940509f7ec1d0f5e85264d4559d8429583bc6a7133abf657744823762f9bc",
+                    "d438516ad9b062d17fc3710c5e95816d9eb8af0f5033a0244bc444106931b315",
+                    "2e15d96a58c8952746da6ca190add42c7bfeb7ab76fc24c70f03c89d1fa90c91",
+                    "2e637939149bcae4d492cbff4dc7cba8e929dfc977e17ce69a97942f346306f7",
+                    "31f7e195cb32c1bf85b3631c5e2ac43dc8d795b5cc2e48e1137371646ba36020",
+                    "738e4f715865cd0e673c79bbb42205217f741486fabffec879735ef162659c6c",
+                    "29a926668a181c748745072486318738514980532d0c6d971a90b77e5e8363a9"
+            };
+            StringBuilder drift = new StringBuilder();
+            for (int i = 0; i < a2From.length; i++) {
+                int hits = count(ctrl310, Pattern.quote(a2From[i]));
+                String body = slice(ctrl310, a2From[i], a2To[i]);
+                int lines = count(body, ".+");
+                String h = sha256(body);
+                if (hits != 1 || lines != a2Lines[i] || !h.equals(a2Sha[i])) {
+                    drift.append("[").append(i).append(":hits=").append(hits)
+                            .append(",lines=").append(lines).append(",sha=").append(h).append("]");
+                }
+            }
+            check(drift.length() == 0,
+                    "T-52-A2 越界七段函数体逐字未改（锚点唯一+行数+sha256）",
+                    drift.length() == 0 ? "7/7 段 MATCH" : drift.toString());
+        }
+
+        // A3 · P2 前端契约：先写好真守卫；若此刻前端尚未落地则 SKIP 并如实标注，
+        // 独立复验阶段前端改完后统一重跑，本分支不再进入。
+        {
+            int old5k = count(act310, a3OldRx);
+            int decl = count(act310, "private[ \\t]+const[ \\t]+val[ \\t]+STATUS_REFRESH_MS[ \\t]*=[ \\t]*15_?000L?");
+            int used = count(act310, a3UseRx);
+            int now = count(act310, "now[ \\t]*=[ \\t]*System\\.currentTimeMillis\\(\\)");
+            int injKind = count(act310, "ConfigProvider\\.lastInject\\(context, kind\\)");
+            int injDrama = count(act310, "ConfigProvider\\.lastInject\\(context, \"drama\"\\)");
+            int fresh = count(act310, "24L \\* 3600_000L");
+            String detail = "old5k=" + old5k + " decl=" + decl + " used=" + used + " now=" + now
+                    + " injKind=" + injKind + " injDrama=" + injDrama + " fresh=" + fresh;
+            boolean frontendPending = decl == 0 && used == 0 && old5k > 0;
+            if (frontendPending) {
+                System.out.println("  SKIP  T-52-A3 前端轮询契约（MainActivity.kt 尚未改，待前端完成后独立复验重跑）  — " + detail);
+            } else {
+                check(old5k == 0 && decl == 1 && used == 2 && now == 2
+                                && injKind == 1 && injDrama == 1 && fresh == 2,
+                        "T-52-A3 前端 STATUS_REFRESH_MS=15000L / 两处引用 / 轮询保活 / 判定零改", detail);
+            }
+        }
+
+        // A4 · P3 三处零改：DouyinHook 整文件哈希 + fetchInterval 片段哈希/三档字面 + navMicroSec
+        {
+            String dyHash = sha256(dy310);
+            String fetchBody = slice(cfg310, "private static long fetchInterval() {", "/** 屏幕是否亮着。");
+            int fetchLines = count(fetchBody, ".+");
+            String fetchHash = sha256(fetchBody);
+            int t60 = count(fetchBody, "return 60000L;");
+            int t2 = count(fetchBody, "return 2000L;");
+            int t20 = count(fetchBody, "return 20000L;");
+            int t90 = count(fetchBody, "now - lastChangeAt < 90000L");
+            int fixed45 = count(act310, "(?m)^[ \\t]*val[ \\t]+navMicroSec[ \\t]*=[ \\t]*45[ \\t]*$");
+            int boundSaveable = count(act310,
+                    "navMicroSec[^\\n]*rememberSaveable|rememberSaveable[^\\n]*navMicroSec");
+            check("b65087a535e70a6f90bc6f1b1f9ac049006e3b262a53a71d4b34c690617882db".equals(dyHash)
+                            && fetchLines == 11
+                            && "e9395fb642fcb791b8af95ce676fb109cd7c16196ac7ff8d9242def575ba39a7".equals(fetchHash)
+                            && t60 == 1 && t2 == 1 && t20 == 1 && t90 == 1
+                            && fixed45 == 1 && boundSaveable == 0,
+                    "T-52-A4 DouyinHook/fetchInterval/navMicroSec 三处零改",
+                    "dy=" + dyHash.substring(0, 8) + " fetchLines=" + fetchLines
+                            + " fetch=" + fetchHash.substring(0, 8)
+                            + " 60000/2000/20000/90000=" + t60 + "/" + t2 + "/" + t20 + "/" + t90
+                            + " fixed45=" + fixed45 + " bound=" + boundSaveable);
+        }
+
+        // A5 · 变异实证（内存副本，真守卫自证）
+        //   α：把 MIN_TICK_MS = 3000L 改回 2000L → A1 声明正则必须归零（caughtA）。
+        //   β：字面 replace("delay(STATUS_REFRESH_MS)", "delay(5_000)")（评审问题 1：不用未转义 replaceFirst）
+        //      → 旧间隔计数>0 且新引用!=2，A3 必 FAIL（caughtB）。
+        //   前端未落地时 β 以内存夹具作为「改后应有形态」，落地后直接用真 MainActivity.kt。
+        {
+            String mutA = ctrl310.replace("MIN_TICK_MS = 3000L", "MIN_TICK_MS = 2000L");
+            boolean caughtA = count(mutA, a1DeclRx) == 0;
+            boolean frontendDone = count(act310,
+                    "private[ \\t]+const[ \\t]+val[ \\t]+STATUS_REFRESH_MS") > 0 || count(act310, a3OldRx) == 0;
+            String betaBase = frontendDone ? act310
+                    : ("private const val STATUS_REFRESH_MS = 15000L\n"
+                       + "delay(STATUS_REFRESH_MS)\n"
+                       + "now = System.currentTimeMillis()\n"
+                       + "delay(STATUS_REFRESH_MS)\n"
+                       + "now = System.currentTimeMillis()\n");
+            boolean baseOk = count(betaBase, a3OldRx) == 0 && count(betaBase, a3UseRx) == 2;
+            String mutB = betaBase.replace("delay(STATUS_REFRESH_MS)", "delay(5_000)");
+            boolean caughtB = count(mutB, a3OldRx) > 0 || count(mutB, a3UseRx) != 2;
+            check(caughtA && caughtB && baseOk,
+                    "T-52-M 变异实证：α 3000→2000→A1 FAIL；β 字面 replace 回退 delay(5_000)→A3 FAIL",
+                    "caughtA=" + caughtA + " caughtB=" + caughtB + " baseOk=" + baseOk
+                            + " betaSrc=" + (frontendDone ? "real" : "fixture(frontend-pending)"));
         }
 
         System.out.println();

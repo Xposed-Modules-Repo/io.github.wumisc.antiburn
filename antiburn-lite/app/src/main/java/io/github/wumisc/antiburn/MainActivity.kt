@@ -1,7 +1,6 @@
 package io.github.wumisc.antiburn
 
 import android.app.Activity
-import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
@@ -103,6 +102,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+/**
+ * 设置页注入状态轮询间隔（v3.0.10 P2）：新鲜度以 24h 为粒度，15s 刷新对判定无实质影响。
+ * 仅在设置页前台的 LaunchedEffect 中使用，降低协程唤醒频率。
+ */
+private const val STATUS_REFRESH_MS = 15_000L
 
 /**
  * 防止烧屏 · v2.0 起
@@ -705,7 +710,7 @@ private fun BurnInProtectApp() {
     // 用 saveable 保存，旋转/深浅色切换后不会退回主页。
     var subPage by rememberSaveable { mutableStateOf<String?>(null) }
     val openSub: (String) -> Unit = { subPage = it }
-    var navMicroSec by rememberSaveable { mutableIntStateOf(45) }
+    val navMicroSec = 45
     // 旋转/深浅色切换后保留未落盘的改动
     var state by rememberSaveable(stateSaver = AbStateSaver) { mutableStateOf(AbState()) }
     var savedState by rememberSaveable(stateSaver = AbStateSaver) { mutableStateOf(AbState()) }
@@ -1923,11 +1928,6 @@ private fun HomeTilePage(
 
         Spacer(Modifier.height(12.dp))
 
-        // v3.0.8 P2：自启状态卡与注入状态同属「可观测性」，紧邻放置，不新增导航层级。
-        BootStatusCard(dark, onSelfCheck)
-
-        Spacer(Modifier.height(12.dp))
-
         Card(
             Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(18.dp),
@@ -2048,9 +2048,9 @@ private fun InjectStatusCard(dark: Boolean, onEnableAll: () -> Unit) {
     var now by remember { mutableStateOf(System.currentTimeMillis()) }
     var scopeText by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) {
-        // 用户切去视频 App 再切回来时，状态要跟着更新，所以 5 秒轮询一次
+        // 用户切去视频 App 再切回来时，状态要跟着更新，所以 15 秒轮询一次
         while (true) {
-            delay(5_000)
+            delay(STATUS_REFRESH_MS)
             now = System.currentTimeMillis()
         }
     }
@@ -2301,11 +2301,7 @@ private fun ScopePendingNotice(dark: Boolean, onSelfCheck: () -> Unit) {
             Text("红果未注入 · 待勾选作用域",
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.Bold, color = alertText)
-            Text("本机 24 小时内检测不到红果进程注入（注入状态：未检测到）。开关可以先打开，"
-                + "但暂时不会生效——这不是开关故障。请在 LSPosed 给本模块勾选"
-                + "「红果谷歌版 com.phoenix.read.oversea.gp」作用域，重启红果后回到本页，"
-                + "状态会自动刷新。注入状态取自历史痕迹，勾选或重启后可能短暂误报未注入，"
-                + "通常几秒内自行恢复。",
+            Text("本机未检测到红果注入，开关可先开但暂不生效；请在 LSPosed 勾选红果谷歌版作用域后重启。",
                 style = MaterialTheme.typography.bodySmall,
                 color = alertText, modifier = Modifier.padding(top = 6.dp))
             if (dark) {
@@ -2455,9 +2451,9 @@ private fun DramaFeaturePage(
     var now by remember { mutableStateOf(System.currentTimeMillis()) }
     var scopeText by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) {
-        // 与首页同款 5s 轮询：切去 LSPosed 勾选再回来自动刷新，无需重进设置页
+        // 与首页同款 15s 轮询：切去 LSPosed 勾选再回来自动刷新，无需重进设置页
         while (true) {
-            delay(5_000)
+            delay(STATUS_REFRESH_MS)
             now = System.currentTimeMillis()
         }
     }
@@ -2618,200 +2614,6 @@ private fun GroupTitle(t: String) {
     Text(t, style = MaterialTheme.typography.titleSmall,
         color = UiPalette.accent(dark), fontWeight = FontWeight.Bold,
         modifier = Modifier.padding(top = 12.dp, bottom = 6.dp))
-}
-
-// ---- v3.0.8 P2：开机自启状态卡（纯加性；只读，不写任何配置） ----
-//
-// 七字段逐字对齐 design-backend.md §3.4 的 BootRestoreUiState 契约，字段顺序也与后端一致。
-// 后端 BootRestoreStore 尚未落盘期间，按其 §3.4 约定的独立 prefs 与键名直读同一数据源；
-// 后端类落地后只需把 readBootRestoreState 的函数体换成 BootRestoreStore.readState(context)。
-private data class BootRestoreUiState(
-    val lastBootAtMs: Long,
-    val restoreAttempted: Boolean,
-    val engine: String,
-    val needUserAction: Boolean,
-    val hintTitle: String,
-    val hintBody: String,
-    val actionKey: String,
-)
-
-private const val BOOT_RESTORE_PREFS = "antiburn_boot_restore"
-private const val BOOT_RESTORE_KEY_LAST_BOOT_AT = "last_boot_at"
-private const val BOOT_RESTORE_KEY_ATTEMPTED = "attempted"
-private const val BOOT_RESTORE_KEY_ENGINE = "engine_snapshot"
-
-/** 只读开机恢复状态；读取异常按 design-frontend §2.6 最保守口径降级，绝不反向推断"已生效"。 */
-private fun readBootRestoreState(context: Context): BootRestoreUiState {
-    return try {
-        val prefs = context.applicationContext.getSharedPreferences(
-            BOOT_RESTORE_PREFS,
-            Context.MODE_PRIVATE,
-        )
-        val attempted = prefs.getBoolean(BOOT_RESTORE_KEY_ATTEMPTED, false)
-        val lastBootAt = prefs.getLong(BOOT_RESTORE_KEY_LAST_BOOT_AT, 0L)
-        val rawEngine = prefs.getString(BOOT_RESTORE_KEY_ENGINE, "") ?: ""
-        // 未知值一律不展示引擎行，避免把"读不到"说成某一种引擎。
-        val engine = if (rawEngine == "lsposed" || rawEngine == "accessibility") rawEngine else ""
-        BootRestoreUiState(
-            lastBootAtMs = lastBootAt,
-            restoreAttempted = attempted,
-            engine = engine,
-            needUserAction = true,
-            hintTitle = "开机自动恢复",
-            hintBody = "模块已声明开机 / 覆盖安装恢复，并已记录一次触发。" +
-                "能否真正免手动启动取决于系统：国产 ROM 通常需要在" +
-                "「设置 → 应用 → AntiBurn → 自启动 / 后台管理」中允许；" +
-                "LSPosed 用户请确认模块已勾选且目标应用作用域已选；" +
-                "无障碍引擎需系统设置里保持开启。",
-            actionKey = "OPEN_APP_DETAILS",
-        )
-    } catch (ignored: Throwable) {
-        BootRestoreUiState(0L, false, "", true, "开机自动恢复", "", "NONE")
-    }
-}
-
-/** 应用详情深链；目标 Activity 不存在时静默留在本页，不弹错误提示。 */
-private fun openAppDetails(context: Context) {
-    val intent = Intent(
-        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-        Uri.parse("package:" + context.packageName),
-    )
-    try {
-        context.startActivity(intent)
-    } catch (ignored: ActivityNotFoundException) {
-        // 部分 ROM 没有该 Activity：保持当前页即可。
-    }
-}
-
-/** 与 ScopePendingNotice 完全同构的按钮：深色 accent 文字按钮，浅色 accent 底 + 白字。 */
-@Composable
-private fun BootActionButton(dark: Boolean, text: String, onClick: () -> Unit) {
-    if (dark) {
-        TextButton(onClick = onClick) {
-            Text(text, style = MaterialTheme.typography.labelMedium,
-                color = UiPalette.accent(dark))
-        }
-    } else {
-        Button(
-            onClick = onClick,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = UiPalette.accent(false),
-                contentColor = Color.White,
-            ),
-        ) {
-            Text(text, style = MaterialTheme.typography.labelMedium, color = Color.White)
-        }
-    }
-}
-
-/**
- * v3.0.8 P2 自启状态卡：只陈述"记录到什么"，不承诺"系统允许了什么"。
- * 三态由 restoreAttempted + lastBootAtMs（7 天新鲜度）决定，开关数零增加。
- */
-@Composable
-private fun BootStatusCard(dark: Boolean, onSelfCheck: () -> Unit) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    // 无条件声明状态（Compose hooks 不能条件调用）；if 只作用于渲染分支。
-    var now by remember { mutableStateOf(System.currentTimeMillis()) }
-    var state by remember { mutableStateOf(readBootRestoreState(context)) }
-    var scopeText by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(Unit) {
-        // 与 InjectStatusCard 同款 5s 轮询：切去系统设置回来自动刷新，无需重进页面。
-        while (true) {
-            delay(5_000)
-            now = System.currentTimeMillis()
-            state = readBootRestoreState(context)
-        }
-    }
-    val alertText = if (dark) UiPalette.warn(dark) else UiPalette.ink(dark)
-    val recent = state.lastBootAtMs > 0L &&
-        now - state.lastBootAtMs < 7L * 24L * 3600_000L
-    val relative = if (state.lastBootAtMs > 0L) agoText(now - state.lastBootAtMs) else "较久以前"
-    val statusLine = when {
-        !state.restoreAttempted || state.lastBootAtMs <= 0L ->
-            "尚未记录到开机 / 覆盖安装触发。请重启一次，或手动打开一次 App 后再回到本页查看。"
-        recent ->
-            "已记录一次开机 / 覆盖安装触发（$relative）。能否真正生效取决于系统 ROM 自启权限与 LSPosed 作用域，请以实际验证为准。"
-        else ->
-            "上次记录到开机 / 覆盖安装触发（$relative，较久以前）。可重启一次验证；能否真正生效取决于系统 ROM 自启权限与 LSPosed 作用域，请以实际验证为准。"
-    }
-    val selfCheck: () -> Unit = {
-        scopeText = "正在读取 LSPosed 配置…"
-        scope.launch {
-            val text = withContext(Dispatchers.IO) {
-                runCatching { LspScope.diagnose(context) }
-                    .getOrElse { "读取失败：" + (it.message ?: it.javaClass.simpleName) }
-            }
-            scopeText = text
-            withContext(Dispatchers.IO) { ConfStore.logLine(LspScope.ensure(context)) }
-        }
-    }
-    Card(
-        Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = UiPalette.warn(dark).copy(alpha = 0.12f)),
-    ) {
-        Column(Modifier.padding(14.dp)) {
-            Text(state.hintTitle, style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold, color = alertText)
-            Text(statusLine, style = MaterialTheme.typography.bodySmall,
-                color = alertText, modifier = Modifier.padding(top = 6.dp))
-            if (state.restoreAttempted && state.lastBootAtMs > 0L && state.hintBody.isNotEmpty()) {
-                Text(state.hintBody, style = MaterialTheme.typography.bodySmall,
-                    color = alertText, modifier = Modifier.padding(top = 6.dp))
-            }
-            Text(
-                "模块已声明开机恢复。声明不等于系统已允许自启；能否真正生效取决于系统 ROM 自启权限与 LSPosed 作用域，请以实际验证为准。",
-                style = MaterialTheme.typography.bodySmall,
-                color = alertText, modifier = Modifier.padding(top = 6.dp),
-            )
-            Text(
-                "开机广播到达时只做四件事：初始化配置镜像、刷新快捷磁贴、落一条诊断日志、记录触发时间。",
-                style = MaterialTheme.typography.bodySmall,
-                color = alertText, modifier = Modifier.padding(top = 6.dp),
-            )
-            Text(
-                "模块不做这些事：不启动后台服务、不拉起无障碍服务、不突破 Android 8+ 后台启动限制、" +
-                    "不使用通知（本版不申请通知权限）、不从后台打开 App 界面、不强制 LSPosed 注入。",
-                style = MaterialTheme.typography.bodySmall,
-                color = alertText, modifier = Modifier.padding(top = 6.dp),
-            )
-            Text("想让开机后自动恢复更稳，请按顺序确认：", style = MaterialTheme.typography.bodySmall,
-                color = alertText, modifier = Modifier.padding(top = 6.dp))
-            Text("1. 系统设置 → 应用管理 → AntiBurn → 自启动 / 允许后台运行（各 ROM 名称不同）；",
-                style = MaterialTheme.typography.bodySmall, color = alertText)
-            Text("2. LSPosed 里保持本模块启用，并勾选抖音 / 快手 / 红果等作用域；",
-                style = MaterialTheme.typography.bodySmall, color = alertText)
-            Text("3. 无障碍引擎在系统设置里保持开启（其开启 / 恢复由系统掌控，本卡不代表它已开启）。",
-                style = MaterialTheme.typography.bodySmall, color = alertText)
-            if (state.engine.isNotEmpty()) {
-                Text(
-                    "当前运行引擎：" + (if (state.engine == "lsposed") "LSPosed" else "无障碍"),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = UiPalette.accent(dark), modifier = Modifier.padding(top = 6.dp),
-                )
-            }
-            Text("ROM 白名单状态没有可靠接口，本卡无法替你确认，请以系统设置里的开关为准。",
-                style = MaterialTheme.typography.bodySmall, color = alertText)
-            Text("本卡只显示探测记录，不同 ROM 行为不同，请以实际验证为准。",
-                style = MaterialTheme.typography.bodySmall, color = alertText)
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                BootActionButton(dark, "作用域自检", selfCheck)
-                if (state.actionKey == "OPEN_APP_DETAILS") {
-                    BootActionButton(dark, "打开应用设置") { openAppDetails(context) }
-                }
-            }
-        }
-    }
-    scopeText?.let { text ->
-        ScopeDialog(
-            text = text,
-            dark = dark,
-            onOpenLsposed = { openLsposedManager(context) },
-            onDismiss = { scopeText = null },
-        )
-    }
 }
 
 // ---- v3.0.8 P3：动态元素"待探测"轻提示（默认折叠、无开关、低优先级；B站页不调用） ----

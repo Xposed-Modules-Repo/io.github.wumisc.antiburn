@@ -37,6 +37,9 @@ public final class Controller {
 
     private static final String TAG = XposedInit.TAG;
 
+    // v3.0.10 P1：相位边界仍由 remain 精确调度；此值仅决定离边界较远时最迟多久重读一次配置。
+    private static final long MIN_TICK_MS = 3000L;
+
     // 目标视图
     private static volatile View statusView;   // 状态栏内容容器（status_bar_container 等）
     private static volatile View navView;      // 导航栏视图（NavigationBarView）
@@ -960,10 +963,11 @@ public final class Controller {
             XposedInit.diag("SHIFT 已关闭，位移归零");
         }
 
-        // 调度：优先切到下一相位边界保持同步，但最迟 2s 重读一次配置。
+        // 调度：优先切到下一相位边界保持同步，但最迟 MIN_TICK_MS(3s) 重读一次配置。
+        // v3.0.10：兜底重读 2s→3s 省空转唤醒；边界仍由 remain 精确调度，切换时刻不变。
         // 旧版直接等到相位边界（最长 hideSec 秒），导致改了开关要等几十秒才生效。
         long remain = shouldHide ? (hideMs - pos) : (hideMs + showMs - pos);
-        scheduleCycle(Math.min(2000L, Math.max(100L, remain)));
+        scheduleCycle(Math.min(MIN_TICK_MS, Math.max(100L, remain)));
     }
 
     /**
