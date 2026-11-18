@@ -315,9 +315,14 @@ public class EngineTest {
                 "快手/B站各有真实开关子页（v2.7.0 区域开关完全独立）", "");
         check(main.contains("val overlay = state.isOverlay") && main.contains("enabled = !overlay"),
                 "遮盖引擎下子页磁贴置灰（能力边界如实呈现）", "");
+        // v3.0.8：PendingProbeHint 合规文案含「这条提示不提供开关」（另一组件），
+        // 旧全文负向断言会误伤；守卫意图是「说明卡非占位」，收紧到 RoadmapCard 函数体内判定。
+        int rcFrom = main.indexOf("private fun RoadmapCard(");
+        int rcTo = rcFrom < 0 ? -1 : main.indexOf("private fun openLsposedManager(", rcFrom);
+        String roadmapCardBody = (rcFrom >= 0 && rcTo > rcFrom) ? main.substring(rcFrom, rcTo) : "";
         check(!stripComments(main).contains("当前版本尚未支持")
-                        && !stripComments(main).contains("不提供开关"),
-                "旧占位文案已清除（不放假开关、不写「尚未支持」）", "");
+                        && !stripComments(roadmapCardBody).contains("不提供开关"),
+                "旧占位文案已清除（说明卡非占位、不写「尚未支持」）", "");
         check(main.contains("直播页与白名单应用自动跳过") && main.contains("内容区不误伤"),
                 "功能页如实写明直播 / 白名单豁免与内容区保护", "");
     }

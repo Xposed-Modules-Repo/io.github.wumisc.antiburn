@@ -40,7 +40,9 @@ echo "=============================================="
 echo " 3/6 全功能矩阵审计（FeatureAuditTest）"
 echo "=============================================="
 $JAVAC -d "$OUT/audit" "$(dirname "$0")/feature-audit-test/FeatureAuditTest.java"
-$JAVA -cp "$OUT/audit" FeatureAuditTest "$SRC"
+# T-43a-behavior 以反射真调 ConfStore.mergeUniqueLines：
+# 运行时 classpath 必须带真实编译产物与 android.jar（源码里是字符串反射，javac 阶段不需要）。
+$JAVA -cp "$OUT/audit:$CLS:$AJAR" FeatureAuditTest "$SRC"
 
 echo
 echo "=============================================="
@@ -62,6 +64,14 @@ echo " 6/6 双引擎：名单真源 / 引擎让位 / 遮盖几何 / 接线（Eng
 echo "=============================================="
 $JAVAC -cp "$CLS:$AJAR" -d "$OUT/engine" "$(dirname "$0")/engine-test/EngineTest.java"
 $JAVA -cp "$OUT/engine:$CLS:$AJAR" EngineTest "$SRC"
+
+echo
+echo "=============================================="
+echo " 7/7 门控状态机靶场（GateStateMachineTest · T-50）"
+echo "=============================================="
+$JAVAC -d "$OUT/gate" "$SRC/ThhLiveGate.java" \
+    "$(dirname "$0")/gate-test/GateStateMachineTest.java"
+$JAVA -cp "$OUT/gate" GateStateMachineTest "$SRC"
 
 echo
 echo "全部套件通过。"

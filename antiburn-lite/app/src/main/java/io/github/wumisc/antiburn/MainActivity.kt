@@ -1,6 +1,7 @@
 package io.github.wumisc.antiburn
 
 import android.app.Activity
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
@@ -41,6 +42,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilledTonalButton
@@ -78,10 +80,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -209,6 +214,15 @@ data class AbState(
     val enableBiliTop: Boolean = false,
     val enableBiliBottom: Boolean = false,
     val enableBiliCorner: Boolean = false,
+    /** v3.0.6：三处精准隐藏开关，默认 false（纯加性，不动任何旧键/索引/默认值） */
+    val enableBottomCaption: Boolean = false,
+    val enableRightActions: Boolean = false,
+    val enableRedDot: Boolean = false,
+    // v3.0.7：四图圈选内容定向隐藏，默认 false（纯加性，不动任何旧键/索引/默认值）
+    val enableKsLiveHits: Boolean = false,
+    val enableDyLiveHits: Boolean = false,
+    val enableKsFeedHits: Boolean = false,
+    val enableDramaInfoHits: Boolean = false,
     val hideSec: Int = 30,
     val showSec: Int = 10,
     val customPoems: String = "",
@@ -265,6 +279,11 @@ private val AbStateSaver = listSaver(
             // v2.8.2：应用内区域兜底。索引 38，追加在末尾不动旧索引。
             s.enableAppOverlay,
             s.enableSysOverlay,
+            // v3.0.6：索引 40/41/42，纯追加不动旧索引 0-39。
+            s.enableBottomCaption, s.enableRightActions, s.enableRedDot,
+            // v3.0.7：索引 43/44/45/46，纯追加不动旧索引 0-42。
+            s.enableKsLiveHits, s.enableDyLiveHits,
+            s.enableKsFeedHits, s.enableDramaInfoHits,
         )
     },
     restore = { l: List<Any> ->
@@ -327,6 +346,15 @@ private val AbStateSaver = listSaver(
                 // v2.8.6：旧 Bundle 缺这两项时也不能回到 true，盖黑通道已废弃
                 enableAppOverlay = Bool(38, false),
                 enableSysOverlay = Bool(39, false),
+                // v3.0.6：旧 Bundle 缺这三项时 getOrNull 兜底 false，开关默认关。
+                enableBottomCaption = Bool(40),
+                enableRightActions = Bool(41),
+                enableRedDot = Bool(42),
+                // v3.0.7：旧 Bundle 缺这四项时 getOrNull 兜底 false，开关默认关。
+                enableKsLiveHits = Bool(43),
+                enableDyLiveHits = Bool(44),
+                enableKsFeedHits = Bool(45),
+                enableDramaInfoHits = Bool(46),
             )
         }
     },
@@ -413,9 +441,20 @@ object AbConf {
             enableKsBottom = migratedB(map, "enable_ks_bottom", "enable_video_bottom"),
             enableKsCorner = migratedB(map, "enable_ks_corner", "enable_video_corner"),
             enableBiliRight = migratedB(map, "enable_bili_right", "enable_video_right"),
-            enableBiliTop = migratedB(map, "enable_bili_top", "enable_video_top"),
-            enableBiliBottom = migratedB(map, "enable_bili_bottom", "enable_video_bottom"),
-            enableBiliCorner = migratedB(map, "enable_bili_corner", "enable_video_corner"),
+            // v2.9.2：B站只剩右侧点赞区，另外三项已从 UI 删除。这里读盘后强制归零，
+            // 老配置里的 1 会在下次保存时被写回 0，不会留下「显示已开启、实际不生效」的假状态。
+            enableBiliTop = false,
+            enableBiliBottom = false,
+            enableBiliCorner = false,
+            // v3.0.6：新键缺失取默认 false（老配置升级后三功能全关，行为不变）
+            enableBottomCaption = b(map["enable_bottom_caption"]),
+            enableRightActions = b(map["enable_right_actions"]),
+            enableRedDot = b(map["enable_red_dot"]),
+            // v3.0.7：新键缺失取默认 false（老配置升级后四功能全关，行为不变）
+            enableKsLiveHits = b(map["enable_ks_live_hits"]),
+            enableDyLiveHits = b(map["enable_dy_live_hits"]),
+            enableKsFeedHits = b(map["enable_ks_feed_hits"]),
+            enableDramaInfoHits = b(map["enable_drama_info_hits"]),
             hideSec = i(map["hide_duration"], 30),
             showSec = i(map["show_duration"], 10),
             customPoems = "",
@@ -492,6 +531,14 @@ object AbConf {
         lines["enable_bili_top"] = if (s.enableBiliTop) "1" else "0"
         lines["enable_bili_bottom"] = if (s.enableBiliBottom) "1" else "0"
         lines["enable_bili_corner"] = if (s.enableBiliCorner) "1" else "0"
+        lines["enable_bottom_caption"] = if (s.enableBottomCaption) "1" else "0"
+        lines["enable_right_actions"] = if (s.enableRightActions) "1" else "0"
+        lines["enable_red_dot"] = if (s.enableRedDot) "1" else "0"
+        // v3.0.7：四键与 backend §6.1 逐字对齐，纯追加
+        lines["enable_ks_live_hits"] = if (s.enableKsLiveHits) "1" else "0"
+        lines["enable_dy_live_hits"] = if (s.enableDyLiveHits) "1" else "0"
+        lines["enable_ks_feed_hits"] = if (s.enableKsFeedHits) "1" else "0"
+        lines["enable_drama_info_hits"] = if (s.enableDramaInfoHits) "1" else "0"
         lines["hide_duration"] = s.hideSec.coerceIn(5, 3600).toString()
         lines["show_duration"] = s.showSec.coerceIn(1, 3600).toString()
         // 多行文本必须编码成单行，否则后面的 key 会被挤成非法行、配置解析错乱
@@ -566,6 +613,14 @@ object AbConf {
         putB("enable_bili_top", old.enableBiliTop, new.enableBiliTop)
         putB("enable_bili_bottom", old.enableBiliBottom, new.enableBiliBottom)
         putB("enable_bili_corner", old.enableBiliCorner, new.enableBiliCorner)
+        putB("enable_bottom_caption", old.enableBottomCaption, new.enableBottomCaption)
+        putB("enable_right_actions", old.enableRightActions, new.enableRightActions)
+        putB("enable_red_dot", old.enableRedDot, new.enableRedDot)
+        // v3.0.7：diffOf 与 save 共用同一份 key 集合，保证回读校验覆盖新键
+        putB("enable_ks_live_hits", old.enableKsLiveHits, new.enableKsLiveHits)
+        putB("enable_dy_live_hits", old.enableDyLiveHits, new.enableDyLiveHits)
+        putB("enable_ks_feed_hits", old.enableKsFeedHits, new.enableKsFeedHits)
+        putB("enable_drama_info_hits", old.enableDramaInfoHits, new.enableDramaInfoHits)
         if (old.hideSec != new.hideSec) m["hide_duration"] = new.hideSec.coerceIn(5, 3600).toString()
         if (old.showSec != new.showSec) m["show_duration"] = new.showSec.coerceIn(1, 3600).toString()
         if (old.customPoems != new.customPoems) {
@@ -996,6 +1051,28 @@ private fun BurnInProtectApp() {
                             onUiStyleChange = { id -> onStateChange { s -> s.copy(uiStyle = id) } },
                             onOpenList = { openList(state.listMode) },
                             onSelfCheck = { selfCheckList() },
+                            onEnableAll = {
+                                // 四个 App 的区域开关一次性打开。默认值全是关的，
+                                // 用户只说「快手没反应」时，最可能的原因不是规则坏了，
+                                // 而是那个 App 的开关压根没开过。
+                                onStateChange { s ->
+                                    s.copy(
+                                        enableDouyinTop = true, enableDouyinBottom = true,
+                                        enableDouyinLike = true, enableDouyinRt = true,
+                                        enableDouyinLt = true,
+                                        enableDramaTop = true, enableDramaLike = true,
+                                        enableDramaRt = true, enableDramaLt = true,
+                                        enableDramaSwipe = true,
+                                        enableKuaishou = true, enableKsRight = true,
+                                        enableKsTop = true, enableKsBottom = true,
+                                        enableKsCorner = true,
+                                        enableBilibili = true, enableBiliRight = true,
+                                        // v2.9.2：B站只剩右侧一项，其余三项保持关闭
+                                        enableBiliTop = false, enableBiliBottom = false,
+                                        enableBiliCorner = false,
+                                    )
+                                }
+                            },
                             saveBar = saveBar,
                             engineCard = {
                                 EngineCard(
@@ -1296,8 +1373,8 @@ private fun EngineCard(
             }
 
             Text(
-                "两条引擎互斥，同一时刻只有一条生效。有 root 走 LSPosed（真隐藏 + 像素微移）；" +
-                        "没有 root 走无障碍遮盖（盖黑系统栏，同样让那块像素停止发光）。",
+                "两条引擎互斥，同一时刻只有一条生效。有 root 走 LSPosed（App 内控件周期真隐藏）；" +
+                        "没有 root 走无障碍遮盖（只盖系统栏，App 内控件动不了）。",
                 style = MaterialTheme.typography.bodySmall,
                 color = sub,
                 modifier = Modifier.padding(top = 4.dp),
@@ -1526,7 +1603,7 @@ private fun EngineCard(
                         // v2.8.6：移除遮盖预览入口。它会强制画一帧应用内黑块，
                         // 用户看到的是整屏被盖住，与「不要铺黑、只要偏移」的结论相冲。
                         Text(
-                            "遮盖预览已随盖黑通道一并移除；本版只做位置微移。",
+                            "遮盖预览已随盖黑通道一并移除；本版 App 内控件走周期真隐藏。",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -1802,6 +1879,7 @@ private fun HomeTilePage(
     onUiStyleChange: (String) -> Unit,
     onOpenList: () -> Unit,
     onSelfCheck: () -> Unit,
+    onEnableAll: () -> Unit,
     saveBar: @Composable () -> Unit,
     engineCard: @Composable () -> Unit,
 ) {
@@ -1838,6 +1916,15 @@ private fun HomeTilePage(
         // 运行方式放在最前面：无 root 用户开机第一件事就是得知道「我该选哪个」，
         // 埋在功能页里等于没有。
         engineCard()
+
+        Spacer(Modifier.height(12.dp))
+
+        InjectStatusCard(dark, onEnableAll)
+
+        Spacer(Modifier.height(12.dp))
+
+        // v3.0.8 P2：自启状态卡与注入状态同属「可观测性」，紧邻放置，不新增导航层级。
+        BootStatusCard(dark, onSelfCheck)
 
         Spacer(Modifier.height(12.dp))
 
@@ -1944,8 +2031,106 @@ private fun HomeTilePage(
     }
 }
 
-// ---- 功能：一行一行的分组入口 + 二级菜单 ----
+/**
+ * 注入状态卡（v2.9.1）。
+ *
+ * <p>真机连着几版都卡在同一件事上：用户说「快手 / 红果 / B站没反应」，
+ * 而日志里看不到任何 INJECTED 行，只能靠猜——是没注入？还是开关没开？
+ * 还是识别规则没扫到？三者表现完全一样。这里把「模块代码到底进没进这个 App 进程」
+ * 直接摆到首页：注入进程每写一条 ENTER / INJECTED，App 进程就记一次时间戳，
+ * 一屏看四个 App 的状态。没检测到就是 LSPosed 作用域没勾（或勾了没重启 App），
+ * 点右下角直接跑作用域自检，不用再去翻日志。</p>
+ */
+@Composable
+private fun InjectStatusCard(dark: Boolean, onEnableAll: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var now by remember { mutableStateOf(System.currentTimeMillis()) }
+    var scopeText by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) {
+        // 用户切去视频 App 再切回来时，状态要跟着更新，所以 5 秒轮询一次
+        while (true) {
+            delay(5_000)
+            now = System.currentTimeMillis()
+        }
+    }
+    val apps = listOf(
+        "douyin" to "抖音",
+        "kuaishou" to "快手",
+        "drama" to "红果",
+        "bilibili" to "B站",
+    )
+    Card(
+        Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = UiPalette.surface(dark)),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Text("注入状态", style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold, color = UiPalette.ink(dark))
+            Text("「未检测到」= 模块代码没进这个 App 进程：LSPosed 里没勾它的作用域，或勾了但没重启该 App。" +
+                "若是覆盖安装/更新了本模块，需重启手机一次（不是只重启系统界面）：SystemUI 会自动重注，" +
+                "但抖音/快手等三方 App 只有重启手机后才会重新加载新 dex。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp))
+            Spacer(Modifier.height(10.dp))
+            for ((kind, label) in apps) {
+                val ts = ConfigProvider.lastInject(context, kind)
+                // 24 小时内的记录才算数：更早的痕迹说明不了「刚装这版」的状态
+                val fresh = ts > 0L && now - ts < 24L * 3600_000L
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(label, style = MaterialTheme.typography.bodyMedium,
+                        color = UiPalette.ink(dark), modifier = Modifier.weight(1f))
+                    Text(
+                        if (fresh) "已注入 · " + agoText(now - ts) else "未检测到",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (fresh) UiPalette.accent(dark) else UiPalette.warn(dark),
+                    )
+                }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(
+                    onClick = {
+                        scopeText = "正在读取 LSPosed 配置…"
+                        scope.launch {
+                            val text = withContext(Dispatchers.IO) {
+                                runCatching { LspScope.diagnose(context) }
+                                    .getOrElse { "读取失败：" + (it.message ?: it.javaClass.simpleName) }
+                            }
+                            scopeText = text
+                            withContext(Dispatchers.IO) { ConfStore.logLine(LspScope.ensure(context)) }
+                        }
+                    },
+                    modifier = Modifier.padding(top = 2.dp),
+                ) {
+                    Text("作用域自检", style = MaterialTheme.typography.labelMedium,
+                        color = UiPalette.accent(dark))
+                }
+                TextButton(
+                    onClick = onEnableAll,
+                    modifier = Modifier.padding(top = 2.dp),
+                ) {
+                    Text("四个 App 全开", style = MaterialTheme.typography.labelMedium,
+                        color = UiPalette.accent(dark))
+                }
+            }
+        }
+    }
+    scopeText?.let { text ->
+        ScopeDialog(
+            text = text,
+            dark = dark,
+            onOpenLsposed = { openLsposedManager(context) },
+            onDismiss = { scopeText = null },
+        )
+    }
+}
 
+// ---- 功能：一行一行的分组入口 + 二级菜单 ----
 /**
  * 功能页：与关于页一致的单行列表（ListRow），点开一项进二级菜单。
  *
@@ -1992,7 +2177,7 @@ private fun FeaturesPage(
             state.enableDouyinTop, state.enableDouyinBottom, state.enableDouyinLike,
             state.enableDouyinRt, state.enableDouyinLt, state.enableLive,
         ).count { it }
-        ListRow("抖音", "视频页六个区域 · 已开启 $douyinOn/6 项",
+        ListRow("抖音", "视频页五区 + 直播间 · 已开启 $douyinOn/6 项",
             { onOpen("feat-douyin") }, dark)
 
         val dramaOn = listOf(
@@ -2009,11 +2194,10 @@ private fun FeaturesPage(
         ListRow("快手", "总开关 + 四个区域 · 已开启 $ksOn/5 项",
             { onOpen("feat-kuaishou") }, dark)
 
-        val biliOn = listOf(
-            state.enableBilibili, state.enableBiliRight, state.enableBiliTop,
-            state.enableBiliBottom, state.enableBiliCorner,
-        ).count { it }
-        ListRow("B站", "总开关 + 四个区域 · 已开启 $biliOn/5 项",
+        // v2.9.2：B站只做右侧点赞区。其余三项识别不到稳定容器，已从 UI 删除，
+        // 这里也不再计入，避免「5 项开了 3 项」这种看不出实际效果的计数。
+        val biliOn = if (state.enableBilibili && state.enableBiliRight) 1 else 0
+        ListRow("B站", if (biliOn == 1) "右侧点赞区 · 已开启" else "右侧点赞区 · 未开启",
             { onOpen("feat-bilibili") }, dark)
 
         Spacer(Modifier.height(14.dp))
@@ -2039,6 +2223,8 @@ private fun OptionRow(
     onCheckedChange: (Boolean) -> Unit,
     enabled: Boolean = true,
     disabledLabel: String = "",
+    // v3.0.7：红果未注入提示角标，仅新调用点传；旧调用默认空串，渲染结果零变化
+    subtitleWarn: String = "",
 ) {
     val ink = if (enabled) UiPalette.ink(dark) else MaterialTheme.colorScheme.outline
     Row(
@@ -2052,9 +2238,19 @@ private fun OptionRow(
             Text(title, style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold, color = ink)
             if (subtitle.isNotEmpty()) {
-                Text(subtitle, style = MaterialTheme.typography.bodySmall,
+                Text(
+                    // 角标用 warn 着色，且只放在页面背景上（不挪进 surface 卡片）
+                    text = if (subtitleWarn.isEmpty()) AnnotatedString(subtitle)
+                    else buildAnnotatedString {
+                        append(subtitle)
+                        withStyle(SpanStyle(color = UiPalette.warn(dark))) {
+                            append(subtitleWarn)
+                        }
+                    },
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 3.dp))
+                    modifier = Modifier.padding(top = 3.dp),
+                )
             }
         }
         Spacer(Modifier.width(10.dp))
@@ -2078,10 +2274,59 @@ private fun OverlayNotice(dark: Boolean, appLabel: String) {
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = UiPalette.warn(dark).copy(alpha = 0.12f)),
     ) {
-        Text("当前不是 Hook 引擎。系统栏照常按周期盖黑；$appLabel 内的固定控件（右侧按钮列 / 顶部标题 / 底部导航）需要模块注入该 App 进程才能做位置微移，本机没注入时这几项不会生效。想在 $appLabel 里也用上，请在有 LSPosed 的环境给本模块勾上它的作用域。",
+        Text("当前不是 Hook 引擎。系统栏照常按周期遮住；$appLabel 内的固定控件（右侧按钮列 / 顶部标题 / 底部导航）需要模块注入该 App 进程才能隐藏，本机没注入时这几项不会生效。想在 $appLabel 里也用上，请在有 LSPosed 的环境给本模块勾上它的作用域。",
             style = MaterialTheme.typography.bodySmall,
             color = UiPalette.warn(dark),
             modifier = Modifier.padding(14.dp))
+    }
+}
+
+/**
+ * v3.0.7 红果「未注入 / 待勾选作用域」提示卡（仅 LSPosed 引擎且 24h 内无注入痕迹时出现）。
+ *
+ * <p>对比度按 UI §3.3/§6 修正（评审 S3，不照抄前端 §3.3 的 4.04:1 浅色示例）：
+ * 浅色卡标题/正文用 ink(false)，按钮改 Filled（accent 底 + 白字，5.73:1）；
+ * 深色卡维持 warn 文字 + accent 文字按钮。警示语义由文案承载，颜色非唯一载体。</p>
+ */
+@Composable
+private fun ScopePendingNotice(dark: Boolean, onSelfCheck: () -> Unit) {
+    // 浅色 warnLight #9A5B00 压 12% 橙底最暗处仅 4.04:1，不达 AA，故换 ink
+    val alertText = if (dark) UiPalette.warn(dark) else UiPalette.ink(dark)
+    Card(
+        Modifier.fillMaxWidth().padding(bottom = 8.dp),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = UiPalette.warn(dark).copy(alpha = 0.12f)),
+    ) {
+        Column(Modifier.padding(14.dp)) {
+            Text("红果未注入 · 待勾选作用域",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold, color = alertText)
+            Text("本机 24 小时内检测不到红果进程注入（注入状态：未检测到）。开关可以先打开，"
+                + "但暂时不会生效——这不是开关故障。请在 LSPosed 给本模块勾选"
+                + "「红果谷歌版 com.phoenix.read.oversea.gp」作用域，重启红果后回到本页，"
+                + "状态会自动刷新。注入状态取自历史痕迹，勾选或重启后可能短暂误报未注入，"
+                + "通常几秒内自行恢复。",
+                style = MaterialTheme.typography.bodySmall,
+                color = alertText, modifier = Modifier.padding(top = 6.dp))
+            if (dark) {
+                TextButton(onClick = onSelfCheck) {
+                    Text("作用域自检", style = MaterialTheme.typography.labelMedium,
+                        color = UiPalette.accent(dark))
+                }
+            } else {
+                // 浅色：Filled Button（accent 底 + 白字），UI §3.3 对比度修正
+                Button(
+                    onClick = onSelfCheck,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = UiPalette.accent(false),
+                        contentColor = Color.White,
+                    ),
+                ) {
+                    Text("作用域自检", style = MaterialTheme.typography.labelMedium,
+                        color = Color.White)
+                }
+            }
+        }
     }
 }
 
@@ -2108,9 +2353,9 @@ private fun GeneralFeaturePage(
     // 防烧屏改由位置微移承担，不再提供这条通道。
     ListRow("周期时长", "隐藏 ${state.hideSec}s · 显示 ${state.showSec}s",
         { showCycleDialog = true }, dark, trailing = "›")
-    HintText("像素微移是视觉无感的温和防护，内置常开，不单独提供开关。")
-    HintText("App 内固定控件采用位置微移，不遮盖画面：右侧按钮列、顶部标题、底部导航每 8 秒挪动 2~3 像素，让轮廓落在相邻像素上，看得见也防得住。\n进直播间会自动还原原位 —— 直播间的礼物栏与输入框位置是动态的，位移会点不准。\n微移只在模块注入对应 App 进程时生效；日志里的 LSPDB 行会给出作用域是否已勾齐。")
-    HintText("各 App 的区域开关决定哪几块参与微移；四个都关时按「右侧按钮列 + 顶部标题 + 底部导航」三区执行。")
+    HintText("App 内固定控件按周期真隐藏：藏 ${state.hideSec} 秒（像素不发光）→ 显示 ${state.showSec} 秒。隐藏的是叠加在画面上的按钮/栏，不影响视频与弹幕本身。")
+    HintText("隐藏期间这些控件不显示也不响应点击；需要操作时点悬浮球或等显示窗口。只在模块注入对应 App 进程时生效，首页「注入状态」可直接看有没有注入。")
+    HintText("各 App 的区域开关决定哪几块参与隐藏；四个都关时按「右侧按钮列 + 顶部标题 + 底部导航」三区执行。")
     // v2.8.5：作用域自检入口。用户反馈「改什么都没反应」时，绝大多数情况是
     // LSPosed 没给视频 App 勾作用域 —— 模块代码根本没进那个进程，
     // 真隐藏 / 位置微移都不存在。以前只能靠导日志看 LSPDB 行猜，
@@ -2152,7 +2397,7 @@ private fun DouyinFeaturePage(
 ) {
     val overlay = state.isOverlay
     if (overlay) OverlayNotice(dark, "抖音")
-    GroupTitle("抖音 · 视频页六个区域（位置微移）")
+    GroupTitle("抖音 · 视频页五个区域 + 直播间")
     OptionRow("顶部导航", "直播/团购/关注/商城", checked = state.enableDouyinTop, dark = dark,
         enabled = !overlay,
         onCheckedChange = { on -> onStateChange { s -> s.copy(enableDouyinTop = on) } })
@@ -2168,11 +2413,31 @@ private fun DouyinFeaturePage(
     OptionRow("左上角", "三横线菜单按钮", checked = state.enableDouyinLt, dark = dark,
         enabled = !overlay,
         onCheckedChange = { on -> onStateChange { s -> s.copy(enableDouyinLt = on) } })
-    OptionRow("直播间隐藏", "直播页顶栏/底栏/右下", checked = state.enableLive, dark = dark,
-        enabled = !overlay,
+    HintText("打开的区域按周期真隐藏：藏 ${state.hideSec} 秒（像素不发光）→ 显示 ${state.showSec} 秒，循环往复。隐藏期间控件不占画面，退出该页自动恢复。")
+    // v2.9.4：直播间隐藏单独一条通道、单独一个开关，与上面五区完全解耦。
+    OptionRow("直播间隐藏", "直播页顶栏 / 底部按钮 / 右侧礼物列", checked = state.enableLive,
+        dark = dark, enabled = !overlay,
         onCheckedChange = { on -> onStateChange { s -> s.copy(enableLive = on) } })
-    HintText("打开后，对应区域每 8 秒整体挪动 2~3 像素，画面照常可见。进直播间自动还原原位，避免点不准礼物栏与输入框。")
-    HintText("位置微移需要模块注入抖音进程。日志里出现 INJECTED Douyin 即已注入；若只有 INJECTED SystemUI，看同一份日志的 LSPDB 行：scope=complete 说明作用域已齐，重启抖音即可；出现 added=… 表示刚补上，重启抖音生效。")
+    HintText("直播间单独一套：只藏顶部主播条、底部非输入按钮、右侧礼物列；输入框、弹幕、播放画面一律不碰。判定要求「底部有说点什么输入条 且 没有首页 Tab 栏」，普通视频页不会误入 —— 上面五个区域完全不受影响。")
+    HintText("关掉「直播间隐藏」直播间即刻全部恢复。日志里 lin=1 表示识别到输入条、lhid>0 表示确实藏到了控件；若 lin=1 但 lhid=0，把 HOOK 那行发我按实测调。")
+    HintText("需要模块注入抖音进程才生效。首页「注入状态」显示「已注入」即正常；显示「未检测到」说明 LSPosed 没勾它，点「作用域自检」按提示补齐后重启抖音。")
+    // v3.0.6：抖音精准隐藏（标题栏 / 红点），与五区、直播间三通道互不干扰
+    GroupTitle("抖音 · v3.0.6 精准隐藏")
+    OptionRow("下方标题栏", "视频描述行，@作者不动", checked = state.enableBottomCaption, dark = dark,
+        enabled = !overlay,
+        onCheckedChange = { on -> onStateChange { s -> s.copy(enableBottomCaption = on) } })
+    OptionRow("红点", "角标，点赞数/进度条绝不动", checked = state.enableRedDot, dark = dark,
+        enabled = !overlay,
+        onCheckedChange = { on -> onStateChange { s -> s.copy(enableRedDot = on) } })
+    // v3.0.7：抖音直播间定向隐藏（与五区、直播间隐藏、v3.0.6 三通道互不干扰）
+    GroupTitle("抖音 · v3.0.7 定向隐藏")
+    OptionRow("直播间圈选内容", "直播间内只藏圈选静态元素，输入条 / 礼物 / 画面不动",
+        checked = state.enableDyLiveHits, dark = dark, enabled = !overlay,
+        onCheckedChange = { on -> onStateChange { s -> s.copy(enableDyLiveHits = on) } })
+    HintText("「定向隐藏」是真隐藏：把圈定的控件透明度设为 0 并标记为不可见（alpha=0 + INVISIBLE），相当于从画面里拿掉——像素不发光、也不响应点击；不是在上面盖一层黑块。视频画面、输入条与播放本身照常工作，退出对应页面后控件立即恢复。")
+    HintText("点赞、评论、分享、进度等纯数字互动计数一律不进隐藏名单，红点走独立白名单；宁可少藏，绝不误藏。识别不到时功能会静默跳过，不会误伤画面或让你点不到按钮。")
+    // v3.0.8 P3：动态元素待探测轻提示（二级页页尾；默认折叠，无开关）
+    PendingProbeHint()
 }
 
 @Composable
@@ -2183,7 +2448,36 @@ private fun DramaFeaturePage(
 ) {
     val overlay = state.isOverlay
     if (overlay) OverlayNotice(dark, "红果短剧")
-    GroupTitle("红果短剧 · 视频页区域（位置微移）")
+
+    // v3.0.7：复用首页 InjectStatusCard 的单一真源与 24h 口径检测注入痕迹
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var now by remember { mutableStateOf(System.currentTimeMillis()) }
+    var scopeText by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) {
+        // 与首页同款 5s 轮询：切去 LSPosed 勾选再回来自动刷新，无需重进设置页
+        while (true) {
+            delay(5_000)
+            now = System.currentTimeMillis()
+        }
+    }
+    val injectTs = ConfigProvider.lastInject(context, "drama")
+    val dramaFresh = injectTs > 0L && now - injectTs < 24L * 3600_000L
+    if (!overlay && !dramaFresh) {
+        ScopePendingNotice(dark) {
+            scopeText = "正在读取 LSPosed 配置…"
+            scope.launch {
+                val text = withContext(Dispatchers.IO) {
+                    runCatching { LspScope.diagnose(context) }
+                        .getOrElse { "读取失败：" + (it.message ?: it.javaClass.simpleName) }
+                }
+                scopeText = text
+                withContext(Dispatchers.IO) { ConfStore.logLine(LspScope.ensure(context)) }
+            }
+        }
+    }
+
+    GroupTitle("红果短剧 · 视频页区域")
     OptionRow("顶部区域", "视频页顶部栏", checked = state.enableDramaTop, dark = dark,
         enabled = !overlay,
         onCheckedChange = { on -> onStateChange { s -> s.copy(enableDramaTop = on) } })
@@ -2202,7 +2496,30 @@ private fun DramaFeaturePage(
     OptionRow("底部入口", "剧集/选集入口，模块刻意不隐藏", checked = false, dark = dark,
         enabled = false, disabledLabel = "始终常驻", onCheckedChange = {})
     HintText("红果底部是「完整观看 / 选集」等功能入口，模块刻意不隐藏，避免点不进去。")
-    HintText("「左滑查看详情」按文案识别引导条，同样走位置微移。以上都需要模块注入红果进程，日志里出现 INJECTED Drama 即已生效。")
+    HintText("「左滑查看详情」按文案识别引导条，同样按周期真隐藏。以上都需要模块注入红果进程，日志里出现 INJECTED Drama 即已生效；谷歌版（.oversea.gp）包名已被识别，若日志里连 INJECTED Drama 都没有，就是 LSPosed 没加载进它的进程。")
+    // v3.0.6：红果本次无前台样本，不写专属识别规则，两项占位置灰
+    GroupTitle("红果 · v3.0.6 精准隐藏（待数据）")
+    OptionRow("下方标题栏（待数据）", "本次无红果样本，规则未启用", checked = false, dark = dark,
+        enabled = false, disabledLabel = "待数据", onCheckedChange = {})
+    OptionRow("红点（待数据）", "本次无红果样本，规则未启用", checked = false, dark = dark,
+        enabled = false, disabledLabel = "待数据", onCheckedChange = {})
+    // v3.0.7：红果信息区 + 底部导航定向隐藏（未注入也不禁用，杜绝假开关）
+    GroupTitle("红果 · v3.0.7 定向隐藏")
+    OptionRow("信息区与底部导航", "藏剧集信息区与底部导航栏，视频画面与选集入口不动",
+        checked = state.enableDramaInfoHits, dark = dark, enabled = !overlay,
+        subtitleWarn = if (!dramaFresh) " · 待勾选作用域（勾选后自动生效）" else "",
+        onCheckedChange = { on -> onStateChange { s -> s.copy(enableDramaInfoHits = on) } })
+    HintText("「定向隐藏」是真隐藏：把圈定的控件透明度设为 0 并标记为不可见（alpha=0 + INVISIBLE），相当于从画面里拿掉——像素不发光、也不响应点击；不是在上面盖一层黑块。视频画面、输入条与播放本身照常工作，退出对应页面后控件立即恢复。")
+    HintText("点赞、评论、分享、进度等纯数字互动计数一律不进隐藏名单，红点走独立白名单；宁可少藏，绝不误藏。识别不到时功能会静默跳过，不会误伤画面或让你点不到按钮。")
+    HintText("这里的「底部导航」只指 首页 / 剧场 / 我的 三 Tab 栏；观看完整漫剧 / 选集 入口保持常驻，不受影响。")
+    scopeText?.let { text ->
+        ScopeDialog(
+            text = text,
+            dark = dark,
+            onOpenLsposed = { openLsposedManager(context) },
+            onDismiss = { scopeText = null },
+        )
+    }
 }
 
 /**
@@ -2219,39 +2536,73 @@ private fun VideoAppSubPage(
 ) {
     val overlay = state.isOverlay
     if (overlay) OverlayNotice(dark, appLabel)
+
+    if (!isKuaishou) {
+        // v2.9.2：B站只保留右侧点赞区。
+        // 顶部 / 底部 / 角落三项在 B站 8.9x 上识别不到稳定容器，真机打开也没有效果，
+        // 按用户要求把入口一起删掉 —— 与其留三个按了没反应的开关，不如只留一个真的。
+        val on = state.enableBilibili && state.enableBiliRight
+        GroupTitle("B站 · 视频页区域")
+        OptionRow("右侧点赞区", "点赞/评论/收藏/投币/分享", checked = on, dark = dark,
+            enabled = !overlay,
+            onCheckedChange = { v -> onStateChange { s ->
+                s.copy(enableBilibili = v, enableBiliRight = v)
+            } })
+        HintText("打开后按周期真隐藏（藏 ${state.hideSec}s / 显示 ${state.showSec}s），右侧竖排按钮列像素不发光；关掉立即恢复。")
+        HintText("需要模块注入 B站进程才生效。首页「注入状态」显示「已注入」即正常；「未检测到」就是 LSPosed 没勾它（或勾了没重启），点「作用域自检」按提示补齐。")
+        // v3.0.6：B站下方标题栏（只藏视频标题，UP主名和创作声明不动）
+        OptionRow("下方标题栏", "视频标题，UP主名和创作声明不动", checked = state.enableBottomCaption,
+            dark = dark, enabled = !overlay,
+            onCheckedChange = { v -> onStateChange { s -> s.copy(enableBottomCaption = v) } })
+        return
+    }
+
     GroupTitle("$appLabel · 视频页区域")
-    val master = if (isKuaishou) state.enableKuaishou else state.enableBilibili
-    val right = if (isKuaishou) state.enableKsRight else state.enableBiliRight
-    val top = if (isKuaishou) state.enableKsTop else state.enableBiliTop
-    val bottom = if (isKuaishou) state.enableKsBottom else state.enableBiliBottom
-    val corner = if (isKuaishou) state.enableKsCorner else state.enableBiliCorner
-    OptionRow("$appLabel 总开关", "关则本应用所有区域都不参与微移", checked = master, dark = dark,
+    val master = state.enableKuaishou
+    val right = state.enableKsRight
+    val top = state.enableKsTop
+    val bottom = state.enableKsBottom
+    val corner = state.enableKsCorner
+    OptionRow("$appLabel 总开关", "关则本应用所有区域都不参与隐藏", checked = master, dark = dark,
         enabled = !overlay,
-        onCheckedChange = { on -> onStateChange { s ->
-            if (isKuaishou) s.copy(enableKuaishou = on) else s.copy(enableBilibili = on)
-        } })
-    OptionRow("右侧互动列", "点赞/评论/投币/收藏/分享", checked = right, dark = dark,
+        onCheckedChange = { v -> onStateChange { s -> s.copy(enableKuaishou = v) } })
+    OptionRow("右侧互动列", "点赞/评论/收藏/分享", checked = right, dark = dark,
         enabled = !overlay,
-        onCheckedChange = { on -> onStateChange { s ->
-            if (isKuaishou) s.copy(enableKsRight = on) else s.copy(enableBiliRight = on)
-        } })
+        onCheckedChange = { v -> onStateChange { s -> s.copy(enableKsRight = v) } })
     OptionRow("顶部工具栏", "返回/搜索/更多/台标", checked = top, dark = dark,
         enabled = !overlay,
-        onCheckedChange = { on -> onStateChange { s ->
-            if (isKuaishou) s.copy(enableKsTop = on) else s.copy(enableBiliTop = on)
-        } })
-    OptionRow("底部操作栏", "标签栏/进度条/弹幕输入框", checked = bottom, dark = dark,
+        onCheckedChange = { v -> onStateChange { s -> s.copy(enableKsTop = v) } })
+    OptionRow("底部操作栏", "标签栏/进度条/评论入口", checked = bottom, dark = dark,
         enabled = !overlay,
-        onCheckedChange = { on -> onStateChange { s ->
-            if (isKuaishou) s.copy(enableKsBottom = on) else s.copy(enableBiliBottom = on)
-        } })
+        onCheckedChange = { v -> onStateChange { s -> s.copy(enableKsBottom = v) } })
     OptionRow("角落按钮", "右上/左上角常驻按钮", checked = corner, dark = dark,
         enabled = !overlay,
-        onCheckedChange = { on -> onStateChange { s ->
-            if (isKuaishou) s.copy(enableKsCorner = on) else s.copy(enableBiliCorner = on)
-        } })
-    HintText("快手与哔哩哔哩各一套独立开关，互不影响。打开的区域每 8 秒整体挪动 2~3 像素，画面照常可见，进直播间自动还原。四个都关时按「右侧 + 顶部 + 底部」三区执行。")
-    HintText("微移需要模块注入该进程。日志里出现 INJECTED Kuaishou / Bilibili 即已生效；若只有 INJECTED SystemUI，看同一份日志的 LSPDB 行确认作用域是否已补齐。")
+        onCheckedChange = { v -> onStateChange { s -> s.copy(enableKsCorner = v) } })
+    // v3.0.6：快手精准隐藏三开关（与 v2.6.9 四区域独立，旧键/索引一律不动）
+    GroupTitle("$appLabel · v3.0.6 精准隐藏")
+    OptionRow("下方标题栏", "视频正文文案，@作者和声明不动", checked = state.enableBottomCaption,
+        dark = dark, enabled = !overlay,
+        onCheckedChange = { v -> onStateChange { s -> s.copy(enableBottomCaption = v) } })
+    OptionRow("右侧点赞栏", "点赞·评论·收藏·分享，头像关注不动", checked = state.enableRightActions,
+        dark = dark, enabled = !overlay,
+        onCheckedChange = { v -> onStateChange { s -> s.copy(enableRightActions = v) } })
+    OptionRow("红点", "未读角标，互动数字绝不动", checked = state.enableRedDot,
+        dark = dark, enabled = !overlay,
+        onCheckedChange = { v -> onStateChange { s -> s.copy(enableRedDot = v) } })
+    HintText("打开的区域按周期真隐藏（藏 ${state.hideSec}s / 显示 ${state.showSec}s）。快手只有这一套开关，与抖音、B站互不影响。")
+    HintText("需要模块注入该进程才生效。首页「注入状态」显示「已注入」即正常；「未检测到」就是 LSPosed 没勾这个 App（或勾了没重启），点「作用域自检」按提示补齐。")
+    // v3.0.7：快手直播间 / 刷视频两行；必须在 !isKuaishou 的 return 之后，B站页零变化
+    GroupTitle("$appLabel · v3.0.7 定向隐藏")
+    OptionRow("直播间圈选内容", "直播间内只藏圈选静态元素，输入条 / 礼物 / 画面不动",
+        checked = state.enableKsLiveHits, dark = dark, enabled = !overlay,
+        onCheckedChange = { on -> onStateChange { s -> s.copy(enableKsLiveHits = on) } })
+    OptionRow("刷视频圈选内容", "红点走原开关；本项只藏全屏观看 / AI 提示等静态元素，互动数字绝不藏",
+        checked = state.enableKsFeedHits, dark = dark, enabled = !overlay,
+        onCheckedChange = { on -> onStateChange { s -> s.copy(enableKsFeedHits = on) } })
+    HintText("「定向隐藏」是真隐藏：把圈定的控件透明度设为 0 并标记为不可见（alpha=0 + INVISIBLE），相当于从画面里拿掉——像素不发光、也不响应点击；不是在上面盖一层黑块。视频画面、输入条与播放本身照常工作，退出对应页面后控件立即恢复。")
+    HintText("点赞、评论、分享、进度等纯数字互动计数一律不进隐藏名单，红点走独立白名单；宁可少藏，绝不误藏。识别不到时功能会静默跳过，不会误伤画面或让你点不到按钮。")
+    // v3.0.8 P3：必须在 !isKuaishou 的 return 之后，B站页零变化
+    PendingProbeHint()
 }
 
 @Composable
@@ -2267,6 +2618,230 @@ private fun GroupTitle(t: String) {
     Text(t, style = MaterialTheme.typography.titleSmall,
         color = UiPalette.accent(dark), fontWeight = FontWeight.Bold,
         modifier = Modifier.padding(top = 12.dp, bottom = 6.dp))
+}
+
+// ---- v3.0.8 P2：开机自启状态卡（纯加性；只读，不写任何配置） ----
+//
+// 七字段逐字对齐 design-backend.md §3.4 的 BootRestoreUiState 契约，字段顺序也与后端一致。
+// 后端 BootRestoreStore 尚未落盘期间，按其 §3.4 约定的独立 prefs 与键名直读同一数据源；
+// 后端类落地后只需把 readBootRestoreState 的函数体换成 BootRestoreStore.readState(context)。
+private data class BootRestoreUiState(
+    val lastBootAtMs: Long,
+    val restoreAttempted: Boolean,
+    val engine: String,
+    val needUserAction: Boolean,
+    val hintTitle: String,
+    val hintBody: String,
+    val actionKey: String,
+)
+
+private const val BOOT_RESTORE_PREFS = "antiburn_boot_restore"
+private const val BOOT_RESTORE_KEY_LAST_BOOT_AT = "last_boot_at"
+private const val BOOT_RESTORE_KEY_ATTEMPTED = "attempted"
+private const val BOOT_RESTORE_KEY_ENGINE = "engine_snapshot"
+
+/** 只读开机恢复状态；读取异常按 design-frontend §2.6 最保守口径降级，绝不反向推断"已生效"。 */
+private fun readBootRestoreState(context: Context): BootRestoreUiState {
+    return try {
+        val prefs = context.applicationContext.getSharedPreferences(
+            BOOT_RESTORE_PREFS,
+            Context.MODE_PRIVATE,
+        )
+        val attempted = prefs.getBoolean(BOOT_RESTORE_KEY_ATTEMPTED, false)
+        val lastBootAt = prefs.getLong(BOOT_RESTORE_KEY_LAST_BOOT_AT, 0L)
+        val rawEngine = prefs.getString(BOOT_RESTORE_KEY_ENGINE, "") ?: ""
+        // 未知值一律不展示引擎行，避免把"读不到"说成某一种引擎。
+        val engine = if (rawEngine == "lsposed" || rawEngine == "accessibility") rawEngine else ""
+        BootRestoreUiState(
+            lastBootAtMs = lastBootAt,
+            restoreAttempted = attempted,
+            engine = engine,
+            needUserAction = true,
+            hintTitle = "开机自动恢复",
+            hintBody = "模块已声明开机 / 覆盖安装恢复，并已记录一次触发。" +
+                "能否真正免手动启动取决于系统：国产 ROM 通常需要在" +
+                "「设置 → 应用 → AntiBurn → 自启动 / 后台管理」中允许；" +
+                "LSPosed 用户请确认模块已勾选且目标应用作用域已选；" +
+                "无障碍引擎需系统设置里保持开启。",
+            actionKey = "OPEN_APP_DETAILS",
+        )
+    } catch (ignored: Throwable) {
+        BootRestoreUiState(0L, false, "", true, "开机自动恢复", "", "NONE")
+    }
+}
+
+/** 应用详情深链；目标 Activity 不存在时静默留在本页，不弹错误提示。 */
+private fun openAppDetails(context: Context) {
+    val intent = Intent(
+        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+        Uri.parse("package:" + context.packageName),
+    )
+    try {
+        context.startActivity(intent)
+    } catch (ignored: ActivityNotFoundException) {
+        // 部分 ROM 没有该 Activity：保持当前页即可。
+    }
+}
+
+/** 与 ScopePendingNotice 完全同构的按钮：深色 accent 文字按钮，浅色 accent 底 + 白字。 */
+@Composable
+private fun BootActionButton(dark: Boolean, text: String, onClick: () -> Unit) {
+    if (dark) {
+        TextButton(onClick = onClick) {
+            Text(text, style = MaterialTheme.typography.labelMedium,
+                color = UiPalette.accent(dark))
+        }
+    } else {
+        Button(
+            onClick = onClick,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = UiPalette.accent(false),
+                contentColor = Color.White,
+            ),
+        ) {
+            Text(text, style = MaterialTheme.typography.labelMedium, color = Color.White)
+        }
+    }
+}
+
+/**
+ * v3.0.8 P2 自启状态卡：只陈述"记录到什么"，不承诺"系统允许了什么"。
+ * 三态由 restoreAttempted + lastBootAtMs（7 天新鲜度）决定，开关数零增加。
+ */
+@Composable
+private fun BootStatusCard(dark: Boolean, onSelfCheck: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    // 无条件声明状态（Compose hooks 不能条件调用）；if 只作用于渲染分支。
+    var now by remember { mutableStateOf(System.currentTimeMillis()) }
+    var state by remember { mutableStateOf(readBootRestoreState(context)) }
+    var scopeText by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) {
+        // 与 InjectStatusCard 同款 5s 轮询：切去系统设置回来自动刷新，无需重进页面。
+        while (true) {
+            delay(5_000)
+            now = System.currentTimeMillis()
+            state = readBootRestoreState(context)
+        }
+    }
+    val alertText = if (dark) UiPalette.warn(dark) else UiPalette.ink(dark)
+    val recent = state.lastBootAtMs > 0L &&
+        now - state.lastBootAtMs < 7L * 24L * 3600_000L
+    val relative = if (state.lastBootAtMs > 0L) agoText(now - state.lastBootAtMs) else "较久以前"
+    val statusLine = when {
+        !state.restoreAttempted || state.lastBootAtMs <= 0L ->
+            "尚未记录到开机 / 覆盖安装触发。请重启一次，或手动打开一次 App 后再回到本页查看。"
+        recent ->
+            "已记录一次开机 / 覆盖安装触发（$relative）。能否真正生效取决于系统 ROM 自启权限与 LSPosed 作用域，请以实际验证为准。"
+        else ->
+            "上次记录到开机 / 覆盖安装触发（$relative，较久以前）。可重启一次验证；能否真正生效取决于系统 ROM 自启权限与 LSPosed 作用域，请以实际验证为准。"
+    }
+    val selfCheck: () -> Unit = {
+        scopeText = "正在读取 LSPosed 配置…"
+        scope.launch {
+            val text = withContext(Dispatchers.IO) {
+                runCatching { LspScope.diagnose(context) }
+                    .getOrElse { "读取失败：" + (it.message ?: it.javaClass.simpleName) }
+            }
+            scopeText = text
+            withContext(Dispatchers.IO) { ConfStore.logLine(LspScope.ensure(context)) }
+        }
+    }
+    Card(
+        Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = UiPalette.warn(dark).copy(alpha = 0.12f)),
+    ) {
+        Column(Modifier.padding(14.dp)) {
+            Text(state.hintTitle, style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold, color = alertText)
+            Text(statusLine, style = MaterialTheme.typography.bodySmall,
+                color = alertText, modifier = Modifier.padding(top = 6.dp))
+            if (state.restoreAttempted && state.lastBootAtMs > 0L && state.hintBody.isNotEmpty()) {
+                Text(state.hintBody, style = MaterialTheme.typography.bodySmall,
+                    color = alertText, modifier = Modifier.padding(top = 6.dp))
+            }
+            Text(
+                "模块已声明开机恢复。声明不等于系统已允许自启；能否真正生效取决于系统 ROM 自启权限与 LSPosed 作用域，请以实际验证为准。",
+                style = MaterialTheme.typography.bodySmall,
+                color = alertText, modifier = Modifier.padding(top = 6.dp),
+            )
+            Text(
+                "开机广播到达时只做四件事：初始化配置镜像、刷新快捷磁贴、落一条诊断日志、记录触发时间。",
+                style = MaterialTheme.typography.bodySmall,
+                color = alertText, modifier = Modifier.padding(top = 6.dp),
+            )
+            Text(
+                "模块不做这些事：不启动后台服务、不拉起无障碍服务、不突破 Android 8+ 后台启动限制、" +
+                    "不使用通知（本版不申请通知权限）、不从后台打开 App 界面、不强制 LSPosed 注入。",
+                style = MaterialTheme.typography.bodySmall,
+                color = alertText, modifier = Modifier.padding(top = 6.dp),
+            )
+            Text("想让开机后自动恢复更稳，请按顺序确认：", style = MaterialTheme.typography.bodySmall,
+                color = alertText, modifier = Modifier.padding(top = 6.dp))
+            Text("1. 系统设置 → 应用管理 → AntiBurn → 自启动 / 允许后台运行（各 ROM 名称不同）；",
+                style = MaterialTheme.typography.bodySmall, color = alertText)
+            Text("2. LSPosed 里保持本模块启用，并勾选抖音 / 快手 / 红果等作用域；",
+                style = MaterialTheme.typography.bodySmall, color = alertText)
+            Text("3. 无障碍引擎在系统设置里保持开启（其开启 / 恢复由系统掌控，本卡不代表它已开启）。",
+                style = MaterialTheme.typography.bodySmall, color = alertText)
+            if (state.engine.isNotEmpty()) {
+                Text(
+                    "当前运行引擎：" + (if (state.engine == "lsposed") "LSPosed" else "无障碍"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = UiPalette.accent(dark), modifier = Modifier.padding(top = 6.dp),
+                )
+            }
+            Text("ROM 白名单状态没有可靠接口，本卡无法替你确认，请以系统设置里的开关为准。",
+                style = MaterialTheme.typography.bodySmall, color = alertText)
+            Text("本卡只显示探测记录，不同 ROM 行为不同，请以实际验证为准。",
+                style = MaterialTheme.typography.bodySmall, color = alertText)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                BootActionButton(dark, "作用域自检", selfCheck)
+                if (state.actionKey == "OPEN_APP_DETAILS") {
+                    BootActionButton(dark, "打开应用设置") { openAppDetails(context) }
+                }
+            }
+        }
+    }
+    scopeText?.let { text ->
+        ScopeDialog(
+            text = text,
+            dark = dark,
+            onOpenLsposed = { openLsposedManager(context) },
+            onDismiss = { scopeText = null },
+        )
+    }
+}
+
+// ---- v3.0.8 P3：动态元素"待探测"轻提示（默认折叠、无开关、低优先级；B站页不调用） ----
+@Composable
+private fun PendingProbeHint() {
+    var expanded by remember { mutableStateOf(false) }
+    GroupTitle("动态元素 · 待探测")
+    val detail = "这两类元素本版没有隐藏规则：日志里还没有它们的真实结构，按项目约束不能靠猜去藏。" +
+        "想让下一版适配的话，请在直播间复现一次——把评论区展开、点一下转发小心心——" +
+        "然后用首页「日志」按钮导出并回传。只读探针只记录结构信息（class / id / 位置 / 大小），" +
+        "不含账号或聊天内容。这条提示不提供开关，也不影响现有功能。"
+    val content = if (expanded) {
+        AnnotatedString(detail)
+    } else {
+        buildAnnotatedString {
+            append("评论区 / 转发小心心 · 待探测")
+            withStyle(SpanStyle(color = UiPalette.accent(isSystemInDarkTheme()))) {
+                append("（点开看怎么帮）")
+            }
+        }
+    }
+    Text(
+        text = content,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { expanded = !expanded }
+            .padding(top = 6.dp, bottom = 4.dp),
+    )
 }
 
 // ---- 通用单行列表项（不是卡片，护眼、层级清晰） ----
@@ -2323,6 +2898,8 @@ private val THANKS = listOf(
     // v2.7.4 新增
     Thanks("酷安", "酷", "社区支持与反馈"),
     Thanks("心之所及", "心", "支持与建议"),
+    // v2.9.4 新增：帮忙在 ColorOS 15 环境做真机测试
+    Thanks("酷安@bzm123123", "B", "帮忙测试 ColorOS 15 环境"),
 )
 
 /** 项目仓库地址（GitHub）——关于页「项目地址」点击跳转。 */
@@ -2806,7 +3383,7 @@ private fun CyclePage(
     var show by remember(state.showSec) { mutableIntStateOf(state.showSec) }
     val changed = hide != state.hideSec || show != state.showSec
 
-    Text("一个周期 = 隐藏时长 + 显示时长。系统栏、导航栏与抖音、红果短剧、快手、B站 的固定区域都按同一节奏周期性变化（系统栏隐藏，App 内固定控件做位置微移），如此往复防止固定像素常亮。",
+    Text("一个周期 = 隐藏时长 + 显示时长。系统栏、导航栏与抖音、红果短剧、快手、B站 的固定区域都按同一节奏周期性隐藏（像素直接不发光），如此往复防止固定像素常亮。",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant)
 

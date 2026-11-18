@@ -63,7 +63,19 @@ public final class Config {
     public static volatile boolean enableBiliTop = false;
     public static volatile boolean enableBiliBottom = false;
     public static volatile boolean enableBiliCorner = false;
+    /** v3.0.6：三处精准隐藏开关。默认 false（纯加性，不动任何旧键）；红点仅快手/抖音，红果无数据不写规则。 */
+    public static volatile boolean enableBottomCaption = false;
+    public static volatile boolean enableRightActions = false;
+    public static volatile boolean enableRedDot = false;
     public static volatile boolean enableLive = true;
+    /** v3.0.7 P1：快手直播间定向隐藏开关（默认关，纯加性）。 */
+    public static volatile boolean enableKsLiveHits = false;
+    /** v3.0.7 P2：抖音直播间定向隐藏开关（默认关，纯加性）。 */
+    public static volatile boolean enableDyLiveHits = false;
+    /** v3.0.7 P3：快手普通刷视频定向隐藏开关（默认关，纯加性）。 */
+    public static volatile boolean enableKsFeedHits = false;
+    /** v3.0.7 P4：红果剧集页信息区 + 底部导航定向隐藏开关（默认关，纯加性）。 */
+    public static volatile boolean enableDramaInfoHits = false;
     public static volatile boolean enablePoem = false;
     public static volatile boolean enableBall = false;
     public static volatile String customPoems = "";
@@ -597,6 +609,9 @@ public final class Config {
                         enableKsBottom, enableKsCorner)
                 + " bi=" + bits(enableBilibili, enableBiliRight, enableBiliTop,
                         enableBiliBottom, enableBiliCorner)
+                + " v306=" + bits(enableBottomCaption, enableRightActions, enableRedDot)
+                + " v307=" + bits(enableKsLiveHits, enableDyLiveHits,
+                        enableKsFeedHits, enableDramaInfoHits)
                 + " ver=" + BuildConfig.VERSION_NAME + staleTag());
     }
 
@@ -733,6 +748,10 @@ public final class Config {
         boolean ks = enableKuaishou, bili = enableBilibili;
         boolean ksR = enableKsRight, ksT = enableKsTop, ksB = enableKsBottom, ksC = enableKsCorner;
         boolean biR = enableBiliRight, biT = enableBiliTop, biB = enableBiliBottom, biC = enableBiliCorner;
+        boolean bc = enableBottomCaption, ra = enableRightActions, rd = enableRedDot;
+        // v3.0.7：四开关键缺键沿用旧值（默认 false），与 v3.0.6 同款快照规则
+        boolean ksl = enableKsLiveHits, dyl = enableDyLiveHits;
+        boolean ksf = enableKsFeedHits, dri = enableDramaInfoHits;
         boolean live = enableLive, poem = enablePoem, ball = enableBall;
         boolean ic = enableIcon, lg = enableLog;
         boolean ao = enableAppOverlay;
@@ -808,6 +827,13 @@ public final class Config {
                 case "enable_bili_top": biT = "1".equals(v); break;
                 case "enable_bili_bottom": biB = "1".equals(v); break;
                 case "enable_bili_corner": biC = "1".equals(v); break;
+                case "enable_bottom_caption": bc = "1".equals(v); break;
+                case "enable_right_actions":  ra = "1".equals(v); break;
+                case "enable_red_dot":        rd = "1".equals(v); break;
+                case "enable_ks_live_hits":   ksl = "1".equals(v); break;
+                case "enable_dy_live_hits":   dyl = "1".equals(v); break;
+                case "enable_ks_feed_hits":   ksf = "1".equals(v); break;
+                case "enable_drama_info_hits": dri = "1".equals(v); break;
                 // v2.7.1 旧键迁移：新独立键存在时一律优先，与键在文件中的先后顺序无关。
                 // 旧键先于新键出现时由后面的新键覆盖；旧键后出现时在这里跳过。
                 case "enable_video_right":
@@ -903,9 +929,22 @@ public final class Config {
         enableKsBottom = ksB;
         enableKsCorner = ksC;
         enableBiliRight = biR;
-        enableBiliTop = biT;
-        enableBiliBottom = biB;
-        enableBiliCorner = biC;
+        // v2.9.2：B站只保留右侧点赞/收藏/评论一个区域。
+        // 顶部 / 底部 / 角落三项在 B站 8.9x 上识别不到稳定容器，开关打开了也不会有
+        // 任何效果，UI 已删掉入口。这里在加载时统一归零，避免旧配置残留「已开启」
+        // 让用户以为该区域在保护、实际什么都没做。
+        enableBiliTop = false;
+        enableBiliBottom = false;
+        enableBiliCorner = false;
+        // v3.0.6：三处精准隐藏开关回写（缺键沿用上次值，默认 false）
+        enableBottomCaption = bc;
+        enableRightActions = ra;
+        enableRedDot = rd;
+        // v3.0.7：四开关回写（缺键沿用快照旧值，默认 false）
+        enableKsLiveHits = ksl;
+        enableDyLiveHits = dyl;
+        enableKsFeedHits = ksf;
+        enableDramaInfoHits = dri;
         enableLive = live;
         enablePoem = poem;
         enableBall = ball;

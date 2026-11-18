@@ -511,7 +511,9 @@ final class LspScope {
         }
         sb.append('\n');
         if (r.missing.isEmpty()) {
-            sb.append("结论：作用域已勾齐。\n若仍无效果，请强行停止对应 App 再打开，让新进程重新加载模块。");
+            sb.append("结论：作用域已勾齐。\n若仍无效果，请强行停止对应 App 再打开，让新进程重新加载模块。\n")
+                    .append("若是覆盖安装/更新了本模块，需重启手机一次（不是只重启系统界面）：")
+                    .append("SystemUI 会自动重注，但抖音/快手等三方 App 只有重启手机后才会重新加载新 dex。");
         } else {
             sb.append("结论：有 ").append(r.missing.size()).append(" 个应用没勾选，模块不会被注入，这些 App 内一定没效果。\n\n")
                     .append("处理：LSPosed → 模块 → 抗烧屏 → 作用域 → 勾选上面打 ✗ 的应用 → 保存 → 强行停止该 App 再打开。");

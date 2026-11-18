@@ -733,6 +733,22 @@ public final class ConfStore {
      * <p>Android 11+ 普通应用无法在 /sdcard/Android/ 下建目录，只能借 su；
      * 同时把兜底目录设成 0777，保证 SystemUI(system uid) 也有地方可写。</p>
      */
+    /**
+     * v2.9.4：被注入进程回传日志的 App 私有镜像路径。
+     * 只有 App 进程自己知道这个路径，导出时由 su（root 可读任意路径）合并进用户可见日志。
+     */
+    public static String hookLogFile() {
+        Context c = appCtx;
+        if (c == null) {
+            return null;
+        }
+        try {
+            return new File(c.getFilesDir(), ConfigProvider.HOOK_LOG_FILE).getAbsolutePath();
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
     public static boolean prepareSharedDirs() {
         // 路径含空格，必须整体加引号，否则 shell 会当成两个参数
         String cmd = "mkdir -p \"" + LOG_DIR + "\" \"" + LOG_DIR_FALLBACK + "\" 2>/dev/null; "
@@ -759,8 +775,13 @@ public final class ConfStore {
     public static String exportLogs() {
         File audit = auditFile();
         String auditSrc = audit == null ? "" : " \"" + audit.getAbsolutePath() + "\"";
+        // v2.9.4：合并「注入进程日志镜像」。此前它写在 /sdcard/Android 下被分区存储
+        // 挡住、异常被吞，四个视频 App 的 ENTER/INJECTED/HOOK 一行都进不了导出日志。
+        // 现在由 App 进程写私有 files 目录，这里用 su 把它一起 cat 进来。
+        String hookSrc = hookLogFile();
+        String hookLogSrc = hookSrc == null ? "" : " \"" + hookSrc + "\"";
         String cmd = "mkdir -p \"" + LOG_DIR + "\" 2>/dev/null; "
-                + "{ cat" + auditSrc
+                + "{ cat" + auditSrc + hookLogSrc
                 + " \"" + LOG_DIR + "\"/antiburn*.log"
                 + " \"" + LOG_DIR_FALLBACK + "\"/*.log"
                 + " \"" + LOG_FILE + "\" 2>/dev/null; } "
@@ -815,8 +836,10 @@ public final class ConfStore {
             boolean injected = dy > 0 || dr > 0 || ks > 0 || bi > 0 || hdiag > 0;
             String hint = injected
                     ? "hook=alive（各 App 真隐藏通道可用，继续看 HOOK app= 的 sw/R/T/B）"
-                    : "hook=NONE（LSPosed 没把模块加载进视频 App 进程，位置微移一行都没执行）；"
-                    + "处理：功能 › 通用 › 作用域自检，勾上打 ✗ 的 App → 强行停止该 App 再打开";
+                    : "hook=NONE（LSPosed 没把模块加载进视频 App 进程，真隐藏一行都没执行）；"
+                    + "处理：功能 › 通用 › 作用域自检，勾上打 ✗ 的 App → 强行停止该 App 再打开；"
+                    + "若是覆盖安装/更新了本模块，需重启手机一次（不是只重启系统界面）："
+                    + "SystemUI 会自动重注，但抖音/快手等三方 App 只有重启手机后才会重新加载新 dex。";
             int ovl = occurrences(all, "OVL on app=") + occurrences(all, "OVL window attached");
             // v2.8.8：enter= 直接给出 handleLoadPackage 的命中进程。
             // 以前要翻几百行才能确认「模块到底进没进抖音」，现在第一行就能判。
@@ -977,6 +1000,7 @@ public final class ConfStore {
      * 但读自己曾写入的路径通常没问题，两条路都留。
      */
     private static String readAllLogs() {
+        String base = "";
         File f = new File(LOG_FILE);
         try {
             if (f.exists() && f.length() > 0) {
@@ -989,14 +1013,66 @@ public final class ConfStore {
                     }
                 }
                 if (sb.length() > 0) {
-                    return sb.toString();
+                    base = sb.toString();
                 }
             }
         } catch (Throwable ignored) {
         }
-        String via = execSuCapture("cat \"" + LOG_FILE + "\" 2>/dev/null; "
-                + "cat \"" + LOG_DIR_FALLBACK + "/antiburn.log\" 2>/dev/null");
+        if (base.isEmpty()) {
+            String via = execSuCapture("cat \"" + LOG_FILE + "\" 2>/dev/null; "
+                    + "cat \"" + LOG_DIR_FALLBACK + "/antiburn.log\" 2>/dev/null");
+            base = via == null ? "" : via;
+        }
+        // v3.0.1：视频 App 直写公共目录失败时，ENTER/INJECTED/HOOK 只落在私有镜像里。
+        // 不读镜像 SELF 就会把 inject= 误报成 0、hook 误判成 NONE（真机日志已证实）。
+        // 只做读取聚合：整行去重、保持原有顺序，绝不写回任何原始日志。
+        return mergeUniqueLines(base, readHookMirror());
+    }
+
+    /**
+     * v3.0.1：读回注入进程经 Provider 回传的私有日志镜像（files/hook-injected.log）。
+     * 与 exportLogs() 的导出合并完全独立，这里只喂给 SELF / ENTER 统计，不改导出逻辑。
+     */
+    private static String readHookMirror() {
+        String path = hookLogFile();
+        if (path == null || path.isEmpty()) {
+            return "";
+        }
+        File f = new File(path);
+        try {
+            if (f.exists() && f.length() > 0) {
+                StringBuilder sb = new StringBuilder();
+                try (java.io.BufferedReader br = new java.io.BufferedReader(
+                        new java.io.FileReader(f))) {
+                    String line;
+                    while ((line = br.readLine()) != null) {
+                        sb.append(line).append('\n');
+                    }
+                }
+                return sb.toString();
+            }
+        } catch (Throwable ignored) {
+            // 直读失败再走 su：root 可读任意应用私有路径
+        }
+        String via = execSuCapture("cat \"" + path + "\" 2>/dev/null");
         return via == null ? "" : via;
+    }
+
+    /** v3.0.1：按整行去重（等价于 awk '!seen[$0]++'），保留首次出现顺序。 */
+    private static String mergeUniqueLines(String... sources) {
+        java.util.LinkedHashSet<String> seen = new java.util.LinkedHashSet<>();
+        StringBuilder sb = new StringBuilder();
+        for (String src : sources) {
+            if (src == null || src.isEmpty()) {
+                continue;
+            }
+            for (String line : src.split("\\r?\\n")) {
+                if (!line.isEmpty() && seen.add(line)) {
+                    sb.append(line).append('\n');
+                }
+            }
+        }
+        return sb.toString();
     }
 
     /** v2.8.8：作用域自检复用同一份 ENTER 摘要。 */

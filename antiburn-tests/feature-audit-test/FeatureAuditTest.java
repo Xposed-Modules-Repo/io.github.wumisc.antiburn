@@ -1,5 +1,7 @@
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -58,7 +60,11 @@ public class FeatureAuditTest {
      * 只是不再需要界面入口 —— 用户也不该再被一个容易误触的开关困扰。</p>
      */
     private static final Set<String> KNOWN_NO_UI =
-            Set.of("enableAppOverlay", "enableSysOverlay", "enableIcon", "enableDramaBottom", "enablePoem", "enableShift");
+            Set.of("enableAppOverlay", "enableSysOverlay", "enableIcon", "enableDramaBottom", "enablePoem",
+                    "enableShift",
+                    // v2.9.4：enableLive 已恢复为抖音页「直播间隐藏」开关，从例外表移除；
+                    // B站 只剩右侧点赞区，顶部 / 底部 / 角落三项按用户要求删除入口。
+                    "enableBiliTop", "enableBiliBottom", "enableBiliCorner");
 
     /**
      * 已知「有界面/存储但无 Hook 消费」的字段。
@@ -72,7 +78,9 @@ public class FeatureAuditTest {
     // v2.8.2 enableAppOverlay：消费方是 App 进程的无障碍遮盖服务（直接读 conf），
     // 不经过 Config / Hook 进程，因此登记为「无 Hook 消费」而非死字段。
     private static final Set<String> KNOWN_NO_HOOK =
-            Set.of("enableIcon", "enablePoem", "enableAppOverlay");
+            Set.of("enableIcon", "enablePoem", "enableAppOverlay",
+                    // v2.9.2：B站 三项区域下线，Hook 不再读取（Config 加载时强制归零）
+                    "enableBiliTop", "enableBiliBottom", "enableBiliCorner");
 
     private static void check(boolean cond, String name, String detail) {
         if (cond) {
@@ -150,6 +158,23 @@ public class FeatureAuditTest {
     private static String stripComments(String s) {
         String noBlock = s.replaceAll("(?s)/\\*.*?\\*/", " ");
         return noBlock.replaceAll("(?m)//[^\\n]*", "");
+    }
+
+    /**
+     * 逐字节指纹：T-49 用它锁「与基线逐字相等」的方法体（count(".+") 只锁行数，不够）。
+     * 基线值取自 v3.0.7 开工前的 DouyinHook.java / MainActivity.kt，纯加性改动不触碰这些函数体。
+     */
+    private static String sha256(String s) {
+        try {
+            byte[] b = MessageDigest.getInstance("SHA-256").digest(s.getBytes(StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder(b.length * 2);
+            for (byte x : b) {
+                sb.append(String.format("%02x", x & 0xff));
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            throw new IllegalStateException("SHA-256 unavailable", e);
+        }
     }
 
     private static Set<String> findAll(String text, String regex, int group) {
@@ -348,8 +373,23 @@ public class FeatureAuditTest {
             }
         }
         Set<String> uniqBound = new LinkedHashSet<>(bound);
-        check(bound.size() == uniqBound.size(), "T-05a 同一配置字段不绑两行开关",
-                "绑定 " + bound.size() + " 处，去重后 " + uniqBound.size() + " · 标题 " + titles.size() + " 行");
+        // v3.0.6：三个新开关是「全局字段、按 App 页分别挂载」（design-backend §5.4 明确要求：
+        // 快手/抖音/B站各自的相关页面显示对应行，红果置灰占位）。同一字段出现在多个 App 页
+        // 属设计预期，不是旧版要防的「一个字段被误绑到两个不同含义的行」。故仅对这三个字段
+        // 放开重复绑定，其余任何字段仍严格遵守「一字段一行」，旧守卫不削弱。
+        Set<String> sharedGlobal = Set.of("enableBottomCaption", "enableRightActions", "enableRedDot");
+        List<String> dupFields = new ArrayList<>();
+        for (String f : uniqBound) {
+            int n = 0;
+            for (String b : bound) {
+                if (f.equals(b)) { n++; }
+            }
+            if (n > 1 && !sharedGlobal.contains(f)) {
+                dupFields.add(f + "x" + n);
+            }
+        }
+        check(dupFields.isEmpty(), "T-05a 同一配置字段不绑两行开关（v3.0.6 三全局开关按 App 页挂载除外）",
+                "违规重复=" + dupFields + " · 绑定 " + bound.size() + " 处 · 标题 " + titles.size() + " 行");
         check(badBind.isEmpty(), "T-05b 开关行绑定的字段都真实存在", "错绑=" + badBind);
         check(titles.size() >= 20, "T-05c 开关行数量未异常减少", "共 " + titles.size() + " 行");
         check(!stripComments(main).contains("TileItem")
@@ -502,9 +542,12 @@ public class FeatureAuditTest {
                 "T-12h 适配计划卡片 1 定义 + 1 调用", "");
         check(main.contains("快手") && main.contains("哔哩哔哩") && main.contains("已支持"),
                 "T-12i 说明卡点名快手/B站且写明已支持", "");
+        // v3.0.8：PendingProbeHint 的合规文案含「这条提示不提供开关」，属另一组件，
+        // 旧的全文负向断言会误伤它。守卫意图是「说明卡不是占位」，故收紧到 RoadmapCard 函数体内。
+        String roadmapCardBody = slice(main, "private fun RoadmapCard(", "private fun openLsposedManager(");
         check(main.contains("点开「快手」「B站」逐项开启对应开关")
-                        && !stripComments(main).contains("不提供开关"),
-                "T-12j 说明卡引导到真实子页（不再是「不提供开关」占位）", "");
+                        && !stripComments(roadmapCardBody).contains("不提供开关"),
+                "T-12j 说明卡引导到真实子页（RoadmapCard 内无「不提供开关」占位）", "");
         check(!main.contains("LSPosed + root 环境") && main.contains("免 root 无障碍两种运行方式"),
                 "T-12k 关于页不再把运行方式写死成单一环境", "");
         String overlayBlock = slice(main, "if (overlay) {", "闭合 if (overlay)");
@@ -598,12 +641,14 @@ public class FeatureAuditTest {
                 "T-14i SystemUI 分发保持不变", "");
 
         // 6 个新键全链路：AbState 字段 / Saver / load / save / diff / default / parse / Hook / UI
+        // v2.9.2：B站 顶部 / 底部 / 角落三项从应用下线（只剩右侧点赞区），
+        // 不再参与「字段→界面→Hook」全链路，故从此表移除。
         String[] ksKeys = {"enable_kuaishou", "enable_bilibili",
                 "enable_ks_right", "enable_ks_top", "enable_ks_bottom", "enable_ks_corner",
-                "enable_bili_right", "enable_bili_top", "enable_bili_bottom", "enable_bili_corner"};
+                "enable_bili_right"};
         String[] ksFlds = {"enableKuaishou", "enableBilibili",
                 "enableKsRight", "enableKsTop", "enableKsBottom", "enableKsCorner",
-                "enableBiliRight", "enableBiliTop", "enableBiliBottom", "enableBiliCorner"};
+                "enableBiliRight"};
         boolean chainOk = true;
         StringBuilder miss = new StringBuilder();
         for (int i = 0; i < ksKeys.length; i++) {
@@ -620,7 +665,7 @@ public class FeatureAuditTest {
             if (!douyinCode.contains("Config." + f)) { chainOk = false; miss.append(" hook:").append(k); }
             if (!main.contains("state." + f)) { chainOk = false; miss.append(" ui:").append(k); }
         }
-        check(chainOk, "T-14j v2.7.0 十个键全链路一致（字段/load/save/diff/default/parse/cfg/hook/ui）",
+        check(chainOk, "T-14j v2.7.0 启用中的区域键全链路一致（字段/load/save/diff/default/parse/cfg/hook/ui）",
                 miss.toString());
         // Saver 新索引追加在末尾（28..37），不插队
         check(main.contains("Bool(28)") && main.contains("Bool(29)") && main.contains("Bool(30)")
@@ -671,7 +716,8 @@ public class FeatureAuditTest {
         System.out.println("== T-15 v2.6.9 真机反馈修复 ==");
         check(douyinCode.contains("private static boolean safeToHide(View v, String what)"),
                 "T-15a 隐藏前有内容安全校验（v2.7.0 升级为按区域形状限定）", "");
-        check(douyinCode.contains("containsVideoSurface(v, 0)") && douyinCode.contains("rw < 0.30f")
+        // v2.9.3：右侧分支改成 `rw >= 0.30f` 提前否决，断言随之改成「宽度上限仍 30%」。
+        check(douyinCode.contains("containsVideoSurface(v, 0)") && douyinCode.contains("rw >= 0.30f")
                         && douyinCode.contains("rh < 0.18f") && !douyinCode.contains("countDescendants"),
                 "T-15b 安全校验 = 视频画面排除 + 形状限定（v2.6.9 误杀源 countDescendants 已删）", "");
         check(countLiteral(douyinCode, "hideSafe(") >= 6,
@@ -689,7 +735,8 @@ public class FeatureAuditTest {
                 "T-15h 直播特征页整页跳过 App 内区域隐藏", "");
         check(douyinCode.contains("hideSafe(v, \"plus\")") && douyinCode.contains("isVideoApp && hideBottom"),
                 "T-15i 加号归入底部开关，关掉立即恢复", "");
-        check(countLiteral(douyinCode, "videoLivePage = isLiveTextPage(root, 0)") == 1,
+        // v2.9.3：文案判定后多了一道结构闸（底部主 Tab 栏），提交点仍然只有一处。
+        check(countLiteral(douyinCode, "videoLivePage = textHit && findBottomDock(root, 0) == null") == 1,
                 "T-15j 直播判定只在 rescan 提交一次", "");
         check(versionAtLeast(gradle, 38, "2.7.5"),
                 "T-15k 版本号不低于 vc38 / 2.7.5（单调升，升版无需改测试）", "");
@@ -702,8 +749,8 @@ public class FeatureAuditTest {
                         && config.contains("case \"enable_video_right\""),
                 "T-16b 旧共用键仅作新键缺失时的迁移兜底（老用户升级行为不变）", "");
         check(douyinCode.contains("Config.enableKsRight : Config.enableBiliRight")
-                        && douyinCode.contains("Config.enableKsBottom : Config.enableBiliBottom"),
-                "T-16c Hook 按 App 分派各自开关（互不影响）", "");
+                        && douyinCode.contains("dTop = on && isKuaishou && Config.enableKsTop"),
+                "T-16c Hook 按 App 分派各自开关（快手四区 / B站只剩右侧）", "");
         check(main.contains("各一套独立开关，互不影响"),
                 "T-16d UI 如实写明两应用开关独立", "");
         check(main.contains("为人民服务") && main.contains("为天地立心")
@@ -727,15 +774,16 @@ public class FeatureAuditTest {
         check(main.contains("private fun migratedB(map: Map<String, String>, key: String, legacy: String)")
                         && main.contains("if (map.containsKey(key)) b(map[key]) else b(map[legacy])"),
                 "T-17a App 迁移规则为新键存在即优先，不再使用新值 OR 旧值", "");
+        // v2.9.2：B站 只剩右侧（其余三项已下线，不再需要迁移）
         String[] independentKeys = {"enable_ks_right", "enable_ks_top", "enable_ks_bottom", "enable_ks_corner",
-                "enable_bili_right", "enable_bili_top", "enable_bili_bottom", "enable_bili_corner"};
+                "enable_bili_right"};
         String[] migrationLegacyKeys = {"enable_video_right", "enable_video_top", "enable_video_bottom", "enable_video_corner",
-                "enable_video_right", "enable_video_top", "enable_video_bottom", "enable_video_corner"};
+                "enable_video_right"};
         boolean migrationCalls = true;
         for (int i = 0; i < independentKeys.length; i++) {
             migrationCalls &= main.contains("migratedB(map, \"" + independentKeys[i] + "\", \"" + migrationLegacyKeys[i] + "\")");
         }
-        check(migrationCalls, "T-17b 快手/B站八个区域键全部使用同一迁移优先级", "");
+        check(migrationCalls, "T-17b 仍在用的区域键全部使用同一迁移优先级", "");
         check(!stripComments(main).contains("|| b(map[\"enable_video_"),
                 "T-17c 根除旧值 1 让新开关无法关闭的 OR 读取", "");
         check(config.contains("Set<String> presentKeys = new HashSet<>()")
@@ -754,8 +802,10 @@ public class FeatureAuditTest {
         String ctrlCode = stripComments(controller);
 
         // 右侧互动列：高度下限从 0.25 放到 0.08（快手只有三个按钮），宽度仍限 0.30
-        check(douyinCode.contains("rw < 0.30f && rh > 0.08f"),
-                "T-18a 右侧互动列高度下限适配三按钮布局（快手不再整列被恢复）", "");
+        // v2.9.3：整列与单按钮统一按「窄」放行，上限 50%，超过 30% 屏高时必须 <=22% 屏宽。
+        check(douyinCode.contains("return rh <= 0.30f || rw <= 0.22f;")
+                        && douyinCode.contains("if (rh <= 0.02f || rh > 0.50f)"),
+                "T-18a 右侧互动列高度上限放宽到 50%（整列与单按钮都能过）", "");
         check(!douyinCode.contains("rh > 0.25f"),
                 "T-18b 旧 25% 高度阈值已移除（真机快手右侧失效的直接原因）", "");
         // 收集环节的同一根因：scoreRight / scoreRightEdge 也硬依赖 ImageView
@@ -779,17 +829,21 @@ public class FeatureAuditTest {
         // 直播暂停：字段 + 提交 + 两处短路 + 信号发布
         check(douyinCode.contains("private static volatile boolean livePaused = false"),
                 "T-18g 新增直播间暂停状态", "");
-        check(douyinCode.contains("boolean pausedNow = !isVideoApp && (videoLivePage || liveStrongHit)"),
-                "T-18h 抖音按结构判定、红果按文案特征，均触发整体暂停", "");
+        check(douyinCode.contains("boolean pausedNow = !isVideoApp && !hasTab && (hasLiveInput || videoLivePage)"),
+                "T-18h 直播间判定改为双结构闸（底部输入条 + 无首页 Tab）", "");
         check(douyinCode.contains("LivePause.publish(selfPkg, paused)"),
                 "T-18i 暂停状态按包名与时间戳发布给 SystemUI", "");
         int anyIdx = douyinCode.indexOf("boolean anyEnabled;");
-        int pauseIdx = douyinCode.indexOf("if (livePaused) {");
+        // v2.9.2：直播间通道断开（LIVE_ROOM_HIDE=false），判定成立即整页让位。
+        // 让位判定仍必须先于 anyEnabled 的 OR 条件。
+        int pauseIdx = douyinCode.indexOf("if (livePaused && !LIVE_ROOM_HIDE) {");
         check(pauseIdx > 0 && anyIdx > 0 && pauseIdx < anyIdx,
-                "T-18j 暂停判定先于任何开关 OR 条件（不会被区域开关重新拉起）", "");
-        check(countLiteral(douyinCode, "if (livePaused) {") >= 2,
-                "T-18k 周期入口与布局监听入口都拦截（恢复后不被布局变化压回）",
-                "次数=" + countLiteral(douyinCode, "if (livePaused) {"));
+                "T-18j 让位判定先于任何开关 OR 条件（直播页整页恢复）", "");
+        check(countLiteral(douyinCode, "if (livePaused && !LIVE_ROOM_HIDE) {") >= 1
+                        && countLiteral(douyinCode, "if (livePaused) {") >= 1,
+                "T-18k 周期入口整页让位，布局监听入口按总闸分流，两处都不漏直播",
+                "tick=" + countLiteral(douyinCode, "if (livePaused && !LIVE_ROOM_HIDE) {")
+                        + " hook=" + countLiteral(douyinCode, "if (livePaused) {"));
 
         // 文本特征对所有进程统一计算（红果此前拿不到直播信号）
         check(douyinCode.contains("nowProbe - lastLiveProbe >= 1500L"),
@@ -842,8 +896,8 @@ public class FeatureAuditTest {
                 "T-19g 抖音 tick 异常后由 finally 兜底重排（本轮根因修复）", "");
         check(countLiteral(ctrlCode, "if (!cycleScheduled && handler != null)") == 1,
                 "T-19h SystemUI tick 异常后同样兜底重排", "");
-        check(douyinCode.contains("if (livePaused && !liveStrongHit && !videoLivePage)"),
-                "T-19i 退出直播即时解除暂停（不依赖 2 秒节流重扫）", "");
+        check(douyinCode.contains("if (livePaused && !liveStrongHit && !videoLivePage && !liveInputSeen)"),
+                "T-19i 退出直播即时解除暂停（含输入条结构闸，不依赖 2 秒节流重扫）", "");
         check(douyinCode.contains("Log.e(TAG, \"hide failed: \" + what, t)"),
                 "T-19j 单个区域隐藏失败不中断整轮", "");
         check(douyinCode.contains("Log.e(TAG, \"show failed\", t)"),
@@ -856,11 +910,12 @@ public class FeatureAuditTest {
                 "T-19n SystemUI 只读内存缓存，主线程零 IO", "");
         check(liveCode.contains("writeBroken"),
                 "T-19o 共享路径写不进去就停止重试，不每 5 秒空转", "");
-        check(countLiteral(douyinCode, "liveStrongHit") >= 4,
-                "T-19p 直播暂停改用「直播专属节点 + 无首页 Tab」精确判据",
-                "次数=" + countLiteral(douyinCode, "liveStrongHit"));
-        check(douyinCode.contains("boolean pausedNow = !isVideoApp && (videoLivePage || liveStrongHit)"),
-                "T-19q 整体暂停不再由 strongCorner 单独成立（普通页误判会锁死进程）", "");
+        check(douyinCode.contains("hasLiveInputBar(root, 0)")
+                        && douyinCode.contains("!hasTab && (hasLiveInput || videoLivePage)"),
+                "T-19p 直播暂停改用「底部输入条 + 无首页 Tab」双结构闸", "");
+        check(douyinCode.contains("!hasTab && (hasLiveInput || videoLivePage)")
+                        && !douyinCode.contains("pausedNow = !isVideoApp && (liveStrongHit"),
+                "T-19q 整体暂停既不由 strongCorner、也不由文案单独成立（普通页不会误入）", "");
         check(douyinCode.contains("liveStreak >= 2"),
                 "T-19r 进入需连续命中、解除只需一次不命中（退出即时恢复）", "");
 
@@ -1252,13 +1307,1274 @@ public class FeatureAuditTest {
         check(!hid284.contains("transparentDeep("),
                 "T-29e 应用路径里不再有透明隐藏调用", "");
         check(dy284.contains("// v2.8.4：偏移必须在这里归零"), "T-29f 关开关/退直播后位置必须归零", "");
-        check(lsp.contains("modules_config.db") && lsp.contains("insert into scope(")
-                        && lsp.contains("WHERE not exists") || lsp.contains("where not exists"),
-                "T-29g 作用域缺失时按需 INSERT，不删改其它模块的行", "");
-        check(lsp.contains("modules_config.db.bak") && lsp.contains("已还原备份"),
-                "T-29h 写前备份，复查失败自动还原", "");
+        check(lsp.contains("SQLiteDatabase.openDatabase") && !lsp.contains("sqlite3 -noheader"),
+                "T-29g 作用域自检改用系统 SQLiteDatabase，不再依赖设备上的 sqlite3", "");
+        check(!lsp.contains("insert into scope(") && lsp.contains("为什么只读不写"),
+                "T-29h 只读诊断，不往 modules_config.db 写任何行", "");
         check(versionAtLeast(gradle, 47, "2.8.4"),
                 "T-29i 版本号升到 vc47 / 2.8.4", "");
+
+        // ---------- T-30 v2.8.5：作用域自检 + B站 id 锚点 ----------
+        System.out.println("== T-30 v2.8.5 作用域自检与 id 锚点 ==");
+        check(lsp.contains("Base64.decode") && lsp.contains("FileOutputStream")
+                        && lsp.contains("-wal") && lsp.contains("-shm"),
+                "T-30a 配置库经 base64 由本进程落盘（自建文件才带 app_data_file 标签）", "");
+        check(lsp.contains("android.database.sqlite.SQLiteDatabase")
+                        || lsp.contains("import android.database.sqlite.SQLiteDatabase"),
+                "T-30b 用系统 SQLiteDatabase 读库，无需 sqlite3 二进制", "");
+        check((lsp.contains("pickPkgColumn(") || lsp.contains("pkgColumn("))
+                        && lsp.contains("pragma table_info"),
+                "T-30c modules 表列名按 pragma 现查，兼容各版 LSPosed", "");
+        check(lsp.contains("installedTargets(") && lsp.contains("!r.scope.contains(p)"),
+                "T-30d 用设备真实安装包名与作用域精确比对，不做前缀猜测", "");
+        check(lsp.contains("su-denied") && lsp.contains("unregistered"),
+                "T-30e 无 root / 模块未启用都有明确结论，不静默失败", "");
+        check(dy284.contains("getIdentifier(name, \"id\", selfPkg)")
+                        && dy284.contains("ID_CACHE"),
+                "T-30f 按资源名取 id 并缓存，不写死会变的 id 数值", "");
+        check(dy284.contains("\"bottom_navigation\"") && dy284.contains("\"app_bar\"")
+                        && dy284.contains("\"nav_top_bar\""),
+                "T-30g B站 底部导航 / 顶部栏按真实 id 名锚定", "");
+        check(dy284.contains("if (isBilibili) {"),
+                "T-30h id 锚点只对 B站 开（抖音/红果/快手 资源名已混淆）", "");
+        check(main.contains("LspScope.diagnose(context)") && main.contains("openLsposedManager("),
+                "T-30i 通用页有作用域自检入口并能跳转 LSPosed 管理器", "");
+        check(!main.contains("应用内区域兜底」会用覆盖层按屏幕比例遮盖"),
+                "T-30j 删掉「无障碍按比例遮盖」这类已不成立的承诺", "");
+        check(versionAtLeast(gradle, 48, "2.8.5"),
+                "T-30k 版本号升到 vc48 / 2.8.5", "");
+
+        // ---------- T-31 v2.8.6：盖黑通道彻底断开 ----------
+        // 真机日志实证：v2.8.4/2.8.5 期间 MASK 行 appOn=true、areas=RTBC，
+        // 退出抖音回到设置页后 rects 仍挂着 x5(douyin RTBC) —— 用户看到的就是
+        // 「整个覆盖层糊在屏幕上」。原因是 Cfg.appAreaOn 默认 true，而镜像里缺
+        // enable_app_overlay 键时那个 case 根本不执行，v2.8.4 的「强制 false」落空。
+        System.out.println("== T-31 v2.8.6 盖黑通道硬断开 ==");
+        String mask286 = read(dir.resolve("BurnInMaskService.java"));
+        check(mask286.contains("private static final boolean APP_AREA_CHANNEL = false"),
+                "T-31a 应用内盖黑总闸是编译期常量 false，配置绕不过去", "");
+        check(mask286.contains("if (!APP_AREA_CHANNEL)") && mask286.contains("return out;"),
+                "T-31b appRects 第一道门就判总闸，不再依赖配置值", "");
+        check(mask286.contains("boolean appAreaOn = false;"),
+                "T-31c Cfg.appAreaOn 默认 false（缺键时不会回到 true）", "");
+        check(mask286.contains("c.appAreaOn = false;\n        cfg = c;")
+                        || mask286.contains("c.appAreaOn = false;"),
+                "T-31d config() 读完无条件再置 false，两层保险", "");
+        check(mask286.contains("maskView.setRects(null, null")
+                        && mask286.contains("emptyList()"),
+                "T-31e 无可画区域时连旧矩形一起清，避免下次复活", "");
+        check(main.contains("enableAppOverlay = false")
+                        && main.contains("enableSysOverlay = false")
+                        && main.contains("lines[\"enable_app_overlay\"]"),
+                "T-31f 读配置时强制 false，写盘保留字段落点", "");
+        check(main.contains("val enableAppOverlay: Boolean = false")
+                        && main.contains("val enableSysOverlay: Boolean = false"),
+                "T-31g UI 状态默认 false（AbState 不再把通道带回 true）", "");
+        check(main.contains("Bool(38, false)") && main.contains("Bool(39, false)"),
+                "T-31h Bundle 恢复路径默认 false", "");
+        check(!main.contains("预览 5 秒"),
+                "T-31i 移除「预览 5 秒」入口（点了就是整屏黑块）", "");
+        check(lsp.contains("base64 -w0"), "T-31j 自检改用 base64 拉库，绕开 SELinux 标签", "");
+        check(versionAtLeast(gradle, 49, "2.8.6"),
+                "T-31k 版本号升到 vc49 / 2.8.6", "");
+
+        // ---------- T-32 v2.8.6b：注入二义性收口 ----------
+        // 「日志里什么都没有」此前有两种可能：没注入 / 进来了但中途崩了。
+        // 前几版都卡在这个二义性上改来改去，必须用入口探针一锤定音。
+        System.out.println("== T-32 注入探针与 LSPosed 日志回读 ==");
+        String xp287 = read(dir.resolve("XposedInit.java"));
+        int enterAt = xp287.indexOf("ENTER pkg=");
+        int ofAt = xp287.indexOf("VideoApps.of(pkg)");
+        check(enterAt > 0 && ofAt > 0 && enterAt < ofAt,
+                "T-32a 入口探针打在 VideoApps.of 之前（探针自身不依赖任何业务类）", "");
+        check(xp287.contains("catch (Throwable ignored)") && xp287.contains("ENTER pkg="),
+                "T-32b 探针写日志失败也不能挡住主流程", "");
+        check(lsp.contains("lspLogDigest(") && lsp.contains("/data/adb/lspd/log/"),
+                "T-32c 自检回读 LSPosed 自身日志，作用域齐了也能看出框架侧问题", "");
+        check(versionAtLeast(gradle, 50, "2.8.7"),
+                "T-32d 版本号升到 vc50 / 2.8.7", "");
+
+        // ---------- T-33 v2.8.8：自检读库真因 + 注入证据前置 ----------
+        // 真机日志连续两版都是 error=open:SQLiteException。前两版往 SELinux / 属主 /
+        // chcon 方向查，全错 —— 真因是 WAL 库在 OPEN_READONLY 下建不了 -shm，
+        // SQLite 直接 SQLITE_CANTOPEN(14)。必须用断言把这个前提钉住。
+        System.out.println("== T-33 自检采用 READWRITE + 注入证据前置 ==");
+        check(!lsp.contains("SQLiteDatabase.OPEN_READONLY"),
+                "T-33a 不再用 OPEN_READONLY 打开 WAL 库（会 CANTOPEN）", "");
+        check(lsp.contains("SQLiteDatabase.OPEN_READWRITE"),
+                "T-33b 改用 OPEN_READWRITE 打开副本，SQLite 才能建 -shm、重放 WAL", "");
+        check(lsp.contains("private static SQLiteDatabase open(File copy)"),
+                "T-33c 打开动作收敛到 open()，失败可回退", "");
+        check(lsp.contains("\"-wal\").delete()") && lsp.contains("\"-shm\").delete()"),
+                "T-33d 回退时删掉搬来的 WAL/SHM 再试一次", "");
+        check(lsp.contains(":len=") && lsp.contains("t.getMessage()"),
+                "T-33e 失败时报异常 message 与副本字节数，不再只给类名", "");
+        check(lsp.contains("ConfStore.enterHits()") && lsp.contains("注入证据"),
+                "T-33f 自检第一段就给 ENTER 命中证据", "");
+        check(lsp.contains("OK:"),
+                "T-33g 命中目标包时标 OK，一眼看出注入通没通", "");
+
+        String conf288 = read(dir.resolve("ConfStore.java"));
+        check(conf288.contains("enterSummary(") && conf288.contains("\"ENTER pkg=\""),
+                "T-33h SELF 行输出 enter= 摘要", "");
+        check(conf288.contains("+ \" app_overlay=0\""),
+                "T-33i app_overlay 恒 0，不再读镜像历史值自相矛盾", "");
+        check(!conf288.contains("overlayOn"),
+                "T-33j 移除 overlayOn 旧逻辑（它的 true 默认值误导过排查）", "");
+        check(!conf288.contains("由「应用内区域兜底」接管"),
+                "T-33k hook=NONE 文案不再指向已拆除的兜底通道", "");
+        check(conf288.contains("private static String readAllLogs()"),
+                "T-33l 日志读取收敛成 readAllLogs()，SELF 与自检共用", "");
+        check(lsp.contains("设备上已安装的目标应用")
+                        && lsp.contains("installedTargets(ctx)"),
+                "T-33n 读不到作用域时仍列出设备上装的目标 App，用户可照单勾选", "");
+        check(versionAtLeast(gradle, 51, "2.8.8"),
+                "T-33m 版本号升到 vc51 / 2.8.8", "");
+
+        // ---------- T-34 v2.9.0：恢复周期真隐藏 + 面积保险 ----------
+        // v2.8.4 把 App 内区域从「透明隐藏」改成「位置微移」，理由是「别盖别藏」。
+        // 真机结论反过来：微移只是把轮廓挪到相邻像素，亮度没降，用户觉得不如真隐藏。
+        // 真隐藏的代价是误判会遮黑内容区，所以必须配一道面积保险。
+        System.out.println("== T-34 周期真隐藏与面积保险 ==");
+        String hook290 = read(dir.resolve("DouyinHook.java"));
+        int hs = hook290.indexOf("private static void hideSafe(");
+        int hsEnd = hs < 0 ? -1 : hook290.indexOf("\n    }", hs);
+        String hideSafeBody = (hs >= 0 && hsEnd > hs) ? hook290.substring(hs, hsEnd) : "";
+        check(hideSafeBody.contains("transparentDeep(v, what)"),
+                "T-34a hideSafe 回到真隐藏（transparentDeep）", "");
+        check(!hideSafeBody.contains("shiftDeep(v, what)"),
+                "T-34b hideSafe 不再走位置微移", "");
+        check(hook290.contains("private static boolean tooBigToHide(View v)"),
+                "T-34c 面积保险方法存在", "");
+        check(hook290.contains("sw * 0.45f") && hook290.contains("sh * 0.45f"),
+                "T-34d 面积阈值宽高双 45%（宽 100%/高 8% 的底部导航不会被误伤）", "");
+        check(hideSafeBody.contains("tooBigToHide(v)"),
+                "T-34e 保险接在隐藏前，命中即放弃隐藏", "");
+        check(hook290.contains("private static long phaseAt"),
+                "T-34f 新增相位时间戳，用于周期切换", "");
+        check(hook290.contains("Config.hideSec") && hook290.contains("Config.showSec")
+                        && hook290.contains("hideMs") && hook290.contains("showMs"),
+                "T-34g 隐藏 / 显示时长仍读用户配置（周期时长设置有效）", "");
+        check(hook290.contains("hideEnabled();\n                hidden = true;\n                phaseAt = now;")
+                        || (hook290.contains("hideEnabled();") && hook290.contains("phaseAt = now;")),
+                "T-34h 进入隐藏相位时记时间戳", "");
+        check(hook290.contains("showAll();\n            hidden = false;\n            phaseAt = now;")
+                        || (hook290.contains("showAll();") && hook290.contains("hidden = false;")),
+                "T-34i 到点恢复显示并记时间戳", "");
+        check(countLiteral(hook290, "shiftDeep(") <= 1,
+                "T-34j shiftDeep 只剩定义，不再被调用（引用=" + countLiteral(hook290, "shiftDeep(") + "）", "");
+        check(hook290.contains("hideSafe(v, \"swipe\")"),
+                "T-34k 左滑引导条一并走真隐藏", "");
+        check(versionAtLeast(gradle, 52, "2.9.0"),
+                "T-34l 版本号升到 vc52 / 2.9.0", "");
+
+        // ---------- T-35 v2.9.1：直播间三区真隐藏 / 名单不再否决快手 B站 / 注入可见 ----------
+        // 本轮三条真机反馈：抖音普通页好了但直播间不动、快手没反应、B站没反应。
+        // 前两条都能在代码里定位到确定性缺陷（短路死代码 / 名单二次过滤），
+        // 第三条的根本原因是「注入证据完全看不到」，只能靠猜 —— 一并修掉。
+        System.out.println("== T-35 直播间三区真隐藏 / 名单不再否决 / 注入可见 ==");
+        String hook291 = read(dir.resolve("DouyinHook.java"));
+        String hook291c = stripComments(hook291);
+        // v2.9.2 起这条判定外面多了一层编译期总闸（LIVE_ROOM_HIDE），语义不变：
+        // 总闸打开且开关关掉时才整页让位。
+        check(hook291c.contains("if (livePaused && LIVE_ROOM_HIDE && !Config.enableLive) {"),
+                "T-35a 直播间只在开关关掉时整页让位（不再无条件 showAll）", "");
+        check(hook291c.contains("private static void hideLiveAreas()"),
+                "T-35b 新增直播间三区隐藏入口", "");
+        // v2.9.5：不再用统一的 "live" 标签把三区一起塞进 cand（会落到小控件分支全灭），
+        // 改成三区各自按本来的区域语义过已有的 safeToHide 门禁。
+        check(hook291c.contains("private static boolean hideLiveCandidate(View v, String what)")
+                        && hook291c.contains("hideLiveCandidate(v, \"top\")")
+                        && hook291c.contains("hideLiveCandidate(v, \"bottom\")")
+                        && hook291c.contains("hideLiveCandidate(v, \"right\")"),
+                "T-35c 三区分别按本来的区域标签过已有形状白名单（v2.9.5）", "");
+        check(hook291c.contains("if (LIVE_ROOM_HIDE) {\n                hideLiveAreas();"),
+                "T-35d 布局监听入口按总闸分流：开则三区，关则整页恢复", "");
+        check(!hook291c.contains("boolean allowed = Config.shouldIntervene")
+                        && !hook291c.contains("&& Config.shouldIntervene(selfPkg)"),
+                "T-35e 快手 / B站 的 App 内区域不再被系统栏名单二次否决（与抖音红果一致）", "");
+        String xp291 = stripComments(read(dir.resolve("XposedInit.java")));
+        check(xp291.contains("if (force || nowForLog - lastProviderAt > PROVIDER_LOG_INTERVAL_MS)"),
+                "T-35f 注入关键行不再看 su 退出码，一律经 Provider 回传（suOk 恒真的黑洞）", "");
+        check(xp291.contains("PROVIDER_LOG_INTERVAL_MS"), "T-35g 普通行回传有节流，不刷屏", "");
+        String prov291 = read(dir.resolve("ConfigProvider.java"));
+        check(prov291.contains("private void noteInject(String line)")
+                        && prov291.contains("INJECT_PREFS"),
+                "T-35h 收到注入行时记时间戳，供首页直接展示", "");
+        check(prov291.contains("public static long lastInject(Context ctx, String kind)"),
+                "T-35i 首页可读最近一次注入时间", "");
+        String main291 = read(dir.resolve("MainActivity.kt"));
+        check(main291.contains("private fun InjectStatusCard(dark: Boolean, onEnableAll: () -> Unit)")
+                        && main291.contains("ConfigProvider.lastInject(context, kind)"),
+                "T-35j 首页新增注入状态卡（四个 App 一屏可见）", "");
+        check(main291.contains("四个 App 全开"),
+                "T-35k 一键打开四个 App 的区域开关（默认全关是最常见的「没反应」）", "");
+        check(!main291.contains("每 8 秒整体挪动") && !main291.contains("（位置微移）"),
+                "T-35l 用户可见文案与 v2.9.0 的真隐藏同步，不再写「位置微移」", "");
+        check(versionAtLeast(gradle, 53, "2.9.1"),
+                "T-35m 版本号至少 vc53 / 2.9.1（后续版本继续叠加）", "");
+
+        // ---------- T-36 v2.9.2：直播间通道隔离 / B站只留右侧 / 悬浮球不被误藏 ----------
+        // 真机反馈：v2.9.1 之后抖音普通页也不动了，悬浮球点了没反应；快手导航栏正常；
+        // B站只有右侧点赞收藏评论可用。这一轮按「宁可少藏，不可误伤」重排。
+        System.out.println("== T-36 直播间隔离 / B站单区 / 悬浮球自保 ==");
+        String hook292 = stripComments(read(dir.resolve("DouyinHook.java")));
+        check(hook292.contains("private static final boolean LIVE_ROOM_HIDE = true;"),
+                "T-36a v2.9.4 直播间隐藏通道已启用（普通页由输入条结构闸隔离）", "");
+        check(hook292.contains("if (livePaused && !LIVE_ROOM_HIDE) {")
+                        && hook292.contains("scheduleCycle(1000);\n            return;"),
+                "T-36b 判定成立即整页恢复并结束本轮（不再按普通页规则藏直播页）", "");
+        check(!hook292.contains("Config.enableLive && liveDetected"),
+                "T-36c 直播不再参与「是否有区域可藏」的判定（不占普通页相位）", "");
+        check(hook292.contains("if (!LIVE_ROOM_HIDE || !Config.enableLive) {\n            showAll();"),
+                "T-36d 断闸或关开关时 hideLiveAreas 整页恢复，一个控件都不碰", "");
+        check(hook292.contains("boolean mT = isKuaishou && Config.enableKsTop;")
+                        && hook292.contains("dTop = on && isKuaishou && Config.enableKsTop;"),
+                "T-36e B站 顶部 / 底部 / 角落三项在 Hook 侧恒不生效（只留右侧）", "");
+        String conf292 = stripComments(read(dir.resolve("Config.java")));
+        check(conf292.contains("enableBiliTop = false;")
+                        && conf292.contains("enableBiliBottom = false;")
+                        && conf292.contains("enableBiliCorner = false;"),
+                "T-36f Config 加载时把 B站 三项归零（老配置残留不会变成假开关）", "");
+        String main292 = read(dir.resolve("MainActivity.kt"));
+        check(main292.contains("OptionRow(\"右侧点赞区\""),
+                "T-36g B站 功能页只剩「右侧点赞区」一行", "");
+        check(!main292.contains("state.enableBiliTop")
+                        && !main292.contains("state.enableBiliBottom")
+                        && !main292.contains("state.enableBiliCorner"),
+                "T-36h UI 不再引用 B站 已删三项（无假入口、无假计数）", "");
+        check(main292.contains("enableBiliTop = false,")
+                        && main292.contains("enableBiliCorner = false,"),
+                "T-36i 读盘时同步归零，保存会把老配置写成 0", "");
+        check(hook292.contains("private static boolean isOwnOverlay(View v)")
+                        && hook292.contains("ball.setTag(BALL_TAG);")
+                        && hook292.contains("ball.bringToFront();"),
+                "T-36j 悬浮球打标记并置顶（不会被当成右侧按钮列藏掉 / 盖住）", "");
+        check(hook292.contains("if (isOwnOverlay(v)) {\n            return;\n        }\n        if (isVideoApp"),
+                "T-36k hideSafe 入口直接跳过模块自己的悬浮层", "");
+        // hideSafe / transparentDeep 各 1 处（定义处写法不同，单独校验）
+        check(countLiteral(hook292, "isOwnOverlay(v)") >= 2
+                        && hook292.contains("private static boolean isOwnOverlay(View v)"),
+                "T-36l hideSafe 与 transparentDeep 都跳过悬浮层（双保险，引用="
+                        + countLiteral(hook292, "isOwnOverlay(v)") + "）", "");
+        check(hook292.contains("+ \" ball=\" + (ballView != null ? 1 : 0)"),
+                "T-36m 诊断行带 ball= / fs= / lrh=，球没出来能一眼定位", "");
+        check(versionAtLeast(gradle, 54, "2.9.2"),
+                "T-36n 版本号升到 vc54 / 2.9.2", "");
+        check(!hook292.contains("s.equals(\"直播\")") && !hook292.contains("up.contains(\"LIVE\")"),
+                "T-36o 文案判定不再认单独的「直播」tab（普通推荐页被误判的根因）", "");
+        check(hook292.contains("!hasTab && (hasLiveInput || videoLivePage)")
+                        && hook292.contains("hasLiveInputBar(root, 0)"),
+                "T-36p 暂停必须「底部有输入条 且 没有首页 Tab」，双结构闸压过文案", "");
+
+        // ---------- T-37 v2.9.3：快手右侧列的四个确定缺陷 ----------
+        // 真机反馈「快手导航栏正常、右侧按钮区从来没生效过」。从代码上能指出四处
+        // 互相独立的否决点，任何一处成立都足够让右侧一列完全不动。
+        System.out.println("== T-37 快手右侧列四处否决点 ==");
+        String hook293 = stripComments(read(dir.resolve("DouyinHook.java")));
+        check(!hook293.contains("rh <= 0.22f"),
+                "T-37a 22% 高度硬上限已删除（它把整列 25%~45% 全部否决）", "");
+        check(hook293.contains("return rh <= 0.30f || rw <= 0.22f;"),
+                "T-37b 整列按「窄」而不是「矮」放行（宽度才是按钮列与内容卡片的区别）", "");
+        check(hook293.contains("if (rh <= 0.02f || rh > 0.50f)"),
+                "T-37c 高度上限放到 50%，覆盖抖音式 6 按钮长列", "");
+        check(hook293.contains("private static View findBottomDock(View v, int depth)"),
+                "T-37d 新增「底部主 Tab 栏」结构判定", "");
+        check(hook293.contains("videoLivePage = textHit && findBottomDock(root, 0) == null"),
+                "T-37e 直播判定必须过结构闸（推荐流文案提到「直播间」不再整页停摆）", "");
+        check(hook293.contains("RIGHT cleared (none found this round)"),
+                "T-37f 本轮收不到右侧容器即清空旧列表（不再拿邻页 View 反复隐藏）", "");
+        check(hook293.contains("lastRightReject") && hook293.contains("\" rrej=\""),
+                "T-37g 诊断行带 rrej=，能区分「没收到」与「收到了被形状否决」", "");
+        check(hook293.contains("private static void collectRightIcons(View v, List<View> out, int depth)"),
+                "T-37h 右缘图标列兜底收集器仍在（整宽浮层结构下的唯一入口）", "");
+        // 漏恢复：旧列表被 clear 掉时，正在隐藏的 View 再也没有引用，永久不显示。
+        // 用户说的「看别的视频时导航栏突然消失」就是这条。
+        check(hook293.contains("private static void releaseAll(List<View> olds, List<View> keep)"),
+                "T-37j 新增旧视图释放器（丢弃前先恢复）", "");
+        check(hook293.contains("releaseAll(rightList, rights)")
+                        && hook293.contains("releaseAll(rightList, null)"),
+                "T-37k 右侧列表替换与清空两条路径都先恢复", "");
+        check(hook293.contains("releaseAll(bottomList, bottoms)"),
+                "T-37l 底部列表替换同样先恢复", "");
+        int deepCalls = countLiteral(hook293, "showDeep(topBar)")
+                + countLiteral(hook293, "showDeep(rightTop)")
+                + countLiteral(hook293, "showDeep(leftTop)");
+        check(deepCalls >= 3,
+                "T-37m 顶部栏 / 右上 / 左上被替换时也恢复（共 " + deepCalls + " 处）", "");
+        check(versionAtLeast(gradle, 55, "2.9.3"),
+                "T-37i 版本号升到 vc55 / 2.9.3", "");
+
+        // ---------- T-38 v2.9.4：日志黑洞 / 直播间启用 / 感谢名单 ----------
+        // 真机日志只有 SystemUI 心跳，四个视频 App 的 ENTER/INJECTED/HOOK 一行都没有，
+        // 但抖音页面上确实有模块挂的悬浮球 —— 说明注入成功、只是日志回传全丢。
+        System.out.println("== T-38 日志黑洞修复 / 直播间硬闸 / 感谢名单 ==");
+        String prov294 = stripComments(read(dir.resolve("ConfigProvider.java")));
+        String conf294 = stripComments(read(dir.resolve("ConfStore.java")));
+        check(prov294.contains("new java.io.File(ctx.getFilesDir(), HOOK_LOG_FILE)"),
+                "T-38a 注入进程日志改写 App 私有 files 目录（分区存储不再拦）", "");
+        check(!prov294.contains("new java.io.File(ConfStore.LOG_FILE)"),
+                "T-38b 不再直写 /sdcard/Android 下不可写的 LOG_FILE", "");
+        check(conf294.contains("public static String hookLogFile()")
+                        && conf294.contains("+ auditSrc + hookLogSrc"),
+                "T-38c exportLogs 把私有镜像一起 cat 进用户可见日志", "");
+        check(hook292.contains("private static final boolean LIVE_ROOM_HIDE = true;"),
+                "T-38d 直播间隐藏通道启用", "");
+        check(hook292.contains("private static boolean hasLiveInputBar(View v, int depth)")
+                        && hook292.contains("说点什么"),
+                "T-38e 新增「底部输入条」硬结构闸（普通视频页无输入框）", "");
+        check(hook292.contains("!hasTab && (hasLiveInput || videoLivePage)"),
+                "T-38f 暂停判定必须同时过「无首页 Tab」与「输入条 / 文案」", "");
+        check(hook292.contains("LIVE_ROOM_HIDE && livePaused && Config.enableLive"),
+                "T-38g 直播页有自己的进入隐藏窗口条件（否则三区永不执行）", "");
+        check(hook292.contains("private static boolean hideLiveCandidate(View v, String what)")
+                        && hook292.contains("containsDynamicUi(v, 0)")
+                        && hook292.contains("containsVideoSurface(v, 0)")
+                        && hook292.contains("tooBigToHide(v)")
+                        && hook292.contains("!safeToHide(v, what)"),
+                "T-38h 直播间候选四道排除：输入 / 弹幕 / 画面 / 形状白名单一律不碰", "");
+        // v2.9.5：兜底保留（删掉会让三区几何常空的机型又「完全没反应」），
+        // 但每个候选按区域语义过门禁，且绝不碰底部输入条 / 弹幕区。
+        check(hook292.contains("liveTopList.isEmpty() && liveBottomList.isEmpty() && liveRightList.isEmpty()")
+                        && hook292.contains("hideLiveCandidate(topBar, \"top\")")
+                        && hook292.contains("hideLiveCandidate(v, \"right\")"),
+                "T-38i 三区全空才兜底，且候选按区域语义过门禁（v2.9.5）", "");
+        check(countLiteral(hook292, "hideLiveCandidate(v, \"bottom\")") == 1,
+                "T-38i2 底部候选只来自直播三区，兜底不碰输入条 / 弹幕区", "");
+        check(hook292.contains("\" lin=\"") && hook292.contains("\" lhid=\""),
+                "T-38j 诊断行带 lin / l3 / lhid，能定位直播卡在哪一层", "");
+        check(main292.contains("OptionRow(\"直播间隐藏\""),
+                "T-38k 抖音功能页恢复「直播间隐藏」开关", "");
+        check(main292.contains("酷安@bzm123123") && main292.contains("帮忙测试 ColorOS 15 环境"),
+                "T-38l 感谢名单新增 @bzm123123（ColorOS 15 测试）", "");
+        check(versionAtLeast(gradle, 56, "2.9.4"),
+                "T-38m 版本号升到 vc56 / 2.9.4", "");
+
+        // ---------- T-39 v2.9.5：「隐藏就挂」收紧 / 日志黑洞真因 ----------
+        // 真机：抖音直播间球「显」正常、切「藏」就挂；导出日志里 App 内 HOOK 行仍全空。
+        // 评审独立复核出 writeNow() 直写成功 return 把 providerLog() 整个旁路（确定性缺陷）。
+        System.out.println("== T-39 直播候选按区域收紧 / 日志回传不再被直写短路 ==");
+        String hook295 = stripComments(read(dir.resolve("DouyinHook.java")));
+        String xp295 = stripComments(read(dir.resolve("XposedInit.java")));
+        check(!hook295.contains("hideLiveCandidate(v, \"live\")"),
+                "T-39a 候选不再统一用 \"live\" 落到小控件分支（否则顶栏 / 礼物列全灭）", "");
+        check(hook295.contains("!safeToHide(v, what)") && hook295.contains("hideSafe(v, what);"),
+                "T-39b 直播候选复用已有 safeToHide，未新增阈值 / 开关", "");
+        check(hook295.contains("liveTopList.isEmpty() && liveBottomList.isEmpty() && liveRightList.isEmpty()"),
+                "T-39c 保留三区全空兜底，避免 ColorOS 上「完全没反应」", "");
+        check(countLiteral(hook295, "hideLiveCandidate(v, \"bottom\")") == 1,
+                "T-39d 兜底不碰 bottomList（输入条 / 弹幕区）", "");
+        check(xp295.contains("boolean directOk = false;") && xp295.contains("directOk = true;"),
+                "T-39e writeNow 用 directOk 标记直写结果，不再提前 return", "");
+        int directIf = xp295.indexOf("if (!directOk) {");
+        int providerCall = xp295.lastIndexOf("providerLog(line);");
+        check(directIf >= 0 && providerCall > directIf,
+                "T-39f providerLog 位于直写兜底块之后、无条件执行（不再被旁路）", "");
+        check(xp295.contains("!directOk") && xp295.contains("PROVIDER_LOG_INTERVAL_MS"),
+                "T-39g su 兜底只在直写失败时跑，回传仍保留 5 秒节流", "");
+        check(versionAtLeast(gradle, 57, "2.9.5"),
+                "T-39h 版本号升到 vc57 / 2.9.5", "");
+
+        // ---------- T-40 v2.9.6：红果「付费抢先看」弹窗常驻隐藏 ----------
+        // 用户：「红果把这个提示给隐藏了省的耽误我看短剧」。截图=红果付费页居中弹窗，
+        // 悬浮球在画面上=红果进程确已注入。安全审计定性：仅本地 UI 遮挡层 INVISIBLE，
+        // 不解锁播放 / 不替点按钮 / 不改付费逻辑；因此代码里严禁任何点击/广播/宿主业务调用。
+        // 三轮独立复核收敛：R1 事件驱动（不开周期，否则纯浮层页 tick 永不启动=假成功）、
+        // R2 最内层合格容器 + 55% 上限（宁可漏藏不误伤）、R3 强词门槛、
+        // R5 强词下沉到候选子树（删整屏放行，否则同屏弱词横幅被误藏）。
+        System.out.println("== T-40 红果付费弹窗常驻隐藏 / 事件驱动 / 强词下沉 / 零误伤 ==");
+        String hook296 = stripComments(read(dir.resolve("DouyinHook.java")));
+        String hook296raw = read(dir.resolve("DouyinHook.java"));
+        check(hook296.contains("private static final boolean DRAMA_PAYWALL_HIDE = true;")
+                        && hook296.contains("dramaPaywallList = new ArrayList<>()"),
+                "T-40a 编译期常量默认开 + 独立 View 列表（一键回退：常量改 false）", "");
+        check(hook296.contains("hideSafe(v, \"dramapaywall\")")
+                        && hook296.contains("releaseAll(dramaPaywallList, targets)"),
+                "T-40b 隐藏走已有 hideSafe 出口、恢复复用已有 releaseAll（对称不留永久 INVISIBLE）", "");
+        check(hook296.contains("DPH_KEYS") && hook296.contains("\"付费抢先看\"")
+                        && hook296.contains("\"0元抢先看\"") && hook296.contains("\"立即预约\""),
+                "T-40c 按截图实有文案识别（弱词），经已有 normText 归一化", "");
+        check(hook296.contains("DPH_STRONG_KEYS") && hook296.contains("\"应版权方要求\"")
+                        && hook296.contains("\"后续转免费\""),
+                "T-40d 强特征词门槛（避免推荐卡片/活动横幅误命中）", "");
+        check(countLiteral(hook296, "updateDramaPaywallHide();") == 3,
+                "T-40e 事件驱动三处调用点：onResume / onGlobalLayout / tick", "");
+        check(countLiteral(hook296, "startCycle();") == 1,
+                "T-40f 周期调度调用点仍只有 rescan 一处（DPH 靠事件驱动，未新增 startCycle 调用）", "");
+        check(hook296.contains("if (!isDrama || !DRAMA_PAYWALL_HIDE) {")
+                        && hook296.contains("releaseAll(dramaPaywallList, null)"),
+                "T-40g 非红果进程首分支直返并恢复（抖音/快手/B站/SystemUI 零影响、零 DPH 日志）", "");
+        check(hook296.contains("private static boolean dphStrongUnder(ViewGroup candidate, List<View> strongHits)")
+                        && hook296.contains("dphStrongUnder((ViewGroup) t, strongHits)")
+                        && hook296.contains("rejectedTargets"),
+                "T-40h R5 强词下沉到候选子树、被拒候选单独计数（不再整屏放行）", "");
+        check(!hook296.contains("dphHasStrong"),
+                "T-40i 整屏放行闸 dphHasStrong 已彻底删除（同屏弱词横幅不会被误藏）", "");
+        check(hook296.contains("g.getWidth() > sw * 0.55f || g.getHeight() > sh * 0.55f")
+                        && !hook296.contains("g.getWidth() > sw * 0.70f"),
+                "T-40j 尺寸安全上限收紧到 55%（R2 最内层合格容器，宁可漏藏不误伤）", "");
+        check(hook296.contains("\"DPH n=\"") && hook296.contains("\" hits=\"")
+                        && hook296.contains("\" rej=\""),
+                "T-40k 诊断三态 n/hits/rej（下一份真机日志可区分没弹窗/被尺寸判掉/被强词挡掉）", "");
+        check(!hook296.contains("performClick") && !hook296.contains("dispatchTouchEvent")
+                        && !hook296.contains("sendBroadcast")
+                        && hook296raw.contains("隐藏提示") ,
+                "T-40l 绝不自动点击/发广播/调宿主业务，且注释明确「隐藏提示≠解锁播放」边界", "");
+        check(hook296.contains("!v.isAttachedToWindow()")
+                        && hook296raw.contains("绝对不要加 isShown"),
+                "T-40m 收集只判 GONE+attach、INVISIBLE 仍算命中（避免自我恢复闪烁）", "");
+        check(versionAtLeast(gradle, 58, "2.9.6"),
+                "T-40n 版本号升到 vc58 / 2.9.6", "");
+
+        // v2.9.7：台账 #4 收口——恢复路径只撤销本模块造成的 INVISIBLE+alpha0，
+        // 绝不把宿主自设 GONE 点亮、绝不把宿主半透明 alpha 拉平。评审独立复核后
+        // 定稿 A′：showDeep 内换 resetTranslationOnly，resetShift/applyShift 本体不动。
+        System.out.println("== T-41 恢复路径只撤销本模块隐藏态 / 零新状态 / 一键回退 ==");
+        String hook297 = stripComments(read(dir.resolve("DouyinHook.java")));
+        String hook297raw = read(dir.resolve("DouyinHook.java"));
+        // 截取 showDeep 方法体做「分支内」判定，避免与 resetShift/applyShift 里的同名判断混淆
+        String sdBody = "";
+        {
+            int i = hook297.indexOf("private static void showDeep(View v)");
+            int j = hook297.indexOf("private static void resetTranslationOnly(View v)", i);
+            if (i >= 0 && j > i) {
+                sdBody = hook297.substring(i, j);
+            }
+        }
+        check(hook297.contains("private static final boolean SAFE_RESTORE = true;"),
+                "T-41a 编译期常量 SAFE_RESTORE 默认开（false 即逐字节回 v2.9.6，一键回退）", "");
+        check(sdBody.contains("if (!SAFE_RESTORE) {") && sdBody.contains("resetShift(v);")
+                        && sdBody.contains("!= View.VISIBLE") && sdBody.contains("!= 1f"),
+                "T-41b 回退分支保持 v2.9.6 原逻辑（无条件 resetShift + 两处越界恢复）", "");
+        {
+            int k = sdBody.indexOf("resetTranslationOnly(v);");
+            String falsePart = k > 0 ? sdBody.substring(0, k) : sdBody;
+            String truePart = k > 0 ? sdBody.substring(k) : "";
+            check(k > 0 && falsePart.contains("!= View.VISIBLE") && falsePart.contains("!= 1f")
+                            && truePart.contains("== View.INVISIBLE") && truePart.contains("== 0f")
+                            && !truePart.contains("!= View.VISIBLE") && !truePart.contains("!= 1f"),
+                    "T-41c 两分支隔离：回退分支保留越界语义，收紧分支只撤销 INVISIBLE+alpha0", "");
+        }
+        check(hook297.contains("private static void resetTranslationOnly(View v)"),
+                "T-41d 新增专用方法：只归零 translation", "");
+        {
+            int i = hook297.indexOf("private static void resetTranslationOnly(View v)");
+            int j = hook297.indexOf("\n    }", i);
+            String nb = (i >= 0 && j > i) ? hook297.substring(i, j) : "";
+            check(nb.contains("setTranslationX") && !nb.contains("setAlpha")
+                            && !nb.contains("setVisibility"),
+                    "T-41e resetTranslationOnly 绝不碰 alpha / visibility（复位不越界）", "");
+        }
+        check(hook297.contains("private static void resetShift(View v)")
+                        && countLiteral(hook297, "v.getAlpha() != 1f") == 3,
+                "T-41f resetShift/applyShift 本体逐字节未改（另 5 处调用零影响，红线守住）", "");
+        check(hook297raw.contains("台账 #4") && hook297raw.contains("v2.9.7")
+                        && hook297raw.contains("DPH 复用 showDeep()"),
+                "T-41g 类注释与 R4 注释同步标注 v2.9.7 统一处理、DPH 一并受益", "");
+        check(versionAtLeast(gradle, 59, "2.9.7"),
+                "T-41h 版本号曾升到 vc59 / 2.9.7（历史下限，保持）", "");
+
+        // ---------- T-42 3.0 稳定版：版本号 / Obtainium 递增锚点 ----------
+        // 3.0 稳定版：功能代码沿用 v2.9.7 定稿，仅版本号进阶；tag 序号 = versionCode，
+        // Obtainium 靠 versionCode 递增识别更新，故 vc60 / 3.0 是发布契约的一部分；
+        // v3.0.1 仅做可观测性修复，锚点随版递增为 vc61 / 3.0.1；
+        // v3.0.2 修三处几何识别 bug，锚点递增为 vc62 / 3.0.2；
+        // v3.0.3 右上角安全修复 + 两处只读探测，锚点递增为 vc63 / 3.0.3。
+        System.out.println("== T-42 3.0 稳定版版本号 / 发布契约 ==");
+        check(versionAtLeast(gradle, 60, "3.0"),
+                "T-42a 版本号升到 vc60 / 3.0 稳定版（Obtainium 递增识别）", "");
+        {
+            Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
+            Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
+            boolean ok = cm.find() && nm.find()
+                    && Integer.parseInt(cm.group(1)) == 68
+                    && "3.0.8".equals(nm.group(1));
+            check(ok, "T-42b versionCode 恰为 68 / versionName 恰为 3.0.8（非区间，锁死发布锚点）", "");
+        }
+        check(hook297raw.contains("SAFE_RESTORE") && hook297raw.contains("DRAMA_PAYWALL_HIDE"),
+                "T-42c 3.0 沿用 v2.9.7/v2.9.6 定稿功能（恢复路径 + 红果弹窗均在）", "");
+
+        // ---------- T-43 v3.0.1 Quick Flow 可观测性修复 ----------
+        // 真机日志证明视频 App 进程从未被注入，五处隐藏区域代码一行没跑；
+        // 本轮只让「注没注入 / 该怎么修」可见，不碰几何算法与注入链。三条分别锁 P1/P2/P3。
+        System.out.println("== T-43 v3.0.1 可观测性修复 ==");
+        String selfBody = slice(confStore, "private static void appendSelfCheck()", "private static void appendRaw(");
+        String readAllBody = slice(confStore, "private static String readAllLogs()", "private static String readHookMirror()");
+        String mirrorBody = slice(confStore, "private static String readHookMirror()", "private static String mergeUniqueLines");
+        String mergeBody = slice(confStore, "private static String mergeUniqueLines", "private static String enterHits()");
+        check(selfBody.contains("readAllLogs()")
+                        && readAllBody.contains("readHookMirror()")
+                        && mirrorBody.contains("hookLogFile()")
+                        && mergeBody.contains("LinkedHashSet"),
+                "T-43a P1 接线核查：SELF 经 readAllLogs 纳入 hook 私有镜像，整行去重且不写回原始日志", "");
+        // 评审返工：不再只查源码文本。对真实编译产物里的 private static mergeUniqueLines 做行为验证。
+        // 该方法只依赖 LinkedHashSet、不触碰 Android API，故可在纯 JVM 用反射真调；
+        // setAccessible 是唯一放宽点，被测方法本体零改动。
+        {
+            boolean behaviorOk = false;
+            String detail = "未执行";
+            try {
+                Class<?> cc = Class.forName("io.github.wumisc.antiburn.ConfStore");
+                java.lang.reflect.Method m = cc.getDeclaredMethod("mergeUniqueLines", String[].class);
+                m.setAccessible(true);
+                // base 含重复行；mirror 含两条镜像独有行 + 两条与 base 完全相同的行。
+                // 期望：整行去重（不是按字段）、保序、镜像独有行确实进入结果、null/空源被跳过。
+                String base = "1000000000 [sys] BASE only\n"
+                        + "1000000001 [app] SHARED line\n"
+                        + "1000000002 [hook] DUP line\n";
+                String mirror = "1000000003 [hook] INJECTED Douyin\n"
+                        + "1000000001 [app] SHARED line\n"
+                        + "1000000004 [hook] HOOK app= douyin\n"
+                        + "1000000002 [hook] DUP line\n";
+                // 必须强转成 Object，否则 String[] 会被当作 invoke 的 varargs 数组本身，参数个数不匹配。
+                String out = (String) m.invoke(null, (Object) new String[]{base, mirror, null, ""});
+                List<String> got = new ArrayList<>();
+                for (String ln : out.split("\\r?\\n")) {
+                    if (!ln.isEmpty()) {
+                        got.add(ln);
+                    }
+                }
+                boolean dedup = got.size() == new LinkedHashSet<>(got).size();
+                boolean mirrorIn = got.contains("1000000003 [hook] INJECTED Douyin")
+                        && got.contains("1000000004 [hook] HOOK app= douyin");
+                boolean ordered = got.size() == 5
+                        && got.get(0).equals("1000000000 [sys] BASE only")
+                        && got.get(2).equals("1000000002 [hook] DUP line")
+                        && got.get(3).equals("1000000003 [hook] INJECTED Douyin")
+                        && got.get(4).equals("1000000004 [hook] HOOK app= douyin");
+                behaviorOk = dedup && mirrorIn && ordered;
+                detail = "输出 " + got.size() + " 行；整行去重=" + dedup + " 镜像行进入=" + mirrorIn + " 保序=" + ordered;
+            } catch (Throwable t) {
+                detail = "反射调用失败：" + t.getClass().getName() + " " + t.getMessage();
+            }
+            check(behaviorOk, "T-43a-behavior P1 mergeUniqueLines 真实行为：整行去重/保序/镜像行进入结果", detail);
+        }
+        int tipAt = main.indexOf("「未检测到」=");
+        String injectTip = tipAt >= 0 ? main.substring(tipAt, Math.min(main.length(), tipAt + 500)) : "";
+        String diagBody = slice(lsp, "static String diagnose(Context ctx)", "private static String lspLogDigest");
+        int doneAt = diagBody.indexOf("结论：作用域已勾齐");
+        String doneTip = doneAt >= 0 ? diagBody.substring(doneAt, Math.min(diagBody.length(), doneAt + 500)) : "";
+        check(injectTip.contains("重启手机") && injectTip.contains("dex")
+                        && injectTip.contains("不是只重启系统界面")
+                        && doneTip.contains("重启手机") && doneTip.contains("dex")
+                        && doneTip.contains("不是只重启系统界面"),
+                "T-43b P2 注入卡与作用域自检均含覆盖安装后需重启手机的指引（不是只重启系统界面）", "");
+        {
+            Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
+            Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
+            boolean ok = cm.find() && nm.find()
+                    && Integer.parseInt(cm.group(1)) == 68
+                    && "3.0.8".equals(nm.group(1));
+            // 与 T-42b 断言同源，是发布前的双重防回退锁，不冒充新增不变量（评审建议改标签）。
+            check(ok, "T-43c P3 版本锚点与 T-42b 双重锁定（发布前防回退，非新增不变量）", "");
+        }
+
+        // ---------- T-44 v3.0.2 三处几何 bug 修复：P1 下限 / 越界防护 / 版本锚点 ----------
+        // Bug A+B：scoreLeftTop 补 30px 尺寸下限，与 scoreLiveRight 同源，
+        // 让 0x0 阴影/布局代理容器拿 -1 分不再入选；其余评分函数一行未动。
+        // Bug C：v3.0.2 未承诺修好，只锁「right 门槛未放宽」；v3.0.3 仍不放宽门槛，
+        // 只补两处只读诊断（RDUMP / BDUMP），任何消除动作一律下轮。
+        System.out.println("== T-44 v3.0.2 三处几何识别 bug 修复（v3.0.3 延续门槛锁）==");
+        String dy302raw = read(dir.resolve("DouyinHook.java"));
+        {
+            String lt = stripComments(slice(dy302raw, "private static int scoreLeftTop(ViewGroup g)",
+                    "// ---------- 工具 ----------"));
+            String lr = stripComments(slice(dy302raw, "private static int scoreLiveRight(ViewGroup g)",
+                    "private static int scoreRightTop(ViewGroup g)"));
+            check(lt.contains("getWidth() < 30") && lt.contains("getHeight() < 30")
+                            && lr.contains("getWidth() < 30") && lr.contains("getHeight() < 30"),
+                    "T-44a P1 scoreLeftTop 已补 30px 尺寸下限且与 scoreLiveRight 同源", "");
+        }
+        {
+            String rt = stripComments(slice(dy302raw, "private static int scoreRightTop(ViewGroup g)",
+                    "private static int scoreLeftTop(ViewGroup g)"));
+            // 基线中 rw 门槛只有 `rw >= 0.30f`（否决）与 `rw <= 0.22f`（大列放行），
+            // 不存在 `rw >= 0.22f`；一旦出现后者即门槛被放宽，必须 FAIL。
+            boolean gateOk = countLiteral(dy302raw, "rw >= 0.30f") >= 1
+                    && countLiteral(dy302raw, "rw <= 0.22f") >= 1
+                    && countLiteral(dy302raw, "rw >= 0.22f") == 0;
+            // v3.0.3 P1 已在本方法补上 30px 下限；本锁同步为「下限已补 + 门槛未放宽」，
+            // 与 T-45b 的四方法零新增下限互补，任何一侧回退都会 FAIL。
+            check(rt.contains("getWidth() < 30") && rt.contains("getHeight() < 30") && gateOk,
+                    "T-44b 同步 v3.0.3：scoreRightTop 已补 30px 下限、right 门槛未放宽", "");
+        }
+        {
+            Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
+            Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
+            boolean ok = cm.find() && nm.find()
+                    && Integer.parseInt(cm.group(1)) == 68
+                    && "3.0.8".equals(nm.group(1));
+            check(ok, "T-44c 版本号恰为 68 / 3.0.8（发布锚点）", "");
+        }
+
+        // ---------- T-45 v3.0.3 右上角安全修复 + 两处只读探测越界防护 ----------
+        // P1：scoreRightTop 补 30px 下限，与 scoreLeftTop / scoreLiveRight 同源。
+        // P2/P3：RDUMP / BDUMP 只采集不隐藏；本轮门槛与隐藏函数一律不放宽。
+        System.out.println("== T-45 v3.0.3 右上角安全修复 + 只读探测 ==");
+        String dy303raw = read(dir.resolve("DouyinHook.java"));
+        {
+            String rt = stripComments(slice(dy303raw, "private static int scoreRightTop(ViewGroup g)",
+                    "private static int scoreLeftTop(ViewGroup g)"));
+            String lt = stripComments(slice(dy303raw, "private static int scoreLeftTop(ViewGroup g)",
+                    "// ---------- 工具 ----------"));
+            String lr = stripComments(slice(dy303raw, "private static int scoreLiveRight(ViewGroup g)",
+                    "private static int scoreRightTop(ViewGroup g)"));
+            check(rt.contains("getWidth() < 30") && rt.contains("getHeight() < 30")
+                            && lt.contains("getWidth() < 30") && lt.contains("getHeight() < 30")
+                            && lr.contains("getWidth() < 30") && lr.contains("getHeight() < 30"),
+                    "T-45a P1 scoreRightTop 30px 下限已补且与 scoreLeftTop/scoreLiveRight 同源", "");
+        }
+        {
+            String ci = stripComments(slice(dy303raw, "private static void collectRightIcons(",
+                    "/** 单个「右缘小按钮」的准入"));
+            String ri = stripComments(slice(dy303raw, "private static boolean rightIconOk(",
+                    "/** 竖向摊开校验"));
+            String st = stripComments(slice(dy303raw, "private static boolean safeToHide(",
+                    "/** 隐藏单个区域的唯一出口"));
+            String sr = stripComments(slice(dy303raw, "private static int scoreRight(ViewGroup g)",
+                    "private static int scoreRightEdge(ViewGroup g)"));
+            boolean noNewLimit = !ci.contains("getWidth() < 30") && !ri.contains("getWidth() < 30")
+                    && !st.contains("getWidth() < 30") && !sr.contains("getWidth() < 30");
+            boolean gateOk = countLiteral(dy303raw, "rw >= 0.30f") >= 1
+                    && countLiteral(dy303raw, "rw <= 0.22f") >= 1
+                    && countLiteral(dy303raw, "rw >= 0.22f") == 0;
+            check(noNewLimit && gateOk,
+                    "T-45b 越界防护：四个红线方法无新增 30px 下限、rw>=0.30f 未变且无 rw>=0.22f", "");
+        }
+        {
+            Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
+            Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
+            boolean ok = cm.find() && nm.find()
+                    && Integer.parseInt(cm.group(1)) == 68
+                    && "3.0.8".equals(nm.group(1));
+            check(ok, "T-45c 版本号恰为 68 / 3.0.8（发布锚点）", "");
+        }
+
+        // ---------- T-46 v3.0.4 快手右侧作者栏放行（用户授权绕 rw>=0.30 红线） ----------
+        // 全部断言基于去注释后的源码文本 + 相对顺序，不依赖插桩后绝对行号。
+        // 结束锚点统一采用全文唯一、单行方法声明字面量（D4 修订），不用多行注释首行。
+        System.out.println("== T-46 v3.0.4 快手右侧作者栏放行 ==");
+        String dy304raw = read(dir.resolve("DouyinHook.java"));
+        // 结束锚点 hideSafe( 真实存在且紧跟 safeToHide 之后：slice 精确停在 safeToHide 方法末尾
+        String st = stripComments(slice(dy304raw, "private static boolean safeToHide(",
+                "private static void hideSafe("));
+        {
+            // ① 分支位置（视频之后、门槛之前）—— 钉死「分支不得上移绕过视频否决」
+            int videoAt = st.indexOf("containsVideoSurface(v, 0)");
+            int p1At = st.indexOf("isKuaishou && \"right\".equals(what)");
+            int rwAt = st.indexOf("rw >= 0.30f");
+            int rwVarAt = st.indexOf("float rw =");
+            check(videoAt >= 0 && p1At > videoAt && p1At < rwAt && p1At < rwVarAt,
+                    "T-46a P1 分支位于 containsVideoSurface 之后、rw>=0.30f 之前", "");
+        }
+        {
+            // ② 双特征 + 门控 + 视频自查齐全 —— 钉死「头像+关注双特征同时命中」
+            String p1 = slice(st, "if (isKuaishou && \"right\".equals(what)", "return true;");
+            boolean t46Features = p1.contains("AvatarWithPendantView")
+                    && p1.contains("FollowButtonView")
+                    && p1.contains("!containsVideoSurface(v, 0)")
+                    && countLiteral(p1, "hasChildByClass(") == 2;
+            check(t46Features, "T-46b P1 条件齐全：isKuaishou + 头像 + 关注 + !视频", "");
+        }
+        {
+            // ②b（S3）单维面积上限表达式锁 —— 钉死「视频不藏的结构性保证不被删/不放宽」
+            String p1 = slice(st, "if (isKuaishou && \"right\".equals(what)", "return true;");
+            boolean areaCap = p1.contains("v.getWidth() <= w * 0.50f")
+                    && p1.contains("v.getHeight() <= h * 0.50f")
+                    && countLiteral(p1, "0.50f") == 2
+                    && !p1.contains("w * 0.60f") && !p1.contains("h * 0.60f");
+            check(areaCap, "T-46f P1 单维面积上限 <=0.50f 双维俱在且阈值未放宽", "");
+        }
+        {
+            // ③ 通用门槛 + tooBigToHide 零改动（含 return false / 运算符字面锁）
+            String p1 = slice(st, "if (isKuaishou && \"right\".equals(what)", "return true;");
+            boolean gates = countLiteral(st, "rw >= 0.30f") == 1
+                    && countLiteral(st, "rh <= 0.02f || rh > 0.50f") == 1
+                    && countLiteral(st, "return rh <= 0.30f || rw <= 0.22f;") == 1
+                    && !p1.contains("rw >= 0.30f") && !p1.contains("rh > 0.50f")
+                    && !p1.contains("return rh <=");
+            String g2716 = slice(st, "if (rw >= 0.30f)", "if (rh <=");
+            String g2719 = slice(st, "if (rh <= 0.02f || rh > 0.50f)", "return rh <=");
+            boolean gateLogic = g2716.contains("return false;")
+                    && g2719.contains("return false;")
+                    && countLiteral(st, "|| rh > 0.50f") == 1
+                    && countLiteral(st, "return rh <= 0.30f || rw <= 0.22f;") == 1;
+            String t46hs = stripComments(slice(dy304raw, "private static void hideSafe(",
+                    "private static boolean isOwnOverlay("));
+            String tbg = stripComments(slice(dy304raw, "private static boolean tooBigToHide(",
+                    "private static void updateShiftPhase("));
+            boolean tbgLogic = tbg.contains("v.getWidth() > sw * 0.45f && v.getHeight() > sh * 0.45f")
+                    && tbg.contains("return v.getWidth() > sw * 0.45f && v.getHeight() > sh * 0.45f;")
+                    && tbg.contains("return false;");
+            check(gates && gateLogic && tbgLogic && t46hs.contains("if (tooBigToHide(v))"),
+                    "T-46c 2716/2719/2722 逐字未改（含 return false/|| 运算符），tooBigToHide 双超 && 45% 未改", "");
+        }
+        {
+            // ④ 视频检查仍是首个实质判定（P2 会在其 if 体内加赋值，故不写「方法体第二个 if」）
+            int nullAt = st.indexOf("if (v == null)");
+            int firstIfAt = st.indexOf("if (", nullAt + 10);
+            String firstIf = st.substring(firstIfAt, st.indexOf("\n", firstIfAt));
+            check(st.indexOf("containsVideoSurface") < st.indexOf("screenW(v)")
+                            && firstIf.contains("containsVideoSurface(v, 0)"),
+                    "T-46d containsVideoSurface 仍是 safeToHide 首个实质判定", "");
+        }
+        {
+            // ⑤ 版本锚点 + 辅助方法只读性
+            Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
+            Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
+            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 68
+                    && "3.0.8".equals(nm.group(1));
+            String helper = stripComments(slice(dy304raw, "private static boolean hasChildByClass(View v, String target)",
+                    "private static int scoreRight(ViewGroup g)"));
+            boolean readonly = helper.contains("MAX_DEPTH") && helper.contains("catch (Throwable")
+                    && !helper.contains("setVisibility") && !helper.contains("setAlpha")
+                    && !helper.contains("setTranslation");
+            check(ver && readonly, "T-46e 版本 68/3.0.8；hasChildByClass 有深度上限+异常收敛且只读", "");
+        }
+
+        // ---------- T-47 v3.0.5 底部标题栏只读探针 TDUMP ----------
+        // 本轮只探测不隐藏：三条分别锁「接入 + 独立节流」「方法体零状态修改 + 接入位置」「版本锚点」。
+        System.out.println("== T-47 v3.0.5 TDUMP 底部标题栏只读探测 ==");
+        String dy305raw = read(dir.resolve("DouyinHook.java"));
+        {
+            String rescanBody = slice(dy305raw, "private static void rescan(ViewGroup root)",
+                    "// 直播间专用三区收集。");
+            boolean wired = rescanBody.contains("dumpBottomTitles(root);")
+                    && countLiteral(dy305raw, "TDUMP") >= 1
+                    && countLiteral(dy305raw, "lastTitleDumpAt") >= 1;
+            check(wired, "T-47a P1 dumpBottomTitles(root) 已接入 rescan，TDUMP 前缀与 lastTitleDumpAt 独立节流存在", "");
+        }
+        {
+            // 锚点均取全文唯一的单行方法声明，截取精确停在 RDUMP 定义前（不用多行注释首行）。
+            String probeBody = slice(dy305raw, "private static void dumpBottomTitles",
+                    "private static void dumpRightIcons");
+            String[] banned = {"setAlpha", "setVisibility", "hideSafe", "showDeep",
+                    "performClick", "setText", "setBackground"};
+            boolean readOnly = !probeBody.isEmpty();
+            for (String b : banned) {
+                readOnly = readOnly && countLiteral(probeBody, b) == 0;
+            }
+            String rescanBody = slice(dy305raw, "private static void rescan(ViewGroup root)",
+                    "// 直播间专用三区收集。");
+            int badgeAt = rescanBody.indexOf("dumpBadges(root);");
+            int titleAt = rescanBody.indexOf("dumpBottomTitles(root);");
+            boolean after = badgeAt >= 0 && titleAt > badgeAt;
+            check(readOnly && after,
+                    "T-47b P1 只读证明：两方法体零 View 状态修改，接入点在 dumpBadges(root) 之后",
+                    "banned=0 after=" + after);
+        }
+        {
+            Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
+            Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
+            boolean ok = cm.find() && nm.find()
+                    && Integer.parseInt(cm.group(1)) == 68
+                    && "3.0.8".equals(nm.group(1));
+            check(ok, "T-47c 版本号恰为 68 / 3.0.8（v3.0.8 发布锚点）", "");
+        }
+
+        // ---------- T-48 v3.0.6 三处精准隐藏（红点禁藏为开发门禁，缺一即失败） ----------
+        // 三条负向断言统一用 count(regex)（Pattern.find 真计数），不用 countLiteral("A|B|C") 空断言。
+        System.out.println("== T-48 v3.0.6 P1 点赞栏 / P2 红点 / P3 标题栏 ==");
+        String dy306 = read(dir.resolve("DouyinHook.java"));
+        String cfg306 = read(dir.resolve("Config.java"));
+        String act306 = read(dir.resolve("MainActivity.kt"));
+        {
+            // P1a：放行分支存在 + 位置 + 双门锁（开关先于 id 匹配，防挪到分支外绕过）
+            String p1Body = slice(dy306, "v3.0.4 P1 插入点结束", "float rw =");
+            boolean shape = p1Body.contains("matchesActionButtonId(v)")
+                    && p1Body.contains("v.getWidth() <= w * 0.50f")
+                    && p1Body.contains("!containsVideoSurface(v, 0)")
+                    && p1Body.contains("ksRightAllow = \"actions\"");
+            int swAt = p1Body.indexOf("Config.enableRightActions");
+            int idAt = p1Body.indexOf("matchesActionButtonId(v)");
+            boolean doubleGate = countLiteral(p1Body, "Config.enableRightActions") >= 1
+                    && swAt >= 0 && idAt >= 0 && swAt < idAt;
+            check(shape && doubleGate,
+                    "T-48-P1a P1 分支四要素齐 + enableRightActions 双门内嵌且先于 id 匹配", "");
+        }
+        {
+            // P1b：四 id 精确匹配 + 只读（R1 改 A：count(regex) 真挡 setter）
+            String body = slice(dy306, "private static boolean matchesActionButtonId(View v)",
+                    "private static int scoreRight(ViewGroup g)");
+            boolean ids = body.contains("\"like_button\"") && body.contains("\"comment_button\"")
+                    && body.contains("\"collect_button\"") && body.contains("\"forward_button\"");
+            boolean readOnly = count(body, "(setAlpha|setVisibility|setText)") == 0
+                    && body.contains("return false");
+            check(ids && readOnly,
+                    "T-48-P1b 四 id 精确匹配 + 只读无 setter + 异常 return false", "");
+        }
+        {
+            // P2a① 黑名单先行（语义判据，两处 indexOf 均须 >=0，挡 -1<x 假通过）
+            String col = slice(dy306, "private static void collectRedDots",
+                    "private static boolean isSmallBadgeChild");
+            int idxForbid = col.indexOf("isBadgeForbidden(c, parent)");
+            int idxSafe = col.indexOf("isBadgeSafe(c)");
+            boolean firstGate = idxForbid >= 0 && idxSafe >= 0 && idxForbid < idxSafe;
+            // P2a② 四类红线字面量齐备
+            String forbidBody = slice(dy306, "private static boolean isBadgeForbidden",
+                    "private static boolean isBadgeSafe");
+            boolean literals = forbidBody.contains("TextSwitcher")
+                    && forbidBody.contains("DuxTextView") && forbidBody.contains("\"0\"")
+                    && forbidBody.contains("DmtTextView") && forbidBody.contains("guq")
+                    && forbidBody.contains("isShortDigits(") && forbidBody.contains("none")
+                    && forbidBody.contains("milano_player_seekbar")
+                    && forbidBody.contains("featured_god_comment_tip")
+                    && forbidBody.contains("vip_badge");
+            // P2a③ 异常安全方向（catch 块内确有 return true）
+            int iCatch = forbidBody.indexOf("catch (Throwable");
+            boolean failClosed = iCatch >= 0 && forbidBody.substring(iCatch).contains("return true");
+            check(firstGate && literals && failClosed,
+                    "T-48-P2a 红点禁藏第一道：黑名单先行 + 四类红线字面量 + catch→禁藏", "");
+        }
+        {
+            // P2b① 白名单条目齐备
+            String safeBody = slice(dy306, "private static boolean isBadgeSafe",
+                    "HollowAvatarBadgeLayout 特殊处理");
+            boolean entries = safeBody.contains("SelectShapeView") && safeBody.contains("red_dot")
+                    && safeBody.contains("OnlineDotView") && safeBody.contains("online_dot")
+                    && safeBody.contains("DuxBadgeView") && safeBody.contains("1ky")
+                    && safeBody.contains("notify") && safeBody.contains("right_avatar_notify")
+                    && safeBody.contains("#fff73b68");
+            // P2b② 负向断言（R1 改 A）：白名单体出现任一黑名单判据/具名计数字面量即 FAIL
+            boolean noForbiddenInSafe = count(safeBody,
+                    "(DuxTextView|DmtTextView|TextSwitcher|isShortDigits|guq|\"0\")") == 0;
+            // P2b③ online_dot 四元 AND（bg=LayerDrawable + ≤80 双维）
+            boolean onlineAnd = safeBody.contains("LayerDrawable")
+                    && safeBody.contains("v.getWidth() <= 80")
+                    && safeBody.contains("v.getHeight() <= 80");
+            check(entries && noForbiddenInSafe && onlineAnd,
+                    "T-48-P2b① 白名单齐备 + ② 负向零越界(count regex) + ③ online_dot 四元 AND", "");
+        }
+        {
+            // P2b④ S2 精确枚举 + 六 equals 逐一锁 + 二次判定三件套（underBadgeLayout / cw>60 / 黑名单二次）
+            String smallBody = slice(dy306, "private static boolean isSmallBadgeChild",
+                    "private static void updateRedDots");
+            boolean exactOnly = countLiteral(smallBody, "matchesBadgeSemantic") == 0
+                    && smallBody.contains("isExactBadgeId");
+            String exactBody = slice(dy306, "private static boolean isExactBadgeId",
+                    "private static void updateRedDots");
+            String[] six = {"\"red_dot\".equals(id)", "\"online_dot\".equals(id)",
+                    "\"badge\".equals(id)", "\"notify\".equals(id)",
+                    "\"right_avatar_notify\".equals(id)", "\"1ky\".equals(id)"};
+            boolean sixOk = true;
+            for (String lit : six) {
+                sixOk = sixOk && countLiteral(exactBody, lit) == 1;
+            }
+            sixOk = sixOk && countLiteral(exactBody, ".equals(id)") == 6;
+            boolean secondGate = smallBody.contains("cw > 60")
+                    && smallBody.contains("isBadgeForbidden(v, null)");
+            String col = slice(dy306, "private static void collectRedDots",
+                    "private static boolean isSmallBadgeChild");
+            boolean underGate = col.contains("underBadgeLayout && isSmallBadgeChild(c)");
+            check(exactOnly && sixOk && secondGate && underGate,
+                    "T-48-P2b④ 精确枚举(非contains) + 六 equals 逐一 + 二次判定三件套", "");
+        }
+        {
+            // P2c 默认拒绝 + 红果门控 + 恢复提交
+            String upd = slice(dy306, "private static void updateRedDots",
+                    "private static void collectCaptions");
+            boolean gate = upd.contains("Config.enableRedDot") && upd.contains("!isDrama");
+            String safeBody = slice(dy306, "private static boolean isBadgeSafe",
+                    "HollowAvatarBadgeLayout 特殊处理");
+            boolean defaultDeny = countLiteral(safeBody, "return false") >= 1;
+            boolean commit = upd.contains("releaseAll") && upd.contains("redDotList.clear()");
+            check(gate && defaultDeny && commit,
+                    "T-48-P2c 默认拒绝 + !isDrama 门控 + releaseAll/clear 提交", "");
+        }
+        {
+            // P2d 恢复闭环：showAll + tick redOn 分支
+            String showBody = slice(dy306, "private static void showAll()",
+                    "/**\n     * 丢弃旧视图前先把它恢复显示");
+            boolean inShowAll = showBody.contains("for (View v : redDotList)");
+            boolean redOn = countLiteral(dy306, "boolean redOn") >= 1
+                    && countLiteral(dy306, "hideSmallSafe(v, \"reddot\")") >= 1
+                    && countLiteral(dy306, "showDeep(v)") >= 1;
+            check(inShowAll && redOn, "T-48-P2d 恢复闭环：showAll 遍历 redDotList + tick redOn 分支", "");
+        }
+        {
+            // P3a 三 App 锚点存在性
+            boolean a = dy306.contains("CaptionTextView") && dy306.contains("element_caption_label")
+                    && dy306.contains("ScrollMentionTextView") && dy306.contains("FeedDescParentLayout")
+                    && dy306.contains("\"desc\"")
+                    && dy306.contains("StoryTitleWidget") && dy306.contains("StoryInfoModule")
+                    && dy306.contains("\"title\"");
+            check(a, "T-48-P3a 快手/抖音/B站 三锚点齐备", "");
+        }
+        {
+            // P3b 排除项不变量：排除 id 在源码存在（说明锚点），但不在捕获条件内
+            String[] excl = {"user_name_text_view", "general_entry_title",
+                    "slide_play_photo_disclaimer_text", "StoryUpNameWidget", "creative_text"};
+            boolean present = true;
+            for (String e : excl) {
+                present = present && dy306.contains(e);
+            }
+            String capBody = slice(dy306, "private static void collectCaptions",
+                    "private static void updateCaptions");
+            boolean capClean = true;
+            for (String e : excl) {
+                capClean = capClean && !capBody.contains(e);
+            }
+            boolean douyinParent = capBody.contains("\"FeedDescParentLayout\".equals(pcls)");
+            check(present && capClean && douyinParent,
+                    "T-48-P3b 排除项存在但不在 collectCaptions 捕获条件内 + 抖音 parent 锚点", "");
+        }
+        {
+            // P3c 红果门控 + 专用隐藏出口（R1 改 A）：safeToHide 新增 caption/reddot 分支即 FAIL
+            String upd = slice(dy306, "private static void updateCaptions",
+                    "private static boolean matchesRightSemantic");
+            boolean dramaOut = upd.contains("!isDrama");
+            String hideBody = slice(dy306, "private static void hideSmallSafe",
+                    "private static void showAll()");
+            boolean insurance = hideBody.contains("containsVideoSurface(v, 0)")
+                    && hideBody.contains("tooBigToHide(v)");
+            String stBody = slice(dy306, "private static boolean safeToHide",
+                    "private static void hideSafe(");
+            boolean noNewBranch = count(stBody, "(\"caption\"|\"reddot\")") == 0;
+            check(dramaOut && insurance && noNewBranch,
+                    "T-48-P3c !isDrama 门控 + hideSmallSafe 两通用保险 + safeToHide 零新增分支", "");
+        }
+        {
+            // SW-a Hook 侧三开关全链路
+            boolean decl = countLiteral(cfg306, "public static volatile boolean enableBottomCaption = false;") == 1
+                    && countLiteral(cfg306, "public static volatile boolean enableRightActions = false;") == 1
+                    && countLiteral(cfg306, "public static volatile boolean enableRedDot = false;") == 1;
+            boolean cases = cfg306.contains("case \"enable_bottom_caption\"")
+                    && cfg306.contains("case \"enable_right_actions\"")
+                    && cfg306.contains("case \"enable_red_dot\"");
+            boolean apply = cfg306.contains("enableBottomCaption = bc;")
+                    && cfg306.contains("enableRightActions = ra;")
+                    && cfg306.contains("enableRedDot = rd;");
+            check(decl && cases && apply, "T-48-SW-a Hook 侧三开关 字段+case+回写 全链路", "");
+        }
+        {
+            // SW-b App 侧三开关全链路
+            boolean state = act306.contains("val enableBottomCaption: Boolean = false")
+                    && act306.contains("val enableRightActions: Boolean = false")
+                    && act306.contains("val enableRedDot: Boolean = false");
+            boolean saver = act306.contains("Bool(40)") && act306.contains("Bool(41)")
+                    && act306.contains("Bool(42)");
+            boolean conf = act306.contains("b(map[\"enable_bottom_caption\"])")
+                    && act306.contains("b(map[\"enable_right_actions\"])")
+                    && act306.contains("b(map[\"enable_red_dot\"])")
+                    && act306.contains("lines[\"enable_bottom_caption\"]")
+                    && act306.contains("lines[\"enable_right_actions\"]")
+                    && act306.contains("lines[\"enable_red_dot\"]")
+                    && act306.contains("putB(\"enable_bottom_caption\"")
+                    && act306.contains("putB(\"enable_right_actions\"")
+                    && act306.contains("putB(\"enable_red_dot\"");
+            check(state && saver && conf, "T-48-SW-b App 侧 state+Saver+Bool(40/41/42)+AbConf load/save/diff 全链路", "");
+        }
+        {
+            // SW-snap 纯加性：旧索引 0-39 与旧默认值零改
+            String restoreBody = slice(act306, "restore = {", "object AbConf {");
+            boolean oldIdx = restoreBody.contains("Bool(39, false)")
+                    && restoreBody.contains("Bool(20, true)")
+                    && restoreBody.contains("Bool(26, true)")
+                    && restoreBody.contains("Bool(28)") && restoreBody.contains("Bool(37)");
+            boolean notClobber = countLiteral(restoreBody, "Bool(39)") == 0; // 旧末位仍 39，非 40
+            boolean newIdx = restoreBody.contains("Bool(40)") && restoreBody.contains("Bool(41)")
+                    && restoreBody.contains("Bool(42)");
+            String loadBody = slice(act306, "fun load(): AbState", "fun save(s: AbState)");
+            boolean oldDefault = loadBody.contains("b(map[\"enable_live\"], true)")
+                    && loadBody.contains("enableBiliTop = false")
+                    && loadBody.contains("enableBiliBottom = false")
+                    && loadBody.contains("enableBiliCorner = false");
+            boolean oldKeys = countLiteral(act306, "enable_ks_right") >= 1
+                    && countLiteral(act306, "enable_bili_right") >= 1;
+            check(oldIdx && notClobber && newIdx && oldDefault && oldKeys,
+                    "T-48-SW-snap 旧索引 0-39/旧默认值/旧键名零改，仅追加 Bool(40/41/42)", "");
+        }
+        {
+            // SW-c UI 入口 + 红果「待数据」置灰
+            boolean copies = countLiteral(act306, "copy(enableBottomCaption =") >= 1
+                    && countLiteral(act306, "copy(enableRightActions =") >= 1
+                    && countLiteral(act306, "copy(enableRedDot =") >= 1;
+            boolean dramaDisabled = act306.contains("disabledLabel = \"待数据\"");
+            check(copies && dramaDisabled, "T-48-SW-c 三开关 UI copy() 入口 + 红果待数据置灰", "");
+        }
+        {
+            // GUARD 越界：通用门槛逐字 + 视频否决顺序 + 零改方法体锚点
+            String guardSt = stripComments(slice(dy306, "private static boolean safeToHide",
+                    "private static void hideSafe("));
+            boolean gates = countLiteral(guardSt, "rw >= 0.30f") == 1
+                    && countLiteral(guardSt, "rh <= 0.02f || rh > 0.50f") == 1
+                    && countLiteral(guardSt, "return rh <= 0.30f || rw <= 0.22f;") == 1;
+            boolean order = guardSt.indexOf("containsVideoSurface(v, 0)") >= 0
+                    && guardSt.indexOf("AvatarWithPendantView") > guardSt.indexOf("containsVideoSurface(v, 0)")
+                    && guardSt.indexOf("matchesActionButtonId(v)") > guardSt.indexOf("AvatarWithPendantView");
+            String ci = stripComments(slice(dy306, "private static void collectRightIcons(",
+                    "/** 单个「右缘小按钮」的准入"));
+            String ri = stripComments(slice(dy306, "private static boolean rightIconOk(",
+                    "/** 竖向摊开校验"));
+            String tbg = stripComments(slice(dy306, "private static boolean tooBigToHide(",
+                    "private static void updateShiftPhase()"));
+            String tp = stripComments(slice(dy306, "private static void transparentDeep(",
+                    "private static void showAll()"));
+            boolean untouched = ci.contains("rightIconOk(c, w, h)") && ci.contains("stackedVertically(hits, h)")
+                    && ri.contains("getHeight()")
+                    && tbg.contains("v.getWidth() > sw * 0.45f && v.getHeight() > sh * 0.45f")
+                    && tp.contains("v.setVisibility(View.INVISIBLE)") && tp.contains("v.setAlpha(0f)");
+            boolean authorBranch = guardSt.contains("AvatarWithPendantView") && guardSt.contains("FollowButtonView");
+            check(gates && order && untouched && authorBranch,
+                    "T-48-GUARD 三门槛逐字 + 视频否决在作者栏/P1之前 + 零改方法体锚点", "");
+        }
+        {
+            // UPG 升级回归（源码级）：新键默认 false，老配置缺键 → 三功能全关
+            boolean cfgDefault = cfg306.contains("enableBottomCaption = false")
+                    && cfg306.contains("enableRightActions = false")
+                    && cfg306.contains("enableRedDot = false");
+            String loadBody = slice(act306, "fun load(): AbState", "fun save(s: AbState)");
+            boolean loadDefault = countLiteral(loadBody, "b(map[\"enable_bottom_caption\"])") == 1
+                    && countLiteral(loadBody, "b(map[\"enable_right_actions\"])") == 1
+                    && countLiteral(loadBody, "b(map[\"enable_red_dot\"])") == 1;
+            check(cfgDefault && loadDefault,
+                    "T-48-UPG 升级回归：三新键默认 false，老配置缺键三功能全关", "");
+        }
+        {
+            // VER 版本锚点：六处旧断言已同步 68/3.0.8（精确相等）
+            Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
+            Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
+            boolean ver = cm.find() && nm.find()
+                    && Integer.parseInt(cm.group(1)) == 68 && "3.0.8".equals(nm.group(1));
+            check(ver, "T-48-VER 版本锚点 68/3.0.8（T-42b~T-47c 六处已同步）", "");
+        }
+
+        // ---------- T-49 v3.0.7 定向隐藏通道 THH 测试锁（安全命门确定性守卫） ----------
+        // 所有数量 / 负向断言一律 count(regex)（Pattern.find 真计数），
+        // 禁止 countLiteral("A|B|C") 空断言——v3.0.6 R2 踩过。
+        System.out.println("== T-49 v3.0.7 定向隐藏通道 THH 测试锁 ==");
+        String dy307 = read(dir.resolve("DouyinHook.java"));
+        String cfg307 = read(dir.resolve("Config.java"));
+        String act307 = read(dir.resolve("MainActivity.kt"));
+        {
+            // A1 新增 7 个 helper：定义各恰 1 处，count(regex) 真计数
+            String[] defs = {
+                    "private static boolean isCountLike\\(",
+                    "private static boolean isOwnedElsewhere\\(",
+                    "private static boolean targetTextHit\\(",
+                    "private static boolean targetTextAll\\(",
+                    "private static boolean targetGeoOk\\(",
+                    "private static View targetLeafUp\\(",
+                    "private static void hideTargeted\\("
+            };
+            boolean ok = true;
+            for (String d : defs) {
+                ok = ok && count(dy307, d) == 1;
+            }
+            check(ok, "T-49-A1 新增 7 个 helper 定义齐备（各恰 1 处）", "");
+        }
+        {
+            // A2 唯一入口 + 4 collector + dump 探针
+            String[] defs = {
+                    "private static void updateTargetedHide\\(",
+                    "private static void collectKsLiveTargets\\(",
+                    "private static void collectDyLiveTargets\\(",
+                    "private static void collectKsFeedTargets\\(",
+                    "private static void collectDramaTargets\\(",
+                    "private static void dumpThhTargets\\("
+            };
+            boolean ok = true;
+            for (String d : defs) {
+                ok = ok && count(dy307, d) == 1;
+            }
+            check(ok, "T-49-A2 唯一入口 + 4 collector + dumpThhTargets 定义齐备", "");
+        }
+        {
+            // A3 四处调用接入（rescan 传 root 1 处 + tick/onResume/onGlobalLayout 传 null 3 处）
+            boolean ok = count(dy307, "updateTargetedHide\\(root\\)") == 1
+                    && count(dy307, "updateTargetedHide\\(null\\)") == 3;
+            check(ok, "T-49-A3 updateTargetedHide 四处调用接入（root×1 + null×3）", "");
+        }
+        {
+            // B1 数据命门负向：纯数字/带斜杠数字拒绝逻辑在，且 4 collector 全否决、无放行分支
+            String cb = stripComments(slice(dy307,
+                    "private static boolean isCountLike(CharSequence cs)",
+                    "private static boolean targetTextHit("));
+            String patternConst = stripComments(slice(dy307, "THH_COUNT_PATTERN =", ";"));
+            boolean reject = count(cb, "THH_COUNT_PATTERN\\.matcher\\(s\\)\\.matches\\(\\)") == 1
+                    && count(cb, "!s\\.isEmpty\\(\\) && s\\.length\\(\\) <= 24") == 1
+                    && count(patternConst, "\\[0-9\\]\\+\\(\\[\\./\\]\\[0-9\\]\\+\\)\\*") == 1;
+            boolean noPass = count(dy307, "if\\s*\\(\\s*isCountLike\\s*\\(") == 0
+                    && count(dy307, "!isCountLike\\(t\\)") == 4
+                    && count(dy307, "isCountLike\\(") == 5;
+            check(reject && noPass,
+                    "T-49-B1 数字命门：纯数字/斜杠数字拒绝逻辑 + 4 collector 全否决 + 零放行分支", "");
+        }
+        {
+            // B2 fail-closed 未削弱：isBadgeForbidden 的 catch→return true 仍在
+            String fb = slice(dy307, "private static boolean isBadgeForbidden", "private static boolean isBadgeSafe");
+            int iCatch = fb.indexOf("catch (Throwable");
+            boolean failClosed = iCatch >= 0 && count(fb.substring(iCatch), "return\\s+true\\s*;") == 1;
+            check(failClosed, "T-49-B2 isBadgeForbidden catch→return true fail-closed 未削弱", "");
+        }
+        {
+            // C1 施加路径：容器过 safeToHide，挡下走 showDeep，统一走 hideSmallSafe 出口
+            String ht = slice(dy307, "private static void hideTargeted(", "private static void applyTargetedList(");
+            boolean ok = count(ht, "container\\s*&&\\s*!safeToHide\\(v,\\s*what\\)") == 1
+                    && count(ht, "showDeep\\(v\\)") == 1
+                    && count(ht, "hideSmallSafe\\(v,\\s*what\\)") == 1
+                    && count(dy307, "hideTargeted\\(v,\\s*what,\\s*container\\)") == 1;
+            check(ok, "T-49-C1 施加路径：容器过 safeToHide + showDeep 恢复 + 统一 hideSmallSafe 出口", "");
+        }
+        {
+            // C2 视频保险（变异实证守卫）：hideSmallSafe 三保险 + targetLeafUp 视频否决真计数
+            String hsBody307 = slice(dy307, "private static void hideSmallSafe(", "private static void showAll()");
+            String tl = slice(dy307, "private static View targetLeafUp(", "private static boolean isOwnedElsewhere(");
+            boolean ok = count(hsBody307, "containsVideoSurface\\(v,\\s*0\\)") == 1
+                    && count(hsBody307, "tooBigToHide\\(v\\)") == 1
+                    && count(hsBody307, "isOwnOverlay\\(v\\)") == 1
+                    && count(tl, "containsVideoSurface\\(c,\\s*0\\)") == 1;
+            check(ok, "T-49-C2 视频保险：hideSmallSafe 三保险 + targetLeafUp 视频否决真计数", "");
+        }
+        {
+            // D1 纯加性：safeToHide 函数体零 target/直播/红果分支（count(regex)==0）
+            String stBody307 = stripComments(slice(dy307,
+                    "private static boolean safeToHide(View v, String what)", "private static void hideSafe("));
+            check(count(stBody307, "(?i)(target|kslive|dylive|ksfeed|dramainfo)") == 0,
+                    "T-49-D1 safeToHide 体内 target/kslive/dylive/ksfeed/dramainfo 零命中", "");
+        }
+        {
+            // D2 评分函数与基线逐字一致：count(".+") 锁行数 + SHA-256 锁字节
+            String[][] f = {
+                    {"scoreRight", "private static int scoreRight(ViewGroup g)",
+                            "private static void collectRightEdgeNode(", "59",
+                            "4a252baa9abe5eb0da1576173d04bc273ddc7634d1c40acc79ed52439d85082a"},
+                    {"scoreTop", "private static int scoreTop(ViewGroup g)",
+                            "private static void collectRightIcons(", "24",
+                            "7a7bc41e69473eaff467f322000f5f617957c23685a95a0c0e897a021903666a"},
+                    {"scoreBottom", "private static int scoreBottom(ViewGroup g)",
+                            "private static void collectLiveTopNode(", "36",
+                            "8e018e2df7bbbd80c77230f91c614779b07a6ead3c8762b618ea981c6daec994"}
+            };
+            boolean ok = true;
+            for (String[] x : f) {
+                String body = stripComments(slice(dy307, x[1], x[2]));
+                ok = ok && count(body, ".+") == Integer.parseInt(x[3]) && sha256(body).equals(x[4]);
+            }
+            check(ok, "T-49-D2 scoreRight/Top/Bottom 函数体与基线逐字一致（行数+SHA-256）", "");
+        }
+        {
+            // D3 v3.0.4 作者栏分支原样（Avatar + Follow + 单维 50% 三行）
+            String ab = stripComments(slice(dy307, "v3.0.4 P1 插入点 ", "v3.0.4 P1 插入点结束"));
+            boolean ok = count(ab, ".+") == 18
+                    && sha256(ab).equals("75be4a72e6cecc24c46f264a0792bd10813d0e5d715f81667a4ed3320aa9a218")
+                    && count(ab, "AvatarWithPendantView") == 1
+                    && count(ab, "FollowButtonView") == 1
+                    && count(ab, "0\\.50f") == 2;
+            check(ok, "T-49-D3 v3.0.4 作者栏分支（Avatar+Follow+单维50%）逐字原样", "");
+        }
+        {
+            // D4 livePaused 只读：赋值次数与基线 3 处一致，THH 新增区零写
+            String thh = dy307.substring(dy307.indexOf("private static boolean isCountLike(CharSequence cs)"));
+            boolean ok = count(dy307, "livePaused\\s*=") == 3 && count(thh, "livePaused\\s*=") == 0;
+            check(ok, "T-49-D4 livePaused 赋值 3 处与基线一致 + THH 区零写", "");
+        }
+        {
+            // D5 v2.9.4 hideLiveCandidate 与基线逐字一致（design §7.3 附加）
+            String hlc = stripComments(slice(dy307,
+                    "private static boolean hideLiveCandidate(View v, String what)", "private static void hideSmallSafe("));
+            check(count(hlc, ".+") == 39
+                            && sha256(hlc).equals("8d5a083613172d40b06549f8ff0eb9c6f6f38b64c3a811ffd681faea12985225"),
+                    "T-49-D5 hideLiveCandidate 函数体与基线逐字一致", "");
+        }
+        {
+            // E1 Config 四开关：4 boolean 字段 + 4 键名 case + 4 行回写
+            boolean ok = count(cfg307,
+                    "public static volatile boolean enable(KsLiveHits|DyLiveHits|KsFeedHits|DramaInfoHits) = false;") == 4
+                    && count(cfg307, "case \"enable_(ks_live_hits|dy_live_hits|ks_feed_hits|drama_info_hits)\"") == 4
+                    && count(cfg307, "enable(KsLiveHits|DyLiveHits|KsFeedHits|DramaInfoHits) = (ksl|dyl|ksf|dri);") == 4;
+            check(ok, "T-49-E1 Config 4 boolean 字段 + 4 键名 case + 4 回写", "");
+        }
+        {
+            // E2 MainActivity 四开关全链路：Bool(43..46) + 4 键 ×3 处 + state/copy
+            boolean idx = count(act307, "Bool\\(43\\)") == 1 && count(act307, "Bool\\(44\\)") == 1
+                    && count(act307, "Bool\\(45\\)") == 1 && count(act307, "Bool\\(46\\)") == 1;
+            boolean keys = count(act307,
+                    "\"enable_(ks_live_hits|dy_live_hits|ks_feed_hits|drama_info_hits)\"") == 12;
+            boolean state = count(act307,
+                    "val enable(KsLiveHits|DyLiveHits|KsFeedHits|DramaInfoHits): Boolean = false") == 4;
+            boolean copy = count(act307,
+                    "copy\\(enable(KsLiveHits|DyLiveHits|KsFeedHits|DramaInfoHits) =") == 4;
+            check(idx && keys && state && copy,
+                    "T-49-E2 MainActivity Bool(43..46) + 4 键 + state/copy 全链路", "");
+        }
+        {
+            // E3 旧 Bool(0..42) 零改：restore 旧段（到 Bool(43) 之前）逐字 + SHA-256
+            String oldRestore = slice(act307, "restore = {", "enableKsLiveHits = Bool(43)");
+            check(count(oldRestore, ".+") == 66
+                            && sha256(oldRestore).equals("0a32803e983c571cd763cead185c3d7616c6ed03ab764f67df1e3f0b96a6ad40"),
+                    "T-49-E3 旧 Bool(0..42) 零改（restore 旧段逐字）", "");
+        }
+        {
+            // F 变异实证守卫：评审注入「放行数字」→ B1 FAIL；「跳过 containsVideoSurface」→ C2 FAIL。
+            // 两条守卫都是 count(regex)，非 countLiteral 空断言，变异必然触发。
+            String hsF = slice(dy307, "private static void hideSmallSafe(", "private static void showAll()");
+            boolean guards = count(dy307, "if\\s*\\(\\s*isCountLike\\s*\\(") == 0
+                    && count(hsF, "containsVideoSurface\\(v,\\s*0\\)") == 1;
+            check(guards, "T-49-F 变异实证守卫：数字放行/跳过视频否决两变异均触发 FAIL", "");
+        }
+
+        // ---------- T-50-W v3.0.8 门控接线 / PII 静态守卫（文本审计，非行为） ----------
+        System.out.println();
+        System.out.println("== T-50-W v3.0.8 THH 门控接线与 PII 守卫 ==");
+        {
+            // W1 feed 接线：feed 调用恰 1 处，且返回值被 return（防「调了却丢弃」的假接线）；
+            //    DY_LIVE case 内不得再出现 && livePaused 直读门控。
+            String dyLiveCase = slice(dy307, "case SLOT_DY_LIVE: {", "case SLOT_KS_FEED:");
+            boolean feedOnce = count(dy307, "thhLiveGate\\.feed\\(") == 1;
+            boolean feedReturned = count(dyLiveCase, "return nowStable;") == 1
+                    && count(dyLiveCase, "thhLiveGate\\.feed\\(") == 1;
+            boolean noDirectGate = count(dyLiveCase, "&&\\s*livePaused") == 0;
+            check(feedOnce && feedReturned && noDirectGate,
+                    "T-50-W1 feed 恰 1 处 + 返回值被 return + 无 && livePaused 直读门控", "");
+        }
+        {
+            // W2 livePaused 零写：全文 3 处赋值与基线一致，isCountLike 之后的 THH 新增区零写。
+            String thhSlice = dy307.substring(dy307.indexOf("private static boolean isCountLike(CharSequence cs)"));
+            boolean ok = count(dy307, "livePaused\\s*=") == 3 && count(thhSlice, "livePaused\\s*=") == 0;
+            check(ok, "T-50-W2 livePaused 赋值 3 处 + 新增 THH 区零写（双锁）", "");
+        }
+        {
+            // W3 D5 PII 守卫（转写设计 §5.3 五条）：
+            //  ① dumpLiveUiNode 体内零 View 修改；
+            //  ② readMeta( 恰 0（不得回退会拼原文的旧方法；readMetaLite 不算）；
+            //  ③ txt= / desc= 拼接 0；
+            //  ④ readMetaLite 存在且被 dumpLiveUiNode 调用，其体内无文本 getter / txt= / desc=；
+            //  ⑤ LIVE_UI_KEYS 只被 dump 引用无 out.add，anchor 只经 safeDumpText 输出。
+            // 先去注释：javadoc 里写了「不得出现 getText/txt=」等禁用词，不去注释会假 FAIL。
+            String dumpNode = stripComments(slice(dy307, "private static void dumpLiveUiNode(", "private static String readMetaLite("));
+            String metaLite = stripComments(slice(dy307, "private static String readMetaLite(", "private static String safeDumpText("));
+            String safeText = stripComments(slice(dy307, "private static String safeDumpText(", "/** v3.0.7：计数签名"));
+            boolean noViewEdit = count(dumpNode,
+                    "setAlpha|setVisibility|setText|setLayoutParams|setTranslation|addView|removeView") == 0;
+            boolean noOldReadMeta = count(dumpNode, "readMeta\\(") == 0;
+            boolean noTextJoin = count(dumpNode, "txt=|desc=|shortText\\(|shortDesc\\(") == 0;
+            boolean liteExists = count(dy307, "private static String readMetaLite\\(") == 1
+                    && count(dumpNode, "readMetaLite\\(") >= 1;
+            boolean liteClean = count(metaLite,
+                    "getText|getContentDescription|shortText|shortDesc|txt=|desc=") == 0;
+            boolean anchorSafe = count(safeText, "LIVE_UI_KEYS") >= 1
+                    && count(safeText, "<omitted>") == 1
+                    && count(dy307, "out\\.add") >= 1; // 既有探针的 out.add 仍在，但 dump 片段内不新增
+            boolean dumpNoOutAdd = count(dumpNode, "out\\.add") == 0
+                    && count(dumpNode, "anchor=") >= 1
+                    && count(dumpNode, "safeDumpText\\(") >= 1;
+            check(noViewEdit && noOldReadMeta && noTextJoin && liteExists && liteClean
+                            && anchorSafe && dumpNoOutAdd,
+                    "T-50-W3 dumpLiveUiNode 零改写/无 readMeta(/无 txt=desc=/readMetaLite 干净/anchor 白名单", "");
+        }
+        {
+            // W4 门控常量锁定（防靶场跑的类与真机不同源）：门控常量在 ThhLiveGate 内、Hook 只实例化不改。
+            Path gateSrc = dir.resolve("ThhLiveGate.java");
+            boolean gateClassExists = Files.exists(gateSrc);
+            String gate = gateSrc.toFile().exists() ? read(gateSrc) : "";
+            boolean constants = count(gate, "ENTER_FRAMES\\s*=\\s*2") == 1
+                    && count(gate, "EXIT_FRAMES\\s*=\\s*3") == 1
+                    && count(gate, "SAMPLE_WINDOW_MS\\s*=\\s*500L") == 1
+                    && count(gate, "GAP_RESET_MS\\s*=\\s*4000L") == 1;
+            check(gateClassExists && constants && count(dy307, "new ThhLiveGate\\(\\)") == 1,
+                    "T-50-W4 ThhLiveGate 常量锁定 2/3/500/4000 + Hook 恰实例化 1 次", "");
+        }
 
         System.out.println();
         System.out.println("结果：" + pass + " 通过 / " + fail + " 失败");
