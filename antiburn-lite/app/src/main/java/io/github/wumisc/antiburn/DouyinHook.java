@@ -123,7 +123,8 @@ public final class DouyinHook {
     private static final String[] KS_RECRUIT_KEYS = {"月薪", "经验不限", "学历不限", "性别不限", "18-55"};
     private static final String[] DY_LIVE_KEYS = {"人气榜", "本场点赞", "点赞榜", "直播广场", "关注主播"};
     private static final String[] DY_FOLLOW_KEYS = {"关注", "已关注"};
-    private static final String[] KS_FEED_KEYS = {"全屏观看", "含AI生成内容", "内容由AI生成"};
+    // v3.0.11 P0a：全屏浏览入口是可点击功能控件，不作提示隐藏；由 isClickableControl 兜底。
+    private static final String[] KS_FEED_KEYS = {"含AI生成内容", "内容由AI生成"};
     private static final String[] DRAMA_KEYS = {"弹幕", "静音", "全屏观看", "系列剧", "已上线",
             "人在追", "权力斗争", "打脸反派", "作者声明", "内容由AI生成", "观看完整漫剧"};
     /** 红果底部导航三锚 AND（宪法 §3 唯一例外，已在 changes/ 留批准记录）。 */
@@ -3941,6 +3942,137 @@ public final class DouyinHook {
         return v.getWidth() <= w * maxW && v.getHeight() <= h * maxH;
     }
 
+    // ---------- v3.0.11 P0a/P0b：只读 UI 上下文探针（纯加性，不改任何既有函数/出口）----------
+
+    /** v3.0.11 P0a：只读判定 v 自身/直接父是否可点击；不触发 performClick，不写任何 View 属性。 */
+    private static boolean isClickableControl(View v) {
+        if (v == null) {
+            return false;
+        }
+        if (v.isClickable() || v.isFocusable() || v.hasOnClickListeners()) {
+            return true;
+        }
+        ViewParent p = v.getParent();
+        return p instanceof View
+                && (((View) p).isClickable() || ((View) p).hasOnClickListeners());
+    }
+
+    /**
+     * v3.0.11 P0b：只读识别"用户主页/作品列表"上下文。
+     * 两个结构条件同时成立才判为用户主页（与 2/3/单列布局、卡片绝对尺寸无关）：
+     *   A 多卡同构：某祖先容器的直接子节点中 >=2 个"内容卡"（封面图锚 + 文本锚）；
+     *   B 无面积主导视频：该祖先容器子树内不存在占屏面积主导的视频画面。
+     * fail-closed、纯只读：证据不足即 false（保持原隐藏行为）。
+     */
+    private static boolean isProfileListContext(View v) {
+        if (v == null) {
+            return false;
+        }
+        View node = v;
+        for (int up = 0; up < MAX_DEPTH && node != null; up++) {
+            ViewParent p = node.getParent();
+            if (!(p instanceof View)) {
+                break;
+            }
+            View parent = (View) p;
+            if (parent instanceof ViewGroup
+                    && countContentCards((ViewGroup) parent) >= 2
+                    && !hasDominantVideoSurface(parent)) {
+                return true;   // 多卡同构 + 无主导视频 = 用户主页/作品列表
+            }
+            node = parent;
+        }
+        return false;
+    }
+
+    /** A 实现：直接子节点中"内容卡"数量（早停于 2）。不做任何卡片绝对尺寸判断。 */
+    private static int countContentCards(ViewGroup g) {
+        int n = 0;
+        for (int i = 0; i < g.getChildCount(); i++) {
+            View c = g.getChildAt(i);
+            if (c == null || c.getVisibility() == View.GONE
+                    || c.getWidth() <= 0 || c.getHeight() <= 0) {
+                continue;
+            }
+            if (hasCoverImage(c, 0) && hasChildByClass(c, "TextView")) {
+                n++;
+                if (n >= 2) {
+                    return 2;
+                }
+            }
+        }
+        return n;
+    }
+
+    /** 子树是否含"封面图"视图；instanceof 覆盖 ImageView 子类，弥补按类名匹配的盲区。 */
+    private static boolean hasCoverImage(View v, int depth) {
+        if (v == null || depth > MAX_DEPTH) {
+            return false;
+        }
+        if (v instanceof android.widget.ImageView
+                || v instanceof android.view.TextureView
+                || v instanceof android.view.SurfaceView) {
+            return true;
+        }
+        String n = v.getClass().getName();
+        if (n.contains("ImageView") || n.contains("Drawee")
+                || n.contains("Image") || n.contains("Photo")) {
+            return true;
+        }
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) {
+                if (hasCoverImage(g.getChildAt(i), depth + 1)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** 子树内是否存在"占屏面积主导"的视频画面（直播/信息流页特征）。 */
+    private static boolean hasDominantVideoSurface(View v) {
+        return hasDominantVideoSurface(v, 0);
+    }
+
+    private static boolean hasDominantVideoSurface(View v, int depth) {
+        if (v == null || depth > MAX_DEPTH) {
+            return false;
+        }
+        if (isVideoView(v)) {
+            int w = screenW(v), h = screenH(v);
+            if (w > 0 && h > 0 && v.getWidth() > 0 && v.getHeight() > 0) {
+                float rw = (float) v.getWidth() / w;
+                float rh = (float) v.getHeight() / h;
+                // 面积主导 OR 双维均超 45%（宪法 §3 面积保险同口径）
+                if (rw * rh > 0.50f || (rw > 0.45f && rh > 0.45f)) {
+                    return true;
+                }
+            }
+        }
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) {
+                if (hasDominantVideoSurface(g.getChildAt(i), depth + 1)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** 视频画面判据复刻 containsVideoSurface(L1028-1036) 的 instanceof + 类名两路，保持单一真源风格。 */
+    private static boolean isVideoView(View v) {
+        if (v instanceof android.view.TextureView
+                || v instanceof android.view.SurfaceView
+                || v instanceof android.widget.VideoView) {
+            return true;
+        }
+        String n = v.getClass().getName();
+        return n.contains("TextureView") || n.contains("SurfaceView") || n.contains("VideoView")
+                || n.contains("MediaTexture") || n.contains("GLTextureView");
+    }
+
     /**
      * v3.0.7：从命中叶子向上并进最内层静态父容器（<= maxUp 层）。
      * 每层重跑 isOwnedElsewhere + 单维 50% + 视频否决 + 动态内容否决，任一命中立即停；
@@ -4121,6 +4253,10 @@ public final class DouyinHook {
         if (v instanceof TextView) {
             CharSequence t = ((TextView) v).getText();
             if (targetTextHit(v, KS_LIVE_KEYS) && !isCountLike(t)) {
+                // v3.0.11 P0：可点击功能入口 / 用户主页作品列表上下文跳过
+                if (isClickableControl(v) || isProfileListContext(v)) {
+                    return;
+                }
                 View tgt = targetLeafUp(v, 2, 0.50f, 0.50f);
                 if (tgt != null && !containsDynamicUi(tgt, 0)
                         && !containsVideoSurface(tgt, 0) && !out.contains(tgt)) {
@@ -4135,7 +4271,8 @@ public final class DouyinHook {
             if (hasChildByClass(g, "AvatarWithPendantView")
                     && hasChildByClass(g, "FollowButtonView")
                     && targetGeoOk(g, 0.50f, 0.50f)
-                    && !containsDynamicUi(g, 0) && !containsVideoSurface(g, 0)) {
+                    && !containsDynamicUi(g, 0) && !containsVideoSurface(g, 0)
+                    && !isProfileListContext(g)) {   // v3.0.11 P0b：用户主页作品卡不隐藏
                 if (!out.contains(g)) {
                     out.add(g);
                 }
@@ -4166,6 +4303,10 @@ public final class DouyinHook {
         if (v instanceof TextView) {
             CharSequence t = ((TextView) v).getText();
             if (targetTextHit(v, DY_LIVE_KEYS) && !isCountLike(t)) {
+                // v3.0.11 P0：可点击功能入口 / 用户主页作品列表上下文跳过
+                if (isClickableControl(v) || isProfileListContext(v)) {
+                    return;
+                }
                 View tgt = targetLeafUp(v, 2, 0.50f, 0.50f);
                 if (tgt != null && !containsDynamicUi(tgt, 0)
                         && !containsVideoSurface(tgt, 0) && !out.contains(tgt)) {
@@ -4180,7 +4321,8 @@ public final class DouyinHook {
             if (hasChildByClass(g, "AvatarWithPendantView")
                     && targetTextAll(g, DY_FOLLOW_KEYS, 1)
                     && targetGeoOk(g, 0.50f, 0.50f)
-                    && !containsDynamicUi(g, 0) && !containsVideoSurface(g, 0)) {
+                    && !containsDynamicUi(g, 0) && !containsVideoSurface(g, 0)
+                    && !isProfileListContext(g)) {   // v3.0.11 P0b：用户主页作品卡不隐藏
                 if (!out.contains(g)) {
                     out.add(g);
                 }
@@ -4203,6 +4345,10 @@ public final class DouyinHook {
         if (v instanceof TextView) {
             CharSequence t = ((TextView) v).getText();
             if (targetTextHit(v, KS_FEED_KEYS) && !isCountLike(t)) {
+                // v3.0.11 P0a：可点击功能入口跳过；P0b：用户主页作品列表上下文跳过
+                if (isClickableControl(v) || isProfileListContext(v)) {
+                    return;
+                }
                 View tgt = targetLeafUp(v, 2, 0.50f, 0.50f);
                 if (tgt != null && !containsDynamicUi(tgt, 0)
                         && !containsVideoSurface(tgt, 0) && !out.contains(tgt)) {
@@ -4229,6 +4375,10 @@ public final class DouyinHook {
         if (v instanceof TextView) {
             CharSequence t = ((TextView) v).getText();
             if (targetTextHit(v, DRAMA_KEYS) && !isCountLike(t)) {
+                // v3.0.11 P0b：用户主页/作品列表上下文跳过（红果剧集页通常返回 false）
+                if (isProfileListContext(v)) {
+                    return;
+                }
                 View tgt = targetLeafUp(v, 2, 0.50f, 0.50f);
                 if (tgt != null && !containsDynamicUi(tgt, 0)
                         && !containsVideoSurface(tgt, 0) && !out.contains(tgt)) {

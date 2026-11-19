@@ -1,6 +1,7 @@
 package io.github.wumisc.antiburn
 
 import android.app.Activity
+import android.app.ActivityManager
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
@@ -674,6 +675,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         ConfStore.init(this)
         setContent { BurnInProtectApp() }
+        // v3.0.11 P2：冷启动时按 prefs 真值对本任务栈幂等生效（onResume 亦会再校正一次）。
+        applyRecentsVisibility(this)
     }
 
     override fun onStop() {
@@ -681,6 +684,30 @@ class MainActivity : ComponentActivity() {
         // 改动永远写不进磁盘 —— 这里在页面离开前强制补一次保存。
         flushPending?.invoke()
         super.onStop()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // v3.0.11 P2：启动/回到前台时读 prefs 真值，对本任务栈幂等生效。
+        // 顶层 Composable（AboutPage）也复用同一实现，见文件顶层 applyRecentsVisibility。
+        applyRecentsVisibility(this)
+    }
+}
+
+// v3.0.11 P2：文件顶层私有函数（MainActivity 之后、AboutPage 之前）。
+// 统一契约见 changes/20261120-applyRecentsVisibility契约统一.md：
+// 仅对本任务栈标记 excludeFromRecents，接收 Context 以便顶层 Composable 调用。
+// 每次读 prefs 真值；用 AppTask + taskId 精确匹配，不用 finishAndRemoveTask()。
+private fun applyRecentsVisibility(context: Context) {
+    val on = AppVisibilityStore.isHideRecents(context)
+    val am = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager ?: return
+    val activity = context as? Activity ?: return
+    val taskId = activity.taskId
+    for (t in am.appTasks) {
+        if (t.taskInfo?.id == taskId) {
+            t.setExcludeFromRecents(on) // API 21+；minSdk 33
+            break
+        }
     }
 }
 
@@ -2392,8 +2419,19 @@ private fun DouyinFeaturePage(
     dark: Boolean,
 ) {
     val overlay = state.isOverlay
-    if (overlay) OverlayNotice(dark, "抖音")
-    GroupTitle("抖音 · 视频页五个区域 + 直播间")
+    if (overlay) OverlayNotice(dark, "抖音") // 红线：能力边界警示常显，不折叠
+    val context = LocalContext.current
+    // 摘要只读 state / prefs，不写配置：9 项口径 = 一级页 6 项 + 精准 2 + 定向 1
+    val douyinOpen = listOf(
+        state.enableDouyinTop, state.enableDouyinBottom, state.enableDouyinLike,
+        state.enableDouyinRt, state.enableDouyinLt, state.enableLive,
+        state.enableBottomCaption, state.enableRedDot, state.enableDyLiveHits,
+    ).count { it }
+    FeatureSummaryBar(open = douyinOpen, total = 9,
+        injected = recentlyInjected(context, "douyin"), dark = dark)
+
+    // 核心区域组：默认展开、首屏可见（红线：核心区域组不折叠）
+    GroupTitle("视频页区域")
     OptionRow("顶部导航", "直播/团购/关注/商城", checked = state.enableDouyinTop, dark = dark,
         enabled = !overlay,
         onCheckedChange = { on -> onStateChange { s -> s.copy(enableDouyinTop = on) } })
@@ -2409,31 +2447,33 @@ private fun DouyinFeaturePage(
     OptionRow("左上角", "三横线菜单按钮", checked = state.enableDouyinLt, dark = dark,
         enabled = !overlay,
         onCheckedChange = { on -> onStateChange { s -> s.copy(enableDouyinLt = on) } })
-    HintText("打开的区域按周期真隐藏：藏 ${state.hideSec} 秒（像素不发光）→ 显示 ${state.showSec} 秒，循环往复。隐藏期间控件不占画面，退出该页自动恢复。")
-    // v2.9.4：直播间隐藏单独一条通道、单独一个开关，与上面五区完全解耦。
+    GroupTitle("直播间隐藏")
     OptionRow("直播间隐藏", "直播页顶栏 / 底部按钮 / 右侧礼物列", checked = state.enableLive,
         dark = dark, enabled = !overlay,
         onCheckedChange = { on -> onStateChange { s -> s.copy(enableLive = on) } })
-    HintText("直播间单独一套：只藏顶部主播条、底部非输入按钮、右侧礼物列；输入框、弹幕、播放画面一律不碰。判定要求「底部有说点什么输入条 且 没有首页 Tab 栏」，普通视频页不会误入 —— 上面五个区域完全不受影响。")
-    HintText("关掉「直播间隐藏」直播间即刻全部恢复。日志里 lin=1 表示识别到输入条、lhid>0 表示确实藏到了控件；若 lin=1 但 lhid=0，把 HOOK 那行发我按实测调。")
-    HintText("需要模块注入抖音进程才生效。首页「注入状态」显示「已注入」即正常；显示「未检测到」说明 LSPosed 没勾它，点「作用域自检」按提示补齐后重启抖音。")
-    // v3.0.6：抖音精准隐藏（标题栏 / 红点），与五区、直播间三通道互不干扰
-    GroupTitle("抖音 · v3.0.6 精准隐藏")
-    OptionRow("下方标题栏", "视频描述行，@作者不动", checked = state.enableBottomCaption, dark = dark,
-        enabled = !overlay,
-        onCheckedChange = { on -> onStateChange { s -> s.copy(enableBottomCaption = on) } })
-    OptionRow("红点", "角标，点赞数/进度条绝不动", checked = state.enableRedDot, dark = dark,
-        enabled = !overlay,
-        onCheckedChange = { on -> onStateChange { s -> s.copy(enableRedDot = on) } })
-    // v3.0.7：抖音直播间定向隐藏（与五区、直播间隐藏、v3.0.6 三通道互不干扰）
-    GroupTitle("抖音 · v3.0.7 定向隐藏")
-    OptionRow("直播间圈选内容", "直播间内只藏圈选静态元素，输入条 / 礼物 / 画面不动",
-        checked = state.enableDyLiveHits, dark = dark, enabled = !overlay,
-        onCheckedChange = { on -> onStateChange { s -> s.copy(enableDyLiveHits = on) } })
-    HintText("「定向隐藏」是真隐藏：把圈定的控件透明度设为 0 并标记为不可见（alpha=0 + INVISIBLE），相当于从画面里拿掉——像素不发光、也不响应点击；不是在上面盖一层黑块。视频画面、输入条与播放本身照常工作，退出对应页面后控件立即恢复。")
-    HintText("点赞、评论、分享、进度等纯数字互动计数一律不进隐藏名单，红点走独立白名单；宁可少藏，绝不误藏。识别不到时功能会静默跳过，不会误伤画面或让你点不到按钮。")
-    // v3.0.8 P3：动态元素待探测轻提示（二级页页尾；默认折叠，无开关）
-    PendingProbeHint()
+    // 直播间差异化说明保留在核心组内（design-ui §2.4：不并入通用说明）
+    HintText("直播间单独一套：只藏顶部主播条、底部非输入按钮、右侧礼物列；输入框、弹幕、播放画面一律不碰。判定要求「底部有说点什么输入条 且 没有首页 Tab 栏」，普通视频页不会误入。")
+    HintText("关掉「直播间隐藏」直播间即刻全部恢复。日志里 lin=1 表示识别到输入条、lhid>0 表示确实藏到了控件。")
+
+    // 追加能力组：默认折叠，去版本号，带「已开 N 项」角标（design-ui §2.2.1）
+    CollapsibleGroup("精准隐藏（标题栏 / 红点）",
+        openCount = listOf(state.enableBottomCaption, state.enableRedDot).count { it }) {
+        OptionRow("下方标题栏", "视频描述行，@作者不动", checked = state.enableBottomCaption, dark = dark,
+            enabled = !overlay,
+            onCheckedChange = { on -> onStateChange { s -> s.copy(enableBottomCaption = on) } })
+        OptionRow("红点", "角标，点赞数/进度条绝不动", checked = state.enableRedDot, dark = dark,
+            enabled = !overlay,
+            onCheckedChange = { on -> onStateChange { s -> s.copy(enableRedDot = on) } })
+    }
+    CollapsibleGroup("定向隐藏（圈选内容）",
+        openCount = if (state.enableDyLiveHits) 1 else 0) {
+        OptionRow("直播间圈选内容", "直播间内只藏圈选静态元素，输入条 / 礼物 / 画面不动",
+            checked = state.enableDyLiveHits, dark = dark, enabled = !overlay,
+            onCheckedChange = { on -> onStateChange { s -> s.copy(enableDyLiveHits = on) } })
+    }
+    // 重复说明收敛为单一真源（默认折叠）；原 6 条说明未删，归入 MechanismNote 4 条
+    MechanismNote("抖音", state)
+    PendingProbeHint() // 原本就默认折叠、无开关，保持
 }
 
 @Composable
@@ -2612,8 +2652,99 @@ private fun HintText(text: String) {
 private fun GroupTitle(t: String) {
     val dark = isSystemInDarkTheme()
     Text(t, style = MaterialTheme.typography.titleSmall,
-        color = UiPalette.accent(dark), fontWeight = FontWeight.Bold,
+        color = UiPalette.ink(dark), fontWeight = FontWeight.Bold,
         modifier = Modifier.padding(top = 12.dp, bottom = 6.dp))
+}
+
+// ===== v3.0.11 P6：UI 简洁化三件套（design-ui §2）——纯视觉收纳，不删任何开关 =====
+// 注入痕迹是否新鲜（24h 口径，与首页 InjectStatusCard 单一真源一致）。只读 prefs，不写配置。
+private fun recentlyInjected(context: Context, kind: String): Boolean {
+    val ts = ConfigProvider.lastInject(context, kind)
+    return ts > 0L && System.currentTimeMillis() - ts < 24L * 3600_000L
+}
+
+/**
+ * 通用折叠组（design-ui §2.7 的无动画降级版）：折叠态用 remember（瞬态、不持久化、
+ * 不进 AbState/ConfStore/越界哈希）。核心区域组不调用本组件，只有「精准/定向隐藏」
+ * 与说明区使用；openCount 非空时显示「已开 N 项」角标，箭头为文本而非颜色单独承载。
+ */
+@Composable
+private fun CollapsibleGroup(
+    title: String,
+    openCount: Int? = null,
+    initiallyExpanded: Boolean = false,
+    content: @Composable () -> Unit,
+) {
+    var expanded by remember { mutableStateOf(initiallyExpanded) }
+    val dark = isSystemInDarkTheme()
+    Column(Modifier.fillMaxWidth().padding(top = 12.dp)) {
+        Row(
+            Modifier.fillMaxWidth()
+                .heightIn(min = 48.dp) // WCAG 2.2：折叠头点击区域 ≥ 48dp
+                .clickable(onClickLabel = if (expanded) "收起 $title" else "展开 $title") {
+                    expanded = !expanded
+                },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(title, style = MaterialTheme.typography.titleSmall,
+                color = UiPalette.ink(dark), modifier = Modifier.weight(1f))
+            if (openCount != null) {
+                Text("已开 $openCount 项", style = MaterialTheme.typography.labelSmall,
+                    color = UiPalette.accent(dark), modifier = Modifier.padding(end = 6.dp))
+            }
+            // 箭头用文本」▾/▸」作载体，灰度/色弱下也能辨识折叠态（颜色非唯一载体）
+            Text(if (expanded) "▾" else "▸", style = MaterialTheme.typography.titleMedium,
+                color = UiPalette.accent(dark))
+        }
+        if (expanded) {
+            Column(Modifier.fillMaxWidth().padding(top = 2.dp)) {
+                content() // 原有 OptionRow / HintText 原样迁入，参数与回调一字不改
+            }
+        }
+        // 组间用留白，不画分隔线；组内分隔线仍由 OptionRow 负责
+    }
+}
+
+/** 二级页顶部状态摘要栏（design-ui §2.3）：只读 state，不写状态、不新增配置项。 */
+@Composable
+private fun FeatureSummaryBar(
+    open: Int,
+    total: Int,
+    injected: Boolean,
+    dark: Boolean,
+    warnText: String? = null,
+) {
+    Column(
+        Modifier.fillMaxWidth()
+            .background(UiPalette.surface(dark).copy(alpha = 0.4f), RoundedCornerShape(12.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            // 数字 + 文字双载体，符合 WCAG「颜色非唯一信息载体」
+            Text("已开 $open / $total 项", style = MaterialTheme.typography.titleSmall,
+                color = if (open > 0) UiPalette.accent(dark) else UiPalette.ink(dark))
+            Spacer(Modifier.weight(1f))
+            Text(if (injected) "已注入" else "未检测到",
+                style = MaterialTheme.typography.labelMedium,
+                color = if (injected) UiPalette.accent(dark) else UiPalette.warn(dark))
+        }
+        if (warnText != null) {
+            Text(warnText, style = MaterialTheme.typography.bodySmall,
+                color = UiPalette.warn(dark), modifier = Modifier.padding(top = 4.dp))
+        }
+    }
+    Spacer(Modifier.height(6.dp))
+}
+
+/** 原理说明单一真源（design-ui §2.4）：全 App 只此一处承载重复的 4 条说明，默认折叠。 */
+@Composable
+private fun MechanismNote(appLabel: String, state: AbState) {
+    CollapsibleGroup(title = "这些开关怎么工作", initiallyExpanded = false) {
+        HintText("打开的区域按周期真隐藏：藏 ${state.hideSec}s → 显示 ${state.showSec}s，循环往复。")
+        HintText("「真隐藏」= 控件 alpha=0 且 INVISIBLE（像素不发光、不响应点击），不是盖黑块；视频画面、输入条与播放本身照常工作。")
+        HintText("点赞、评论、分享、进度等纯数字互动计数一律不进隐藏名单，红点走独立白名单；宁可少藏，绝不误藏。")
+        HintText("需要模块注入 $appLabel 进程才生效；首页「注入状态」显示「已注入」即正常，显示「未检测到」请在「通用」做一次作用域自检。")
+    }
 }
 
 // ---- v3.0.8 P3：动态元素"待探测"轻提示（默认折叠、无开关、低优先级；B站页不调用） ----
@@ -2735,6 +2866,12 @@ private val CREDITS = listOf(
 @Composable
 private fun AboutPage(onOpen: (String) -> Unit, onOpenUrl: (String) -> Unit) {
     val dark = isSystemInDarkTheme()
+    // ===== v3.0.11 P1/P2 新增：本 App 自身可见性开关状态（真源=独立 prefs，非 AbState） =====
+    val context = LocalContext.current
+    // 用 remember 而非 rememberSaveable：切换即落盘，重建时从 prefs 重读，避免 v3.0.9 那种
+    // saveable 旧快照覆盖 prefs 真值的事故；退出/重进关于页也会重新读到最新值。
+    var hideLauncher by remember { mutableStateOf(AppVisibilityStore.isHideLauncherIcon(context)) }
+    var hideRecents by remember { mutableStateOf(AppVisibilityStore.isHideRecents(context)) }
     Column(
         Modifier
             .fillMaxSize()
@@ -2763,6 +2900,41 @@ private fun AboutPage(onOpen: (String) -> Unit, onOpenUrl: (String) -> Unit) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
         Spacer(Modifier.height(8.dp))
+
+        // ===== v3.0.11 P1/P2 新增：本 App 自身可见性（版本信息下方、列表之前，首屏可达） =====
+        // P1 桌面图标隐藏：OptionRow 内嵌 Material3 Switch（整行可点），切换即落盘 + 组件别名生效。
+        OptionRow(
+            title = "隐藏桌面图标",
+            subtitle = "开后桌面无图标，从 LSPosed 打开本应用可恢复",
+            checked = hideLauncher,
+            dark = dark,
+            onCheckedChange = { on ->
+                // 内部已含 applyLauncherVisibility(DONT_KILL_APP)：写 prefs + 切组件别名，App 不重启
+                AppVisibilityStore.setHideLauncherIcon(context, on)
+                hideLauncher = on // 更新本地镜像，图标即时消失
+            },
+        )
+        // 恢复提示：常驻可见（开/关都显示），口径与 PRD §一 / design-backend §5.3 一致，
+        // 避免用户自锁后无措；不承诺备用图标/通知/磁贴，adb 兜底不塞进 UI。
+        Text(
+            "隐藏后桌面不再显示本应用；需要恢复时，从 LSPosed 模块管理器打开本应用，回到此处关闭开关即可。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.fillMaxWidth().padding(start = 4.dp, top = 4.dp),
+        )
+
+        // P2 最近任务隐藏：setHideRecents 只写 prefs，生效由顶层 applyRecentsVisibility 立即触发。
+        OptionRow(
+            title = "从最近任务隐藏",
+            subtitle = "开后按 Home，本应用不出现在最近任务列表",
+            checked = hideRecents,
+            dark = dark,
+            onCheckedChange = { on ->
+                AppVisibilityStore.setHideRecents(context, on) // 仅写 prefs（后端 §8 锁定签名）
+                applyRecentsVisibility(context)               // 立即对本任务栈生效，不等 onResume
+                hideRecents = on                              // 更新本地镜像
+            },
+        )
 
         ListRow("感谢名单", "${THANKS.size} 位朋友的支持与建议", { onOpen("thanks") }, dark)
         ListRow("支持捐赠", "支付宝 / 微信 · 金额随意，心意最重", { onOpen("donate") }, dark)

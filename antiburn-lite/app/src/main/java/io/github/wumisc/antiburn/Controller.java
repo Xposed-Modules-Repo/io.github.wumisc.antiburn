@@ -393,6 +393,66 @@ public final class Controller {
         return false;
     }
 
+    // ---------- P-1：heads-up 横幅可达性守卫（纯加性，仅"少藏"） ----------
+    /** heads-up 子树扫描深度上限：真机 dump sv 子树后如更深再上调（H5 前置证据）。 */
+    private static final int HEADS_UP_SCAN_MAX_DEPTH = 6;
+    /** 降级路径里静态图标的递归深度上限。 */
+    private static final int ICON_SCAN_MAX_DEPTH = 4;
+
+    /**
+     * P-1 heads-up 容器自身判定（只读）。覆盖 AOSP/OEM 常见类名 + 资源 id 兜底。
+     * 交叉引用（N2）：isIconLike 把 "Notification" 当"否决整栏"词；这里是"识别横幅以豁免"，
+     * 二者判据用途不同，勿"统一"掉任一处。
+     */
+    static boolean isHeadsUpContainer(View v) {
+        if (v == null) {
+            return false;
+        }
+        String n = v.getClass().getSimpleName();
+        if (n.contains("HeadsUp") || n.contains("Headsup")
+                || n.contains("HeadsUpNotificationView")
+                || n.contains("HeadsUpNotificationContainer")
+                || n.contains("HeadsUpStatusBarView")
+                || n.contains("NotificationShade")) {
+            return true;
+        }
+        try {
+            int id = v.getId();
+            if (id != android.view.View.NO_ID) {
+                String idName = v.getResources().getResourceEntryName(id);
+                if (idName != null && (idName.contains("heads_up") || idName.contains("headsup"))) {
+                    return true;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return false;
+    }
+
+    /**
+     * P-1 祖先链守卫：v 自身或其子树（深度 ≤ HEADS_UP_SCAN_MAX_DEPTH）含 heads-up 则返回 true。
+     * 复用 containsVideoSurface 式递归扫描；只读不写。任何 alpha=0/translation/INVISIBLE
+     * 写操作前必须过本守卫，从而保护 heads-up 的整条祖先链（INV-1）。
+     */
+    static boolean containsHeadsUp(View v, int depth) {
+        if (v == null) {
+            return false;
+        }
+        if (isHeadsUpContainer(v)) {
+            return true;
+        }
+        if (depth >= HEADS_UP_SCAN_MAX_DEPTH || !(v instanceof android.view.ViewGroup)) {
+            return false;
+        }
+        android.view.ViewGroup g = (android.view.ViewGroup) v;
+        for (int i = 0; i < g.getChildCount(); i++) {
+            if (containsHeadsUp(g.getChildAt(i), depth + 1)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /**
      * 抓到的 statusView 是否合格（自愈用）。
      *
@@ -614,11 +674,18 @@ public final class Controller {
         if (depth > 3 || !(v instanceof android.view.ViewGroup)) {
             return null;
         }
+        // 交叉引用（N2）：isIconLike 把 "Notification" 当"否决整栏"词；此处是
+        // "识别通知图标区"的正向判据，两者用途不同，勿统一。
         android.view.ViewGroup g = (android.view.ViewGroup) v;
         for (int i = 0; i < g.getChildCount(); i++) {
             View c = g.getChildAt(i);
+            if (containsHeadsUp(c, 0)) {          // P-1：横幅及其祖先一律跳过（R3）
+                continue;
+            }
             String n = c.getClass().getName();
-            if (n.contains("Notification") || n.contains("notification")) {
+            boolean iconArea = n.contains("NotificationIcon") || n.contains("NotificationIcons")
+                    || n.contains("NotificationIconArea");
+            if (iconArea) {
                 return c;
             }
             View deep = findNotificationNode(c, depth + 1);
@@ -1060,11 +1127,11 @@ public final class Controller {
             return;
         }
         if (!(sv instanceof android.view.ViewGroup) || notifyArea == null) {
-            // 未识别出通知区：维持整窗透明（原行为）
-            if (sv.getVisibility() != View.GONE && sv.getAlpha() != 0f) {
-                sv.setAlpha(0f);
-                Log.i(TAG, "status transparent (no notify area)");
+            // P-1（R1）：绝不整窗透明。S2：先把旧版残留的整窗透明恢复（这是"恢复"非"隐藏"）。
+            if (sv.getAlpha() != 1f) {
+                sv.setAlpha(1f);
             }
+            hideKnownStaticIconsOnly(sv, 0);
             return;
         }
         // 父容器恢复为可见，再沿「通知区路径」逐层只隐藏兄弟节点
@@ -1082,14 +1149,40 @@ public final class Controller {
         }
         if (path == null || path.size() < 2) {
             notifyArea = null;
-            if (sv.getAlpha() != 0f) {
-                sv.setAlpha(0f);
-                Log.i(TAG, "status transparent (notify path missing)");
+            if (sv.getAlpha() != 1f) {
+                sv.setAlpha(1f);
             }
+            hideKnownStaticIconsOnly(sv, 0);
             return;
         }
         dimAlong(path, 0);
         setAlphaTracked(notifyArea, 1f, false);
+    }
+
+    /**
+     * P-1 保守降级：递归只透明"子树不含 heads-up 的静态图标叶子"。
+     * 命中 0 则什么都不做（fail-safe 到"不隐藏"）。诊断计数供真机评估降级频率（S4）。
+     */
+    private static void hideKnownStaticIconsOnly(View v, int depth) {
+        if (v == null || depth > ICON_SCAN_MAX_DEPTH) {
+            return;
+        }
+        if (containsHeadsUp(v, 0)) {
+            return;                    // 该子树含 heads-up → 整支跳过（祖先链保护）
+        }
+        if (v instanceof android.view.ViewGroup) {
+            android.view.ViewGroup g = (android.view.ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) {
+                hideKnownStaticIconsOnly(g.getChildAt(i), depth + 1);
+            }
+            return;
+        }
+        String n = v.getClass().getSimpleName();
+        if (n.contains("Clock") || n.contains("Signal") || n.contains("Battery")
+                || n.contains("Wifi") || n.contains("Network") || n.contains("Mobile")
+                || n.contains("Carrier") || n.contains("Operator")) {
+            setAlphaTracked(v, 0f, true);   // 记账，restoreStatusChildren 原样恢复
+        }
     }
 
     /** 从 root 到 target 的完整路径（root → … → target）；target 不在 root 下返回 null。 */
@@ -1136,6 +1229,9 @@ public final class Controller {
                 if (c != notifyArea) {
                     dimAlong(path, idx + 1);
                 }
+            } else if (containsHeadsUp(c, 0)) {
+                // P-1（R2）：c 自身或子树含横幅 → 整支保持原样，不透明、不记账（INV-1）
+                setAlphaTracked(c, 1f, false);
             } else {
                 setAlphaTracked(c, 0f, true);
             }

@@ -31,6 +31,12 @@ public final class AbApplication extends Application {
             ConfStore.migrateIfNeededAsync();
         } catch (Throwable ignored) {
         }
+        // v3.0.11 P1：覆盖安装会按 Manifest 重置 android:enabled，可能让已禁用的 alias 复活；
+        // 这里读独立 prefs 幂等校正。组件校正失败不阻断启动（用户仍可从 LSPosed 进入后手动切开关恢复）。
+        try {
+            AppVisibilityStore.syncOnStartup(this);
+        } catch (Throwable ignored) {
+        }
     }
 
     private void installCrashHandler() {

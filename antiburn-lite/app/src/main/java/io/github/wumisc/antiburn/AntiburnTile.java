@@ -42,7 +42,7 @@ public class AntiburnTile extends TileService {
                 applyTile(nowOn);
                 Toast.makeText(AntiburnTile.this,
                         ok
-                                ? (nowOn ? "防止烧屏已开启，下个周期生效" : "防止烧屏已关闭，下个周期生效")
+                                ? (nowOn ? "防烧屏总开关 · 已开启（下个周期生效）" : "防烧屏总开关 · 已关闭（下个周期生效）")
                                 : "写入失败，请打开 App 检查 root 授权",
                         Toast.LENGTH_SHORT).show();
             });
@@ -55,7 +55,7 @@ public class AntiburnTile extends TileService {
             return;
         }
         t.setState(on ? Tile.STATE_ACTIVE : Tile.STATE_INACTIVE);
-        t.setLabel("防止烧屏");
+        t.setLabel("防烧屏总开关");
         t.setSubtitle(on ? "已开启" : "已关闭");
         t.updateTile();
     }

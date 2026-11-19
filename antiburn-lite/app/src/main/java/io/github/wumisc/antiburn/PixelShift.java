@@ -198,7 +198,8 @@ public final class PixelShift {
         ViewGroup g = (ViewGroup) root;
         for (int i = 0; i < g.getChildCount(); i++) {
             View c = g.getChildAt(i);
-            if (c == null || c.getVisibility() == View.GONE || guarded(root, c)) {
+            if (c == null || c.getVisibility() == View.GONE
+                    || guarded(root, c) || Controller.containsHeadsUp(c, 0)) {
                 continue;
             }
             apply(c, x, y);
@@ -224,8 +225,8 @@ public final class PixelShift {
                 continue;
             }
             if (c.getTranslationX() != curX || c.getTranslationY() != y) {
-                if (guarded(root, c)) {
-                    continue; // 胶囊容器恢复原位，不参与位移
+                if (guarded(root, c) || Controller.containsHeadsUp(c, 0)) {
+                    continue; // 胶囊 / heads-up 及其祖先：恢复原位，不参与位移（INV-1）
                 }
                 apply(c, curX, y);
             }
