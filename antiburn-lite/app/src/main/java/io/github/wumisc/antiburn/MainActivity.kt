@@ -127,6 +127,14 @@ private const val STATUS_REFRESH_MS = 15_000L
  *  - custom_poems 多行文本编码为单行，不再把 conf 切成非法行；新增可编辑输入框；
  *  - 白名单支持直接填包名（选择页失败时仍可保存），切换 Tab 不再丢弃未保存的改动。
  */
+// v3.0.12 P2：首页四入口对应的二级菜单 key（与 feat-* 平级的内部导航契约）。
+// 用 const val 而非散落字面量：SubPageHost 的 title/content 两处分支各引用同一常量，
+// 避免拼写漂移，也便于静态审计按标识符计数。
+private const val PAGE_HOME_ENGINE = "home-engine"
+private const val PAGE_HOME_INJECT = "home-inject"
+private const val PAGE_HOME_UISTYLE = "home-uistyle"
+private const val PAGE_HOME_LIST = "home-list"
+
 /**
  * 界面适配可选方案：六大厂商 + 原生（id 与 conf 里的 ui_style 一一对应）。
  * v2.7.4：新增魅族 Flyme —— 魅族 20/21 等中置挖孔机型会在正中绘制环形电池，
@@ -912,6 +920,31 @@ private fun BurnInProtectApp() {
         }
     }
 
+    // v3.0.12 P2：「四个 App 全开」原内联于 HomeTilePage 调用的 onEnableAll 实参，
+    // 随注入状态卡迁入 home-inject 二级页，提取为具名 val 逐字保留逻辑（G7 保存路径不变）。
+    val onEnableAll: () -> Unit = {
+        // 四个 App 的区域开关一次性打开。默认值全是关的，
+        // 用户只说「快手没反应」时，最可能的原因不是规则坏了，
+        // 而是那个 App 的开关压根没开过。
+        onStateChange { s ->
+            s.copy(
+                enableDouyinTop = true, enableDouyinBottom = true,
+                enableDouyinLike = true, enableDouyinRt = true,
+                enableDouyinLt = true,
+                enableDramaTop = true, enableDramaLike = true,
+                enableDramaRt = true, enableDramaLt = true,
+                enableDramaSwipe = true,
+                enableKuaishou = true, enableKsRight = true,
+                enableKsTop = true, enableKsBottom = true,
+                enableKsCorner = true,
+                enableBilibili = true, enableBiliRight = true,
+                // v2.9.2：B站只剩右侧一项，其余三项保持关闭
+                enableBiliTop = false, enableBiliBottom = false,
+                enableBiliCorner = false,
+            )
+        }
+    }
+
     val listLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) { result ->
@@ -1070,49 +1103,8 @@ private fun BurnInProtectApp() {
                         0 -> HomeTilePage(
                             enabled = state.enableStatus,
                             onToggle = { on -> onStateChange { s -> s.copy(enableStatus = on) } },
-                            listMode = state.listMode,
-                            activeList = state.activeList,
-                            onListModeChange = { m -> onStateChange { s -> s.copy(listMode = m) } },
-                            onListTextChange = { txt ->
-                                onStateChange { s ->
-                                    if (s.listMode == ConfStore.MODE_BLACK) s.copy(blackList = txt)
-                                    else s.copy(whiteList = txt)
-                                }
-                            },
-                            uiStyle = state.uiStyle,
-                            onUiStyleChange = { id -> onStateChange { s -> s.copy(uiStyle = id) } },
-                            onOpenList = { openList(state.listMode) },
-                            onSelfCheck = { selfCheckList() },
-                            onEnableAll = {
-                                // 四个 App 的区域开关一次性打开。默认值全是关的，
-                                // 用户只说「快手没反应」时，最可能的原因不是规则坏了，
-                                // 而是那个 App 的开关压根没开过。
-                                onStateChange { s ->
-                                    s.copy(
-                                        enableDouyinTop = true, enableDouyinBottom = true,
-                                        enableDouyinLike = true, enableDouyinRt = true,
-                                        enableDouyinLt = true,
-                                        enableDramaTop = true, enableDramaLike = true,
-                                        enableDramaRt = true, enableDramaLt = true,
-                                        enableDramaSwipe = true,
-                                        enableKuaishou = true, enableKsRight = true,
-                                        enableKsTop = true, enableKsBottom = true,
-                                        enableKsCorner = true,
-                                        enableBilibili = true, enableBiliRight = true,
-                                        // v2.9.2：B站只剩右侧一项，其余三项保持关闭
-                                        enableBiliTop = false, enableBiliBottom = false,
-                                        enableBiliCorner = false,
-                                    )
-                                }
-                            },
+                            onOpen = openSub,
                             saveBar = saveBar,
-                            engineCard = {
-                                EngineCard(
-                                    state = state,
-                                    onStateChange = onStateChange,
-                                    dark = dark,
-                                )
-                            },
                         )
                         1 -> FeaturesPage(
                             state = state,
@@ -1173,6 +1165,9 @@ private fun BurnInProtectApp() {
                     state = state,
                     onStateChange = onStateChange,
                     saveBar = saveBar,
+                    onEnableAll = onEnableAll,
+                    onOpenList = { openList(state.listMode) },
+                    onSelfCheck = { selfCheckList() },
                 )
             }
         }
@@ -1899,23 +1894,25 @@ private fun A11yRequiredNotice(dark: Boolean) {
 }
 
 // ---- 首页 ----
+/**
+ * v3.0.12 P1/P3：首页只保留入口与两个可见性开关，四张详情大卡片下沉到二级菜单。
+ * 可见元素顺序（G1）：标题区 → saveBar → 防烧屏总开关 → 四入口 → 隐藏桌面图标 → 从最近任务隐藏。
+ * 四入口副标题采用 PRD G3 短版（设计评审 S1 拍板）。
+ */
 @Composable
 private fun HomeTilePage(
     enabled: Boolean,
     onToggle: (Boolean) -> Unit,
-    listMode: String,
-    activeList: String,
-    onListModeChange: (String) -> Unit,
-    onListTextChange: (String) -> Unit,
-    uiStyle: String,
-    onUiStyleChange: (String) -> Unit,
-    onOpenList: () -> Unit,
-    onSelfCheck: () -> Unit,
-    onEnableAll: () -> Unit,
+    onOpen: (String) -> Unit,
     saveBar: @Composable () -> Unit,
-    engineCard: @Composable () -> Unit,
 ) {
     val dark = isSystemInDarkTheme()
+    // ===== v3.0.12 P3：两个可见性开关从 AboutPage 迁入（真源=独立 prefs，非 AbState） =====
+    val context = LocalContext.current
+    // 用 remember 而非 rememberSaveable：切换即落盘，重建时从 prefs 重读，避免 v3.0.9 那种
+    // saveable 旧快照覆盖 prefs 真值的事故（G13）。
+    var hideLauncher by remember { mutableStateOf(AppVisibilityStore.isHideLauncherIcon(context)) }
+    var hideRecents by remember { mutableStateOf(AppVisibilityStore.isHideRecents(context)) }
     Column(
         Modifier
             .fillMaxSize()
@@ -1945,16 +1942,7 @@ private fun HomeTilePage(
 
         Spacer(Modifier.height(12.dp))
 
-        // 运行方式放在最前面：无 root 用户开机第一件事就是得知道「我该选哪个」，
-        // 埋在功能页里等于没有。
-        engineCard()
-
-        Spacer(Modifier.height(12.dp))
-
-        InjectStatusCard(dark, onEnableAll)
-
-        Spacer(Modifier.height(12.dp))
-
+        // 防烧屏总开关（原 L1958-1983 卡片整体上移至 saveBar 之后、四入口之前，内容交互不变）
         Card(
             Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(18.dp),
@@ -1984,75 +1972,156 @@ private fun HomeTilePage(
 
         Spacer(Modifier.height(12.dp))
 
-        // 周期时长在「功能 → 通用」二级页，点单行 ListRow 弹小窗调整，首页不再放第二处入口。
-        Card(
-            Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(18.dp),
-            colors = CardDefaults.cardColors(containerColor = UiPalette.surface(dark)),
-        ) {
-            Column(Modifier.padding(16.dp)) {
-                Text("界面适配", style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold, color = UiPalette.ink(dark))
-                Text("选择你手机的系统界面，模块按它的胶囊 / 导航栏结构避让，不会误隐藏灵动岛、原子岛。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp))
-                Spacer(Modifier.height(12.dp))
-                Row(
-                    Modifier.fillMaxWidth()
-                        .horizontalScroll(rememberScrollState())
-                        .padding(vertical = 2.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    for ((id, label) in UI_STYLE_LABELS) {
-                        FilterChip(
-                            selected = uiStyle == id,
-                            onClick = { onUiStyleChange(id) },
-                            label = { Text(label, style = MaterialTheme.typography.bodySmall) },
-                        )
-                    }
-                }
-            }
-        }
+        // v3.0.12 P1：四张详情卡改为四个 ListRow 入口，点击进各自二级页（G3 短版副标题）
+        ListRow("运行方式", "Hook / 无障碍双引擎", { onOpen(PAGE_HOME_ENGINE) }, dark)
+        ListRow("注入状态", "四个 App 注入情况", { onOpen(PAGE_HOME_INJECT) }, dark)
+        ListRow("界面适配", "按系统界面避让", { onOpen(PAGE_HOME_UISTYLE) }, dark)
+        ListRow("白名单", "名单内应用不干预", { onOpen(PAGE_HOME_LIST) }, dark)
 
         Spacer(Modifier.height(12.dp))
 
-        Card(
-            Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(18.dp),
-            colors = CardDefaults.cardColors(containerColor = UiPalette.surface(dark)),
-        ) {
-            Column(Modifier.padding(16.dp)) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text(listTitle(listMode), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold,
-                        color = UiPalette.ink(dark), modifier = Modifier.weight(1f))
-                    TextButton(onClick = onOpenList) { Text("选择应用") }
-                }
-                ListModeChips(listMode, onListModeChange)
-                Text(listSummary(listMode, activeList),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp))
-                // 手动填包名：图形选择页是主路径，这里保留快速粘贴的能力
-                if (ConfStore.normMode(listMode) != ConfStore.MODE_OFF) {
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = activeList,
-                        onValueChange = onListTextChange,
-                        label = {
-                            Text(if (ConfStore.normMode(listMode) == ConfStore.MODE_BLACK)
-                                "黑名单包名，逗号分隔" else "白名单包名，逗号分隔")
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        minLines = 2,
-                        maxLines = 4,
+        // ===== v3.0.12 P3：本 App 自身可见性（四入口之后，逐字迁入，逻辑不变） =====
+        // P1 桌面图标隐藏：OptionRow 内嵌 Material3 Switch（整行可点），切换即落盘 + 组件别名生效。
+        OptionRow(
+            title = "隐藏桌面图标",
+            subtitle = "开后桌面无图标，从 LSPosed 打开本应用可恢复",
+            checked = hideLauncher,
+            dark = dark,
+            onCheckedChange = { on ->
+                // 内部已含 applyLauncherVisibility(DONT_KILL_APP)：写 prefs + 切组件别名，App 不重启
+                AppVisibilityStore.setHideLauncherIcon(context, on)
+                hideLauncher = on // 更新本地镜像，图标即时消失
+            },
+        )
+        // 恢复提示：常驻可见（开/关都显示），口径与 PRD §一 / design-backend §5.3 一致，
+        // 避免用户自锁后无措；不承诺备用图标/通知/磁贴，adb 兜底不塞进 UI。
+        Text(
+            "隐藏后桌面不再显示本应用；需要恢复时，从 LSPosed 模块管理器打开本应用，回到此处关闭开关即可。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.fillMaxWidth().padding(start = 4.dp, top = 4.dp),
+        )
+
+        // P2 最近任务隐藏：setHideRecents 只写 prefs，生效由顶层 applyRecentsVisibility 立即触发。
+        OptionRow(
+            title = "从最近任务隐藏",
+            subtitle = "开后按 Home，本应用不出现在最近任务列表",
+            checked = hideRecents,
+            dark = dark,
+            onCheckedChange = { on ->
+                AppVisibilityStore.setHideRecents(context, on) // 仅写 prefs（后端 §8 锁定签名）
+                applyRecentsVisibility(context)               // 立即对本任务栈生效，不等 onResume
+                hideRecents = on                              // 更新本地镜像
+            },
+        )
+    }
+}
+
+// ---- v3.0.12 P2：首页四入口对应的四个二级页（原卡片内容原样搬迁） ----
+
+/** 运行方式二级页（home-engine）：薄壳整体调用原 EngineCard，控件与副作用零遗漏（G4）。 */
+@Composable
+private fun EnginePage(
+    state: AbState,
+    onStateChange: ((AbState) -> AbState) -> Unit,
+    dark: Boolean,
+) {
+    EngineCard(state = state, onStateChange = onStateChange, dark = dark)
+}
+
+/** 注入状态二级页（home-inject）：薄壳整体调用原 InjectStatusCard（G5）。 */
+@Composable
+private fun InjectStatusPage(
+    dark: Boolean,
+    onEnableAll: () -> Unit,
+) {
+    InjectStatusCard(dark = dark, onEnableAll = onEnableAll)
+}
+
+/** 界面适配二级页（home-uistyle）：原首页内联 Card 原样搬入，7 厂商 chips 一项不删（G5）。 */
+@Composable
+private fun UiStylePage(
+    uiStyle: String,
+    onUiStyleChange: (String) -> Unit,
+    dark: Boolean,
+) {
+    Card(
+        Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = UiPalette.surface(dark)),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Text("界面适配", style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold, color = UiPalette.ink(dark))
+            Text("选择你手机的系统界面，模块按它的胶囊 / 导航栏结构避让，不会误隐藏灵动岛、原子岛。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp))
+            Spacer(Modifier.height(12.dp))
+            Row(
+                Modifier.fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(vertical = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                for ((id, label) in UI_STYLE_LABELS) {
+                    FilterChip(
+                        selected = uiStyle == id,
+                        onClick = { onUiStyleChange(id) },
+                        label = { Text(label, style = MaterialTheme.typography.bodySmall) },
                     )
                 }
-                // 生效自检：明确告诉用户名单有没有落盘、怎么确认模块侧命中
-                TextButton(onClick = onSelfCheck, modifier = Modifier.padding(top = 2.dp)) {
-                    Text("检测是否生效", style = MaterialTheme.typography.labelMedium,
-                        color = UiPalette.accent(dark))
-                }
+            }
+        }
+    }
+}
+
+/** 白名单二级页（home-list）：原首页内联 Card 原样搬入，模式 chips + 包名输入 + 自检一项不删（G5）。 */
+@Composable
+private fun WhitelistPage(
+    listMode: String,
+    activeList: String,
+    onListModeChange: (String) -> Unit,
+    onListTextChange: (String) -> Unit,
+    onOpenList: () -> Unit,
+    onSelfCheck: () -> Unit,
+    dark: Boolean,
+) {
+    Card(
+        Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = UiPalette.surface(dark)),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(listTitle(listMode), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold,
+                    color = UiPalette.ink(dark), modifier = Modifier.weight(1f))
+                TextButton(onClick = onOpenList) { Text("选择应用") }
+            }
+            ListModeChips(listMode, onListModeChange)
+            Text(listSummary(listMode, activeList),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp))
+            // 手动填包名：图形选择页是主路径，这里保留快速粘贴的能力
+            if (ConfStore.normMode(listMode) != ConfStore.MODE_OFF) {
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = activeList,
+                    onValueChange = onListTextChange,
+                    label = {
+                        Text(if (ConfStore.normMode(listMode) == ConfStore.MODE_BLACK)
+                            "黑名单包名，逗号分隔" else "白名单包名，逗号分隔")
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 2,
+                    maxLines = 4,
+                )
+            }
+            // 生效自检：明确告诉用户名单有没有落盘、怎么确认模块侧命中
+            TextButton(onClick = onSelfCheck, modifier = Modifier.padding(top = 2.dp)) {
+                Text("检测是否生效", style = MaterialTheme.typography.labelMedium,
+                    color = UiPalette.accent(dark))
             }
         }
     }
@@ -2866,12 +2935,7 @@ private val CREDITS = listOf(
 @Composable
 private fun AboutPage(onOpen: (String) -> Unit, onOpenUrl: (String) -> Unit) {
     val dark = isSystemInDarkTheme()
-    // ===== v3.0.11 P1/P2 新增：本 App 自身可见性开关状态（真源=独立 prefs，非 AbState） =====
-    val context = LocalContext.current
-    // 用 remember 而非 rememberSaveable：切换即落盘，重建时从 prefs 重读，避免 v3.0.9 那种
-    // saveable 旧快照覆盖 prefs 真值的事故；退出/重进关于页也会重新读到最新值。
-    var hideLauncher by remember { mutableStateOf(AppVisibilityStore.isHideLauncherIcon(context)) }
-    var hideRecents by remember { mutableStateOf(AppVisibilityStore.isHideRecents(context)) }
+    // v3.0.12 P3：两个可见性开关及其 remember 状态已迁入 HomeTilePage，此处仅保留关于信息。
     Column(
         Modifier
             .fillMaxSize()
@@ -2900,41 +2964,6 @@ private fun AboutPage(onOpen: (String) -> Unit, onOpenUrl: (String) -> Unit) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
         Spacer(Modifier.height(8.dp))
-
-        // ===== v3.0.11 P1/P2 新增：本 App 自身可见性（版本信息下方、列表之前，首屏可达） =====
-        // P1 桌面图标隐藏：OptionRow 内嵌 Material3 Switch（整行可点），切换即落盘 + 组件别名生效。
-        OptionRow(
-            title = "隐藏桌面图标",
-            subtitle = "开后桌面无图标，从 LSPosed 打开本应用可恢复",
-            checked = hideLauncher,
-            dark = dark,
-            onCheckedChange = { on ->
-                // 内部已含 applyLauncherVisibility(DONT_KILL_APP)：写 prefs + 切组件别名，App 不重启
-                AppVisibilityStore.setHideLauncherIcon(context, on)
-                hideLauncher = on // 更新本地镜像，图标即时消失
-            },
-        )
-        // 恢复提示：常驻可见（开/关都显示），口径与 PRD §一 / design-backend §5.3 一致，
-        // 避免用户自锁后无措；不承诺备用图标/通知/磁贴，adb 兜底不塞进 UI。
-        Text(
-            "隐藏后桌面不再显示本应用；需要恢复时，从 LSPosed 模块管理器打开本应用，回到此处关闭开关即可。",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.fillMaxWidth().padding(start = 4.dp, top = 4.dp),
-        )
-
-        // P2 最近任务隐藏：setHideRecents 只写 prefs，生效由顶层 applyRecentsVisibility 立即触发。
-        OptionRow(
-            title = "从最近任务隐藏",
-            subtitle = "开后按 Home，本应用不出现在最近任务列表",
-            checked = hideRecents,
-            dark = dark,
-            onCheckedChange = { on ->
-                AppVisibilityStore.setHideRecents(context, on) // 仅写 prefs（后端 §8 锁定签名）
-                applyRecentsVisibility(context)               // 立即对本任务栈生效，不等 onResume
-                hideRecents = on                              // 更新本地镜像
-            },
-        )
 
         ListRow("感谢名单", "${THANKS.size} 位朋友的支持与建议", { onOpen("thanks") }, dark)
         ListRow("支持捐赠", "支付宝 / 微信 · 金额随意，心意最重", { onOpen("donate") }, dark)
@@ -2968,6 +2997,10 @@ private fun SubPageHost(
     state: AbState,
     onStateChange: ((AbState) -> AbState) -> Unit,
     saveBar: @Composable () -> Unit,
+    // v3.0.12 P2：三个动作回调原挂在 HomeTilePage 调用点，随卡片下沉改挂此处，逻辑零改。
+    onEnableAll: () -> Unit,
+    onOpenList: () -> Unit,
+    onSelfCheck: () -> Unit,
 ) {
     val dark = isSystemInDarkTheme()
     val title = when (page) {
@@ -2975,6 +3008,10 @@ private fun SubPageHost(
         "donate" -> "支持捐赠"
         "credit" -> "致敬名单"
         "suggest" -> "功能建议"
+        PAGE_HOME_ENGINE -> "运行方式"
+        PAGE_HOME_INJECT -> "注入状态"
+        PAGE_HOME_UISTYLE -> "界面适配"
+        PAGE_HOME_LIST -> "白名单"
         "feat-general" -> "通用"
         "feat-douyin" -> "抖音"
         "feat-drama" -> "红果短剧"
@@ -3008,13 +3045,35 @@ private fun SubPageHost(
                 .padding(bottom = 40.dp),
         ) {
             Spacer(Modifier.height(14.dp))
-            // 功能二级页会即时保存，顶部给一条状态反馈；关于类页面不需要。
-            if (page.startsWith("feat-")) saveBar()
+            // v3.0.12：功能页与首页四入口二级页都经 onStateChange 即时保存，顶部给状态反馈；
+            // 关于类页面不需要。home-* 加入后，改动即时保存提示正常（G7），既有 key 零回归（G8）。
+            if (page.startsWith("feat-") || page.startsWith("home-")) saveBar()
             when (page) {
                 "thanks" -> ThanksPage(dark)
                 "donate" -> DonatePage(dark)
                 "credit" -> CreditPage(dark, onOpenUrl)
                 "suggest" -> SuggestPage(dark, onOpenUrl)
+                PAGE_HOME_ENGINE -> EnginePage(state = state, onStateChange = onStateChange, dark = dark)
+                PAGE_HOME_INJECT -> InjectStatusPage(dark = dark, onEnableAll = onEnableAll)
+                PAGE_HOME_UISTYLE -> UiStylePage(
+                    uiStyle = state.uiStyle,
+                    onUiStyleChange = { id -> onStateChange { s -> s.copy(uiStyle = id) } },
+                    dark = dark,
+                )
+                PAGE_HOME_LIST -> WhitelistPage(
+                    listMode = state.listMode,
+                    activeList = state.activeList,
+                    onListModeChange = { m -> onStateChange { s -> s.copy(listMode = m) } },
+                    onListTextChange = { txt ->
+                        onStateChange { s ->
+                            if (s.listMode == ConfStore.MODE_BLACK) s.copy(blackList = txt)
+                            else s.copy(whiteList = txt)
+                        }
+                    },
+                    onOpenList = onOpenList,
+                    onSelfCheck = onSelfCheck,
+                    dark = dark,
+                )
                 "feat-general" -> GeneralFeaturePage(state, onStateChange, dark)
                 "feat-douyin" -> DouyinFeaturePage(state, onStateChange, dark)
                 "feat-drama" -> DramaFeaturePage(state, onStateChange, dark)
