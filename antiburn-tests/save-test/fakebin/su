@@ -1,0 +1,5 @@
+#!/bin/sh
+# 假 su：记录收到的命令，模拟「已授权但读不到内容」
+printf '%s\n' "$2" >> /tmp/lt/su.log
+if [ -f /tmp/lt/su_slow ]; then sleep 30; fi
+exit 0

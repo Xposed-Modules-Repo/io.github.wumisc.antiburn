@@ -1,0 +1,36 @@
+
+===== A 组：v2.0 现有实现（复现计划 §1 的断言）=====
+[PASS] A-01  HyperOS 4 基线：图标隐藏、通知区保留  ::  left=0.0 notify=1.0 anchor=status_bar_contents
+[PASS] A-02  ColorOS 15：流体云胶囊被误伤（计划 §1 断言 2）  ::  capsule.effAlpha=0.0 clock=0.0 anchor=status_bar_contents
+[PASS] A-03  OriginOS 5：原子岛与时钟一起被灭（整窗透明）  ::  island=0.0 clock=0.0 notifyArea=null anchor=status_bar_contents
+[PASS] A-04  MagicOS 11：图标容器重建后不再生效（无重绑）  ::  旧子树=0.0 新子树=1.0 statusView仍指向=status_bar_window>status_bar>status_bar_contents
+[PASS] A-05  手势模式：导航 handle 被整体透明（无模式判断）  ::  navMode=gesture handle.effAlpha=0.0
+[PASS] A-06  isStatusBarWindow 对叶子节点也返回 true（注释声称只认窗口根）  ::  StatusBarIconView -> true, StatusBarWindowView -> true
+[PASS] A-07  古诗模式整窗透明，通知区同时不可见（设计取舍）  ::  notify.effAlpha=0.0（有通知也看不见）
+
+===== B 组：v3 参考引擎（计划 §3/§5/§6）=====
+[PASS] B-01  ColorOS 15：胶囊保留、时钟隐藏（guard 下沉）  ::  OK capsule=1.0 clock=0.0 hidden=2
+[PASS] B-02  OriginOS 5：原子岛保留、时钟隐藏  ::  OK island=1.0 clock=0.0
+[PASS] B-03  MagicOS 11：容器重建后重绑成功，胶囊仍受保护  ::  OK capsule=1.0 rebinds=1 anchor=status_bar_contents
+[PASS] B-04  手势模式：导航 handle 不被透明（onlyInMode 生效）  ::  handle.effAlpha=1.0 mode=gesture
+[PASS] B-05  三键模式：导航栏正常透明  ::  nav.effAlpha=0.0
+[PASS] B-06  锚点全不命中 → NO_ANCHOR（可解释失败）  ::  NO_ANCHOR(候选链全部未命中: [status_bar_contents, status_bar_icons, notification_icon_area, status_bar])
+[PASS] B-07  容器唯一子节点即胶囊 → GUARD_BLOCKED，整条不隐藏  ::  GUARD_BLOCKED(状态栏容器被 guard 完全覆盖，未做任何隐藏) capsule=1.0
+[PASS] B-08  alpha 被系统重置 → 检测到 RESET_BY_ROM 并恢复  ::  resets=1 left.alpha=0.0
+[PASS] B-09  连续重置 3 次 → 标记 degraded  ::  resets=3 degraded=true
+[PASS] B-10  AOSP 16 实时活动胶囊不被误伤  ::  OK live=1.0 hidden=2
+
+===== C 组：Detector 证据打分（计划 §3.1）=====
+[PASS] C-hyperos4  判定 HyperOS 4 / 三键 → hyperos-4  ::  得到 hyperos-4:13 证据=[brand:Xiaomi+3, prop:ro.mi.os.version.name+4, class:com.android.systemui.statusbar.window.StatusBarWindowView+3, id:status_bar_contents+3]
+[PASS] C-coloros15  判定 ColorOS 15 / 三键 → coloros-14-17  ::  得到 coloros-14-17:10 证据=[brand:OPPO+3, prop:ro.build.version.oplusrom+4, id:status_bar_contents+3]
+[PASS] C-originos5  判定 OriginOS 5 / 手势 → originos-4-7  ::  得到 originos-4-7:10 证据=[brand:vivo+3, prop:ro.vivo.os.version+4, id:status_bar_contents+3]
+[PASS] C-magicOs11  判定 MagicOS 11 / 三键 → magicos-8-11  ::  得到 magicos-8-11:13 证据=[brand:HONOR+3, prop:ro.build.version.magic+4, class:com.android.systemui.statusbar.window.StatusBarWindowView+3, id:status_bar_contents+3]
+[PASS] C-aosp16  判定 AOSP 16 / 三键 → generic-aosp  ::  得到 generic-aosp:3/unverified 证据=[id:status_bar_contents+3, 无版本属性 → 代际未确认]
+[PASS] C-06  套壳机（BRAND=Xiaomi + oplusrom）以属性为准  ::  得到 coloros-14-17:7 证据=[prop:ro.build.version.oplusrom+4, id:status_bar_contents+3]
+[PASS] C-07  品牌不在适配集（Meizu）→ generic-aosp 且标 unverified  ::  得到 generic-aosp:3/unverified 证据=[id:status_bar_contents+3, 无版本属性 → 代际未确认]
+[PASS] C-10  品牌命中但无版本属性 → 命中家族但标 unverified（不假装已验证）  ::  得到 hyperos-4:9/unverified 证据=[brand:Xiaomi+3, class:com.android.systemui.statusbar.window.StatusBarWindowView+3, id:status_bar_contents+3, 无版本属性 → 代际未确认]
+[PASS] C-08  判定结果附带证据链（品牌 + 版本属性）  ::  证据=[brand:OPPO+3, prop:ro.build.version.oplusrom+4, id:status_bar_contents+3]
+[PASS] C-09  阈值 7：7 分命中 HyperOS，6 分落 generic  ::  7分样本=hyperos-4:7 6分样本=generic-aosp:6/unverified
+
+================ SUMMARY ================
+PASS=27  FAIL=0  TOTAL=27

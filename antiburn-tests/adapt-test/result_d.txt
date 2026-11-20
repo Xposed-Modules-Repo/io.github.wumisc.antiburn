@@ -1,0 +1,36 @@
+扫描 5 个 profile
+
+  [OK]   generic-aosp.json
+         锚点=status_bar_contents (候选#0) guard命中=['com.android.systemui.statusbar.live.LiveUpdateCapsuleView'] 胶囊=['LiveUpdateCapsuleView']
+  [OK]   coloros-14-17.json
+         锚点=status_bar_contents (候选#0) guard命中=['com.oplus.systemui.statusbar.fluid.FluidCloudCapsuleView'] 胶囊=['FluidCloudCapsuleView']
+  [OK]   hyperos-4.json
+         锚点=status_bar_contents (候选#0) guard命中=[] 胶囊=[]
+  [OK]   magicos-8-11.json
+         锚点=status_bar_contents (候选#0) guard命中=['com.hihonor.systemui.statusbar.capsule.MagicCapsuleView'] 胶囊=['MagicCapsuleView']
+  [OK]   originos-4-7.json
+         锚点=status_bar_contents (候选#0) guard命中=['com.vivo.systemui.atomic.AtomicIslandView'] 胶囊=['AtomicIslandView']
+
+---- 反例自测 ----
+  [PASS] D-02 缺 anchors: 期望拒绝，实际拒绝
+         - schema: 'anchors' is a required property (at ['statusBar'])
+         - fixture: 缺少 demo-x.json（无 dump 不许合并）
+  [PASS] D-03 非法 hide 值: 期望拒绝，实际拒绝
+         - schema: 'display_none' is not one of ['alpha', 'visibility', 'tint', 'poem'] (at ['statusBar', 'hide'])
+         - fixture: 缺少 demo-x.json（无 dump 不许合并）
+  [PASS] D-04 含 script 字段: 期望拒绝，实际拒绝
+         - schema: Additional properties are not allowed ('script' was unexpected) (at ['statusBar'])
+         - 安全: 存在可执行语义字段 ['.statusBar.script']
+         - fixture: 缺少 demo-x.json（无 dump 不许合并）
+  [PASS] D-05 命名 xxx-final-v2: 期望拒绝，实际拒绝
+         - 命名: 文件名 xxx-final-v2.json 与 id demo-x 不一致
+         - 命名: 含禁用词 ['final', 'v2']
+         - fixture: 缺少 xxx-final-v2.json（无 dump 不许合并）
+  [PASS] D-06 无 dump（自定义 id）: 期望拒绝，实际拒绝
+         - 命名: 文件名 no-dump-profile.json 与 id demo-x 不一致
+         - fixture: 缺少 no-dump-profile.json（无 dump 不许合并）
+  [PASS] D-07 合法样本回放通过: 期望通过，实际通过
+  [PASS] D-08 跨家族套用 → guard 漏掉原子岛: 期望拒绝，实际拒绝
+         - guard: 疑似胶囊未被保护区覆盖 ['AtomicIslandView']
+
+结果: 全部通过

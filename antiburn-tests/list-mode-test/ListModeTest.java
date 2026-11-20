@@ -227,9 +227,11 @@ public class ListModeTest {
         // ---------- T-16：v2.7.1 真实 parse 回归（新旧键优先级）----------
         // 直接执行 Hook 侧真实字节码，覆盖真机日志中的 enable_video_bottom=1 残留。
         System.out.println("== T-16 真实 parse：快手/B站新旧键迁移优先级 ==");
+        // v2.9.2：B站 已删除顶部 / 底部 / 角落三项（只剩右侧点赞区），
+        // 旧键只能迁移给快手；B站 侧恒为 false。
         parse("enable_video_bottom=1\n");
-        check(Config.enableKsBottom && Config.enableBiliBottom,
-                "T-16a 仅旧键存在时仍迁移为两个应用开启", "ks=" + Config.enableKsBottom + " bili=" + Config.enableBiliBottom);
+        check(Config.enableKsBottom && !Config.enableBiliBottom,
+                "T-16a 旧共用键只迁移给快手（B站底部区已删）", "ks=" + Config.enableKsBottom + " bili=" + Config.enableBiliBottom);
 
         parse("enable_ks_bottom=0\nenable_bili_bottom=0\nenable_video_bottom=1\n");
         check(!Config.enableKsBottom && !Config.enableBiliBottom,
@@ -242,8 +244,8 @@ public class ListModeTest {
                 "ks=" + Config.enableKsBottom + " bili=" + Config.enableBiliBottom);
 
         parse("enable_ks_bottom=0\nenable_bili_bottom=1\nenable_video_bottom=1\n");
-        check(!Config.enableKsBottom && Config.enableBiliBottom,
-                "T-16d 快手关闭、B站开启：旧键不再把两边绑在一起",
+        check(!Config.enableKsBottom && !Config.enableBiliBottom,
+                "T-16d B站底部键即便写 1 也不生效（区域已删除，不留假开关）",
                 "ks=" + Config.enableKsBottom + " bili=" + Config.enableBiliBottom);
 
         parse("enable_video_bottom=0\nenable_ks_bottom=1\nenable_bili_bottom=0\n");
@@ -256,8 +258,9 @@ public class ListModeTest {
                 + "enable_ks_corner=0\nenable_bili_corner=1\nenable_video_corner=1\n");
         check(!Config.enableKsRight && Config.enableBiliRight
                         && Config.enableKsTop && !Config.enableBiliTop
-                        && !Config.enableKsCorner && Config.enableBiliCorner,
-                "T-16f 其余区域同样按独立键优先，八键语义一致", "right/top/corner 均符合预期");
+                        && !Config.enableKsCorner && !Config.enableBiliCorner,
+                "T-16f 快手独立键照旧生效；B站 只剩右侧，top/corner 一律不生效",
+                "right/top/corner 均符合预期");
 
         // ---------- T-17：v2.7.2 直播暂停信号真实逻辑 ----------
         // 直接调用 LivePause 的纯函数，验证「只有当前前台包匹配、未过期、且属于

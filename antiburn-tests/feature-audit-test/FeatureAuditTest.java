@@ -60,8 +60,9 @@ public class FeatureAuditTest {
      * 只是不再需要界面入口 —— 用户也不该再被一个容易误触的开关困扰。</p>
      */
     private static final Set<String> KNOWN_NO_UI =
-            Set.of("enableAppOverlay", "enableSysOverlay", "enableIcon", "enableDramaBottom", "enablePoem",
+            Set.of("enableSysOverlay", "enableIcon", "enableDramaBottom", "enablePoem",
                     "enableShift",
+                    // v3.0.16：enableAppOverlay 恢复界面入口（功能页「无障碍应用内遮盖」），移出例外表。
                     // v2.9.4：enableLive 已恢复为抖音页「直播间隐藏」开关，从例外表移除；
                     // B站 只剩右侧点赞区，顶部 / 底部 / 角落三项按用户要求删除入口。
                     "enableBiliTop", "enableBiliBottom", "enableBiliCorner");
@@ -1034,8 +1035,8 @@ public class FeatureAuditTest {
                 "T-22s 直播信号回源 1 秒 → 3 秒", "");
         check(cfgCode.contains("lastDirectTry > 15000L"),
                 "T-22u 文件通道读不到时退避 15 秒（不再每轮 stat）", "");
-        check(ctrlCode.contains("if (!hidden) {\n                    PixelShift.tick();"),
-                "T-22t 系统栏已透明时跳过像素位移", "");
+        check(ctrlCode.contains("if (!hidden || statusWindowVisible()) {\n                    PixelShift.tick();"),
+                "T-22t 系统栏整体不可见时才跳过像素位移（窗口仍可见则继续推进）", "");
 
         // ---------- T-23 v2.7.8 功能页列表化 / 功能建议二级页 ----------
         System.out.println("== T-23 列表化与功能建议 ==");
@@ -1065,8 +1066,12 @@ public class FeatureAuditTest {
         check(count(main, "enabled = !overlay") >= 15,
                 "T-23i App 内控件开关在遮盖引擎下统一置灰（不再放假开关）",
                 "置灰=" + count(main, "enabled = !overlay"));
-        check(main.contains("if (page.startsWith(\"feat-\")) saveBar()"),
-                "T-23j 功能二级页带保存状态反馈", "");
+        // v3.0.12：saveBar 判断由 feat- 扩为 feat-||home-，首页四入口二级页同获即时保存反馈（G7）。
+        // 用两个独立 contains 而非整串精确匹配，避免运算符顺序/空格敏感（评审 S4）；
+        // 同时仍断言 saveBar() 调用存在，保持「防功能页丢保存反馈」的原始意图不弱化。
+        check(main.contains("startsWith(\"feat-\")") && main.contains("startsWith(\"home-\")")
+                        && main.contains("saveBar()"),
+                "T-23j 功能与首页入口二级页（v3.0.12）均带保存状态反馈", "");
         check(main.contains("BackHandler(enabled = subPage != null)"),
                 "T-23k 系统返回键先回二级页（含新增页）", "");
         check(!mainCode.contains("featurePage"),
@@ -1203,10 +1208,10 @@ public class FeatureAuditTest {
         String xp282 = read(dir.resolve("XposedInit.java"));
         String cfg282 = read(dir.resolve("Config.java"));
         String prov282 = read(dir.resolve("ConfigProvider.java"));
-        // v2.8.4：盖黑通道整体停用（真机反馈黑块遮画面），默认必须为 0，
-        // 且配置层即使读到 1 也要强制不生效，否则升级后照样盖黑。
-        check(conf282.contains("enable_app_overlay=0"),
-                "T-27a 应用内区域兜底默认关（v2.8.4 由位置微移取代）", "");
+        // v3.0.16：无障碍模式重新启用应用内遮盖（仅 overlay 引擎生效），
+        // 默认必须为 1；LSPosed 引擎仍由 Config 层强制不铺黑。
+        check(conf282.contains("enable_app_overlay=1"),
+                "T-27a 应用内遮盖默认开（仅无障碍 overlay 引擎生效）", "");
         check(cfg282.contains("case \"enable_app_overlay\": ao = false;"),
                 "T-27a2 旧配置里残留的 =1 不再生效", "");
         check(mask282.contains("resolveApp(c, foregroundPkg)") && mask282.contains("VideoApps.of(fgPkg)"),
@@ -1344,36 +1349,36 @@ public class FeatureAuditTest {
         check(versionAtLeast(gradle, 48, "2.8.5"),
                 "T-30k 版本号升到 vc48 / 2.8.5", "");
 
-        // ---------- T-31 v2.8.6：盖黑通道彻底断开 ----------
-        // 真机日志实证：v2.8.4/2.8.5 期间 MASK 行 appOn=true、areas=RTBC，
-        // 退出抖音回到设置页后 rects 仍挂着 x5(douyin RTBC) —— 用户看到的就是
-        // 「整个覆盖层糊在屏幕上」。原因是 Cfg.appAreaOn 默认 true，而镜像里缺
-        // enable_app_overlay 键时那个 case 根本不执行，v2.8.4 的「强制 false」落空。
-        System.out.println("== T-31 v2.8.6 盖黑通道硬断开 ==");
+        // ---------- T-31 v2.8.6 盖黑通道断开 → v3.0.16 无障碍通道重开 ----------
+        // v2.8.6 曾用编译期常量 + 无条件置 false 硬断开；v3.0.16 起：
+        //  - 编译期常量移除，开关回到配置（enable_app_overlay）；
+        //  - 仅 overlay 引擎生效（step() 里 appArea 带 c.maskAllowed），LSPosed 引擎仍不铺黑。
+        System.out.println("== T-31 v2.8.6→v3.0.16 应用内遮盖通道 ==");
         String mask286 = read(dir.resolve("BurnInMaskService.java"));
-        check(mask286.contains("private static final boolean APP_AREA_CHANNEL = false"),
-                "T-31a 应用内盖黑总闸是编译期常量 false，配置绕不过去", "");
-        check(mask286.contains("if (!APP_AREA_CHANNEL)") && mask286.contains("return out;"),
-                "T-31b appRects 第一道门就判总闸，不再依赖配置值", "");
-        check(mask286.contains("boolean appAreaOn = false;"),
-                "T-31c Cfg.appAreaOn 默认 false（缺键时不会回到 true）", "");
-        check(mask286.contains("c.appAreaOn = false;\n        cfg = c;")
-                        || mask286.contains("c.appAreaOn = false;"),
-                "T-31d config() 读完无条件再置 false，两层保险", "");
+        check(!mask286.contains("APP_AREA_CHANNEL"),
+                "T-31a 编译期总闸已移除（配置可正常开关）", "");
+        check(!mask286.contains("if (!APP_AREA_CHANNEL)"),
+                "T-31b appRects 不再被常量门拦截", "");
+        check(mask286.contains("boolean appAreaOn = true;"),
+                "T-31c Cfg.appAreaOn 默认开（缺键时开箱可用）", "");
+        check(!mask286.contains("c.appAreaOn = false;"),
+                "T-31d config() 不再无条件强关（改由引擎判定）", "");
+        check(mask286.contains("boolean appArea = c.maskAllowed && c.appAreaOn"),
+                "T-31e 应用内遮盖仅无障碍（overlay）引擎生效，LSPosed 不铺黑", "");
         check(mask286.contains("maskView.setRects(null, null")
                         && mask286.contains("emptyList()"),
-                "T-31e 无可画区域时连旧矩形一起清，避免下次复活", "");
-        check(main.contains("enableAppOverlay = false")
+                "T-31f 无可画区域时连旧矩形一起清，避免退出 App 后残留", "");
+        check(main.contains("b(map[\"enable_app_overlay\"], true)")
                         && main.contains("enableSysOverlay = false")
                         && main.contains("lines[\"enable_app_overlay\"]"),
-                "T-31f 读配置时强制 false，写盘保留字段落点", "");
-        check(main.contains("val enableAppOverlay: Boolean = false")
+                "T-31g 读配置走真实开关（缺键默认开），SystemUI 覆盖层仍关", "");
+        check(main.contains("val enableAppOverlay: Boolean = true")
                         && main.contains("val enableSysOverlay: Boolean = false"),
-                "T-31g UI 状态默认 false（AbState 不再把通道带回 true）", "");
-        check(main.contains("Bool(38, false)") && main.contains("Bool(39, false)"),
-                "T-31h Bundle 恢复路径默认 false", "");
+                "T-31h UI 状态默认开（仅 overlay 引擎生效）", "");
+        check(main.contains("Bool(38, true)") && main.contains("Bool(39, false)"),
+                "T-31i Bundle 恢复路径与应用默认一致", "");
         check(!main.contains("预览 5 秒"),
-                "T-31i 移除「预览 5 秒」入口（点了就是整屏黑块）", "");
+                "T-31j 移除「预览 5 秒」入口（点了就是整屏黑块）", "");
         check(lsp.contains("base64 -w0"), "T-31j 自检改用 base64 拉库，绕开 SELinux 标签", "");
         check(versionAtLeast(gradle, 49, "2.8.6"),
                 "T-31k 版本号升到 vc49 / 2.8.6", "");
@@ -1781,6 +1786,7 @@ public class FeatureAuditTest {
         // v3.0.2 修三处几何识别 bug，锚点递增为 vc62 / 3.0.2；
         // v3.0.3 右上角安全修复 + 两处只读探测，锚点递增为 vc63 / 3.0.3。
         // v3.0.4~v3.0.9 依次递增；v3.0.10 相位 tick 与设置页轮询降频，锚点递增为 vc70 / 3.0.10。
+        // v3.0.11 桌面图标/最近任务隐藏 + P0 误伤修复 + P5 磁贴 + P6 UI 简洁化 + P-1 heads-up 修复，锚点递增为 vc71 / 3.0.11。
         System.out.println("== T-42 3.0 稳定版版本号 / 发布契约 ==");
         check(versionAtLeast(gradle, 60, "3.0"),
                 "T-42a 版本号升到 vc60 / 3.0 稳定版（Obtainium 递增识别）", "");
@@ -1788,9 +1794,9 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 70
-                    && "3.0.10".equals(nm.group(1));
-            check(ok, "T-42b versionCode 恰为 70 / versionName 恰为 3.0.10（非区间，锁死发布锚点）", "");
+                    && Integer.parseInt(cm.group(1)) == 76
+                    && "3.0.16".equals(nm.group(1));
+            check(ok, "T-42b versionCode 恰为 76 / versionName 恰为 3.0.13（非区间，锁死发布锚点）", "");
         }
         check(hook297raw.contains("SAFE_RESTORE") && hook297raw.contains("DRAMA_PAYWALL_HIDE"),
                 "T-42c 3.0 沿用 v2.9.7/v2.9.6 定稿功能（恢复路径 + 红果弹窗均在）", "");
@@ -1864,8 +1870,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 70
-                    && "3.0.10".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 76
+                    && "3.0.16".equals(nm.group(1));
             // 与 T-42b 断言同源，是发布前的双重防回退锁，不冒充新增不变量（评审建议改标签）。
             check(ok, "T-43c P3 版本锚点与 T-42b 双重锁定（发布前防回退，非新增不变量）", "");
         }
@@ -1903,9 +1909,9 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 70
-                    && "3.0.10".equals(nm.group(1));
-            check(ok, "T-44c 版本号恰为 70 / 3.0.10（发布锚点）", "");
+                    && Integer.parseInt(cm.group(1)) == 76
+                    && "3.0.16".equals(nm.group(1));
+            check(ok, "T-44c 版本号恰为 76 / 3.0.16（发布锚点）", "");
         }
 
         // ---------- T-45 v3.0.3 右上角安全修复 + 两处只读探测越界防护 ----------
@@ -1946,9 +1952,9 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 70
-                    && "3.0.10".equals(nm.group(1));
-            check(ok, "T-45c 版本号恰为 70 / 3.0.10（发布锚点）", "");
+                    && Integer.parseInt(cm.group(1)) == 76
+                    && "3.0.16".equals(nm.group(1));
+            check(ok, "T-45c 版本号恰为 76 / 3.0.16（发布锚点）", "");
         }
 
         // ---------- T-46 v3.0.4 快手右侧作者栏放行（用户授权绕 rw>=0.30 红线） ----------
@@ -2023,14 +2029,14 @@ public class FeatureAuditTest {
             // ⑤ 版本锚点 + 辅助方法只读性
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
-            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 70
-                    && "3.0.10".equals(nm.group(1));
+            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 76
+                    && "3.0.16".equals(nm.group(1));
             String helper = stripComments(slice(dy304raw, "private static boolean hasChildByClass(View v, String target)",
                     "private static int scoreRight(ViewGroup g)"));
             boolean readonly = helper.contains("MAX_DEPTH") && helper.contains("catch (Throwable")
                     && !helper.contains("setVisibility") && !helper.contains("setAlpha")
                     && !helper.contains("setTranslation");
-            check(ver && readonly, "T-46e 版本 70/3.0.10；hasChildByClass 有深度上限+异常收敛且只读", "");
+            check(ver && readonly, "T-46e 版本 76/3.0.16；hasChildByClass 有深度上限+异常收敛且只读", "");
         }
 
         // ---------- T-47 v3.0.5 底部标题栏只读探针 TDUMP ----------
@@ -2068,9 +2074,9 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 70
-                    && "3.0.10".equals(nm.group(1));
-            check(ok, "T-47c 版本号恰为 70 / 3.0.10（v3.0.9 发布锚点）", "");
+                    && Integer.parseInt(cm.group(1)) == 76
+                    && "3.0.16".equals(nm.group(1));
+            check(ok, "T-47c 版本号恰为 76 / 3.0.16（v3.0.13 发布锚点）", "");
         }
 
         // ---------- T-48 v3.0.6 三处精准隐藏（红点禁藏为开发门禁，缺一即失败） ----------
@@ -2332,12 +2338,12 @@ public class FeatureAuditTest {
                     "T-48-UPG 升级回归：三新键默认 false，老配置缺键三功能全关", "");
         }
         {
-            // VER 版本锚点：七处旧断言已同步 70/3.0.10（此前 69/3.0.9、68/3.0.8 依次同步，精确相等）
+            // VER 版本锚点：七处旧断言已同步 76/3.0.16（此前 71/3.0.11、70/3.0.10、69/3.0.9 依次同步，精确相等）
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ver = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 70 && "3.0.10".equals(nm.group(1));
-            check(ver, "T-48-VER 版本锚点 70/3.0.10（T-42b~T-47c 六处已同步）", "");
+                    && Integer.parseInt(cm.group(1)) == 76 && "3.0.16".equals(nm.group(1));
+            check(ver, "T-48-VER 版本锚点 76/3.0.16（T-42b~T-47c 六处已同步）", "");
         }
 
         // ---------- T-49 v3.0.7 定向隐藏通道 THH 测试锁（安全命门确定性守卫） ----------
@@ -2503,8 +2509,8 @@ public class FeatureAuditTest {
             // E3 旧 Bool(0..42) 零改：restore 旧段（到 Bool(43) 之前）逐字 + SHA-256
             String oldRestore = slice(act307, "restore = {", "enableKsLiveHits = Bool(43)");
             check(count(oldRestore, ".+") == 66
-                            && sha256(oldRestore).equals("0a32803e983c571cd763cead185c3d7616c6ed03ab764f67df1e3f0b96a6ad40"),
-                    "T-49-E3 旧 Bool(0..42) 零改（restore 旧段逐字）", "");
+                            && sha256(oldRestore).equals("2b36244db567cb845391a2d07af5a4bc8702823eb6f7478a2add947821f12438"),
+                    "T-49-E3 旧 Bool(0..42) 零改（restore 旧段逐字，v3.0.16 仅 Bool(38) 授权改 true）", "");
         }
         {
             // F 变异实证守卫：评审注入「放行数字」→ B1 FAIL；「跳过 containsVideoSurface」→ C2 FAIL。
@@ -2683,14 +2689,18 @@ public class FeatureAuditTest {
                     "private static void applyShow() {",
                     "/**\n     * 暂停原因"
             };
-            int[] a2Lines = {5, 16, 18, 20, 11, 129, 41};
+            // v3.0.11 重锁：段[5] applyHide→applyShow 区间含 P-1 heads-up 修复
+            // （hideStatusKeepNotify 取消整窗 alpha=0 降级 + 新增 hideKnownStaticIconsOnly + dimAlong 祖先守卫），
+            // 属授权改动（T-54 已单独验收全绿）；经 git diff 逐行核对，其余 6 段逐字未改仍 MATCH 基线。
+            // v3.0.14 重锁：段[3] enableShift 区间含偏移推进修复（hidden 但窗口可见时仍 tick），20→23 行。
+            int[] a2Lines = {5, 16, 18, 23, 11, 157, 41};
             String[] a2Sha = {
                     "b1e940509f7ec1d0f5e85264d4559d8429583bc6a7133abf657744823762f9bc",
                     "d438516ad9b062d17fc3710c5e95816d9eb8af0f5033a0244bc444106931b315",
                     "2e15d96a58c8952746da6ca190add42c7bfeb7ab76fc24c70f03c89d1fa90c91",
-                    "2e637939149bcae4d492cbff4dc7cba8e929dfc977e17ce69a97942f346306f7",
+                    "a8a3c21d8ec069e7d778a2e3e18682c9b4a68f25945bdb80452ebf823f138d35",
                     "31f7e195cb32c1bf85b3631c5e2ac43dc8d795b5cc2e48e1137371646ba36020",
-                    "738e4f715865cd0e673c79bbb42205217f741486fabffec879735ef162659c6c",
+                    "504f7e117ec96c570f74ed6fc2b2b39d7899fd3881cee95510d2a23c1bc9c501",
                     "29a926668a181c748745072486318738514980532d0c6d971a90b77e5e8363a9"
             };
             StringBuilder drift = new StringBuilder();
@@ -2725,15 +2735,55 @@ public class FeatureAuditTest {
             if (frontendPending) {
                 System.out.println("  SKIP  T-52-A3 前端轮询契约（MainActivity.kt 尚未改，待前端完成后独立复验重跑）  — " + detail);
             } else {
-                check(old5k == 0 && decl == 1 && used == 2 && now == 2
-                                && injKind == 1 && injDrama == 1 && fresh == 2,
-                        "T-52-A3 前端 STATUS_REFRESH_MS=15000L / 两处引用 / 轮询保活 / 判定零改", detail);
+            // v3.0.11 锚点同步：P6 UI 简洁化新增顶层 recentlyInjected()（design-ui §MechanismNote/FeatureSummaryBar
+            // 复用点，调用见 MainActivity L2431），再引一次 lastInject(context, kind) 与 24L*3600_000L；
+            // 判定口径（24h freshness / 只读 prefs）零改，injDrama 仍恰 1。经 git diff 确认属授权改动，非改坏。
+            check(old5k == 0 && decl == 1 && used == 2 && now == 2
+                            && injKind == 2 && injDrama == 1 && fresh == 3,
+                    "T-52-A3 前端 STATUS_REFRESH_MS=15000L / 两处引用 / 轮询保活 / 判定口径零改(P6 复用点 injKind=2/fresh=3)", detail);
             }
         }
 
-        // A4 · P3 三处零改：DouyinHook 整文件哈希 + fetchInterval 片段哈希/三档字面 + navMicroSec
+        // A4 · P3 三处零改：DouyinHook【归一化重算】+ fetchInterval 片段哈希/三档字面 + navMicroSec
+        //   v3.0.11：DouyinHook 本轮有 P0a/P0b 授权改动，整文件哈希必然变化。按 design-backend §9.1/§12，
+        //   禁用整文件哈希，改为「剥离本轮 6 类授权改动后重算 == 基线」——既守住零越界，又不误伤授权改动。
+        //   v3.0.14：新增悬浮球「贴底收起」授权改动（字段/ensureBall/onTouch/removeBall），基线已重锁。
         {
-            String dyHash = sha256(dy310);
+            String dyNorm = dy310;
+            // 1) 词表：新注释+新数组 -> 旧数组
+            dyNorm = dyNorm.replace(
+                    "    // v3.0.11 P0a：全屏浏览入口是可点击功能控件，不作提示隐藏；由 isClickableControl 兜底。\n"
+                            + "    private static final String[] KS_FEED_KEYS = {\"含AI生成内容\", \"内容由AI生成\"};",
+                    "    private static final String[] KS_FEED_KEYS = {\"全屏观看\", \"含AI生成内容\", \"内容由AI生成\"};");
+            // 2) 6 个 helper 块：从分隔注释到 targetLeafUp 的 javadoc 之前整块删除
+            String helperStart = "    // ---------- v3.0.11 P0a/P0b：只读 UI 上下文探针（纯加性，不改任何既有函数/出口）----------\n";
+            String helperEnd = "    /**\n     * v3.0.7：从命中叶子向上并进最内层静态父容器（<= maxUp 层）。";
+            int hi = dyNorm.indexOf(helperStart);
+            int hj = dyNorm.indexOf(helperEnd, hi + helperStart.length());
+            if (hi >= 0 && hj > hi) {
+                dyNorm = dyNorm.substring(0, hi) + dyNorm.substring(hj);
+            }
+            // 3) 4 个 collector 的 TextView 早退块
+            dyNorm = dyNorm.replace(
+                    "                // v3.0.11 P0：可点击功能入口 / 用户主页作品列表上下文跳过\n"
+                            + "                if (isClickableControl(v) || isProfileListContext(v)) {\n"
+                            + "                    return;\n"
+                            + "                }\n", "");
+            dyNorm = dyNorm.replace(
+                    "                // v3.0.11 P0a：可点击功能入口跳过；P0b：用户主页作品列表上下文跳过\n"
+                            + "                if (isClickableControl(v) || isProfileListContext(v)) {\n"
+                            + "                    return;\n"
+                            + "                }\n", "");
+            dyNorm = dyNorm.replace(
+                    "                // v3.0.11 P0b：用户主页/作品列表上下文跳过（红果剧集页通常返回 false）\n"
+                            + "                if (isProfileListContext(v)) {\n"
+                            + "                    return;\n"
+                            + "                }\n", "");
+            // 4) 结构锚两处 && !isProfileListContext(g) + 行尾注释 -> 还原闭合括号
+            dyNorm = dyNorm.replace(
+                    "\n                    && !isProfileListContext(g)) {   // v3.0.11 P0b：用户主页作品卡不隐藏",
+                    ") {");
+            String dyNormHash = sha256(dyNorm);
             String fetchBody = slice(cfg310, "private static long fetchInterval() {", "/** 屏幕是否亮着。");
             int fetchLines = count(fetchBody, ".+");
             String fetchHash = sha256(fetchBody);
@@ -2744,13 +2794,13 @@ public class FeatureAuditTest {
             int fixed45 = count(act310, "(?m)^[ \\t]*val[ \\t]+navMicroSec[ \\t]*=[ \\t]*45[ \\t]*$");
             int boundSaveable = count(act310,
                     "navMicroSec[^\\n]*rememberSaveable|rememberSaveable[^\\n]*navMicroSec");
-            check("b65087a535e70a6f90bc6f1b1f9ac049006e3b262a53a71d4b34c690617882db".equals(dyHash)
+            check("a210b8c6328276f337443f6194680906ba526db6d7e65c58ac5bef2e2d274497".equals(dyNormHash)
                             && fetchLines == 11
                             && "e9395fb642fcb791b8af95ce676fb109cd7c16196ac7ff8d9242def575ba39a7".equals(fetchHash)
                             && t60 == 1 && t2 == 1 && t20 == 1 && t90 == 1
                             && fixed45 == 1 && boundSaveable == 0,
-                    "T-52-A4 DouyinHook/fetchInterval/navMicroSec 三处零改",
-                    "dy=" + dyHash.substring(0, 8) + " fetchLines=" + fetchLines
+                    "T-52-A4 DouyinHook 归一化重算/fetchInterval/navMicroSec 三处零改",
+                    "dyNorm=" + dyNormHash.substring(0, 8) + " fetchLines=" + fetchLines
                             + " fetch=" + fetchHash.substring(0, 8)
                             + " 60000/2000/20000/90000=" + t60 + "/" + t2 + "/" + t20 + "/" + t90
                             + " fixed45=" + fixed45 + " bound=" + boundSaveable);
@@ -2779,6 +2829,468 @@ public class FeatureAuditTest {
                     "T-52-M 变异实证：α 3000→2000→A1 FAIL；β 字面 replace 回退 delay(5_000)→A3 FAIL",
                     "caughtA=" + caughtA + " caughtB=" + caughtB + " baseOk=" + baseOk
                             + " betaSrc=" + (frontendDone ? "real" : "fixture(frontend-pending)"));
+        }
+
+        // ---------- T-53 v3.0.11：P0 误伤修复 / P1 桌面图标 / P2 最近任务底座 / P5 磁贴（真守卫） ----------
+        // 公共约定：数量断言一律 count(regex)（Pattern.find 真计数），禁止 \| 字面竖线空断言；
+        // 变异实证只在内存副本上做，不落盘、不污染真源。
+        System.out.println();
+        System.out.println("== T-53 v3.0.11 P0/P1/P2/P5 真守卫 ==");
+        String dy311 = read(dir.resolve("DouyinHook.java"));
+        String tile311 = read(dir.resolve("AntiburnTile.java"));
+        String vis311 = read(dir.resolve("AppVisibilityStore.java"));
+        String act311 = read(dir.resolve("MainActivity.kt"));
+        String man311 = read(dir.resolve("../../../../../AndroidManifest.xml"));
+        String str311 = read(dir.resolve("../../../../../res/values/strings.xml"));
+        String ic311 = read(dir.resolve("../../../../../res/drawable/ic_tile.xml"));
+        String app311 = read(dir.resolve("AbApplication.java"));
+
+        // A1 · KS_FEED 词表删"全屏观看"且保留真目标（限域到数组行）
+        {
+            String ksLine = slice(dy311, "String[] KS_FEED_KEYS =", ";");
+            int banned = count(ksLine, "全屏观看");
+            int keep = count(ksLine, "含AI生成内容");
+            check(banned == 0 && keep == 1,
+                    "T-53-A1 KS_FEED 词表删全屏观看且保留含AI生成内容",
+                    "banned=" + banned + " keep=" + keep);
+        }
+
+        // A1b · DRAMA 词表仍含"全屏观看"（限域 slice，不数注释/L4195）
+        {
+            String drLine = slice(dy311, "String[] DRAMA_KEYS =", "DRAMA_NAV_KEYS");
+            int dr = count(drLine, "全屏观看");
+            check(dr >= 1,
+                    "T-53-A1b DRAMA 词表保留全屏观看（限域旁证，DRAMA 零改）",
+                    "dr=" + dr);
+        }
+
+        // A2 · 新判据 6 helper 存在且被调用
+        {
+            int defCtx = count(dy311, "private static boolean isProfileListContext\\(");
+            int defCards = count(dy311, "private static int countContentCards\\(");
+            int defDom = count(dy311, "private static boolean hasDominantVideoSurface\\(View v\\)");
+            int uses = count(dy311, "isProfileListContext\\(");
+            check(defCtx == 1 && defCards == 1 && defDom == 1 && uses >= 6,
+                    "T-53-A2 新判据函数存在且被调用",
+                    "defCtx=" + defCtx + " defCards=" + defCards + " defDom=" + defDom + " uses=" + uses);
+        }
+
+        // A2b · 4 处 targetLeafUp 并进常量零改 + leafUpLimit 已删
+        {
+            int tlu = count(dy311, "targetLeafUp\\(v, 2, 0\\.50f, 0\\.50f\\)");
+            int leafLimit = count(dy311, "leafUpLimit");
+            check(tlu == 4 && leafLimit == 0,
+                    "T-53-A2b 4 处并进常量零改 + leafUpLimit 已删",
+                    "targetLeafUp=" + tlu + " leafUpLimit=" + leafLimit);
+        }
+
+        // A2c · 几何取反不回归 + 有害兜底 isProfileContent 已删（复-B1）
+        {
+            int geoNeg = count(dy311, "!targetGeoOk\\(c, 0\\.45f, 0\\.45f\\)");
+            int areaRule = count(dy311, "rw \\* rh > 0\\.50f");
+            int profileContent = count(dy311, "isProfileContent");
+            int anchorGuard = count(dy311, "!isProfileListContext\\(g\\)");
+            check(geoNeg == 0 && areaRule == 1 && profileContent == 0 && anchorGuard == 2,
+                    "T-53-A2c 几何取反不回归 + isProfileContent 已删 + 结构锚两处守卫",
+                    "geoNeg=" + geoNeg + " areaRule=" + areaRule
+                            + " profileContent=" + profileContent + " anchorGuard=" + anchorGuard);
+        }
+
+        // A3 · Manifest LAUNCHER 三作用域（本体 0 / alias 1 / queries 1）+ 全局 ==2 + DONT_KILL_APP
+        {
+            String mainBlk = slice(man311, "android:name=\".MainActivity\"", "</activity>");
+            String aliasBlk = slice(man311, "<activity-alias", "</activity-alias>");
+            String qBlk = slice(man311, "<queries>", "</queries>");
+            int inMain = count(mainBlk, "LAUNCHER");
+            int inAlias = count(aliasBlk, "LAUNCHER");
+            int tgtAct = count(aliasBlk, "targetActivity=\".MainActivity\"");
+            int inQ = count(qBlk, "LAUNCHER");
+            int total = count(man311, "android.intent.category.LAUNCHER");
+            int dk = count(vis311, "DONT_KILL_APP");
+            // dk 真守卫：AppVisibilityStore 注释里另有 2 处说明性 DONT_KILL_APP（L33 javadoc / L60 行注），
+            // 原始计数=3 含注释；真实调用仅 L61 一处。设计只要求"切换时带 DONT_KILL_APP"，锁实现处恰好 1 即可，
+            // 故用 stripComments 后的计数守卫（若实现删掉 flag 则归 0 → FAIL；不被注释数量绑架）。
+            int dkCode = count(stripComments(vis311), "DONT_KILL_APP");
+            check(inMain == 0 && inAlias == 1 && tgtAct == 1 && inQ == 1 && total == 2 && dkCode == 1,
+                    "T-53-A3 LAUNCHER 三作用域(0/1/1)+全局==2+DONT_KILL_APP(实现处恰好1)",
+                    "main=" + inMain + " alias=" + inAlias + " target=" + tgtAct
+                            + " queries=" + inQ + " total=" + total + " dk(raw/code)=" + dk + "/" + dkCode);
+        }
+
+        // A4 · 存储键存在且隔离（两条独立单字面 count，杜绝 \| 空断言）
+        {
+            int p1 = count(vis311, "antiburn_visibility");
+            int p2 = count(vis311, "hide_launcher_icon");
+            int p3 = count(vis311, "hide_recents");
+            int cs = count(vis311, "ConfStore");
+            int ab = count(vis311, "AbState");
+            String visStrip = stripComments(vis311);
+            int csS = count(visStrip, "ConfStore");
+            int abS = count(visStrip, "AbState");
+            check(p1 == 1 && p2 == 1 && p3 == 1 && cs == 0 && ab == 0 && csS == 0 && abS == 0,
+                    "T-53-A4 存储键存在且隔离（不引用配置桥接类/状态类）",
+                    "keys=" + p1 + "/" + p2 + "/" + p3 + " raw=" + cs + "/" + ab
+                            + " strip=" + csS + "/" + abS);
+        }
+
+        // A5 · P2 选型正确（setExcludeFromRecents / 无 finishAndRemoveTask / onResume）
+        //   前端 MainActivity.kt 由韦端宇并行落地，若此刻未含新函数则 SKIP 并如实标注。
+        {
+            int setEx = count(act311, "setExcludeFromRecents\\(");
+            // finish 真守卫：MainActivity L700 注释含"不用 finishAndRemoveTask()"字样（raw=1 是注释，非调用）。
+            // 设计（design-backend §6.1）明确禁用该 API，实现用的是 AppTask.setExcludeFromRecents。
+            // 用 stripComments 后计数守卫==0：若真有人写了该调用则命中 → FAIL；不被说明性注释误伤。
+            int finish = count(stripComments(act311), "finishAndRemoveTask");
+            int onResume = count(act311, "override fun onResume\\(");
+            boolean frontendPending = setEx == 0 && onResume == 0;
+            if (frontendPending) {
+                System.out.println("  SKIP  T-53-A5 P2 前端接线（MainActivity.kt 由前端并行落地，待前端完成后独立复验重跑）"
+                        + "  — setEx=" + setEx + " finish=" + finish + " onResume=" + onResume);
+            } else {
+                check(setEx >= 1 && finish == 0 && onResume == 1,
+                        "T-53-A5 P2 选型正确(setExcludeFromRecents) + 无 finishAndRemoveTask + onResume",
+                        "setEx=" + setEx + " finish=" + finish + " onResume=" + onResume);
+            }
+        }
+
+        // A6 · 磁贴文案 + 并发零改（applyTile / onClick 分作用域计数）
+        {
+            String tileBlk = slice(tile311, "private void applyTile(", "private boolean readEnabled");
+            String clickBlk = slice(tile311, "public void onClick()", "private void applyTile");
+            int tLabel = count(tileBlk, "防烧屏总开关");
+            int tOld = count(tileBlk, "防止烧屏");
+            // tSub 真守卫：applyTile 的 javadoc 注释含 2 处"已开启"字样（"磁贴显示已开启"/"仍是「已开启」"），
+            // raw=3 含注释；真实 subtitle 仅 L59 一处。用 stripComments 守卫 subtitle 恰好 1 处"已开启"。
+            int tSub = count(stripComments(tileBlk), "已开启");
+            int cOn = count(clickBlk, "防烧屏总开关 ·");
+            int cOld = count(clickBlk, "防止烧屏");
+            int cFlip = count(clickBlk, "ConfStore\\.flipStatus\\(\\)");
+            int cThread = count(clickBlk, "new Thread");
+            int strLabel = count(str311, "<string name=\"tile_label\">防烧屏总开关</string>");
+            check(tLabel == 1 && tOld == 0 && tSub == 1 && cOn == 2 && cOld == 0
+                            && cFlip == 1 && cThread == 1 && strLabel == 1,
+                    "T-53-A6 磁贴 label/Toast 文案 + flipStatus/后台线程零改",
+                    "tile=" + tLabel + "/" + tOld + "/" + tSub + " click=" + cOn + "/" + cOld
+                            + "/" + cFlip + "/" + cThread + " strings=" + strLabel);
+        }
+
+        // A7 · 越界零改哈希（9 个文件，逐字 MATCH 基线）
+        {
+            String[][] baseFiles = {
+                    // P-1 授权改动：Controller.java 基线为修复后实测值
+                    // （v3.0.14：containsHeadsUp 双判据 + hidden 下窗口可见时仍推进偏移）。
+                    {"Controller.java", "9ede70eb26ebdbe840995045e2f619ad5c03b8362a442fd4b480ea90f38709f9"},
+                    {"Config.java", "b3d39497ddd5b1ef5b18006e6a445447cd2f02d73104acf30bd2aa6199826193"},
+                    // v3.0.16 授权改动：enable_app_overlay 默认值 0→1（仅无障碍引擎生效）
+                    {"ConfStore.java", "44f94cd303b3d8a07403d0e6d9361e1c700f59f98a60a9f99fc4d73de06ac192"},
+                    {"ThhLiveGate.java", "09903e9bb86f1f9f044c04a869df71a9c6e31ea8d8e4746aa7381c0e81226c5f"},
+                    // v3.0.16 授权改动：应用内遮盖通道重开（仅 overlay 引擎）
+                    {"BurnInMaskService.java", "7ca381181dbc1012478898c545e56d0d0e42d417fcaff8129fdb0c2b2ba0f908"},
+                    {"BootReceiver.java", "b3683f5ad949f0b68f5d5de2464befa473993cda84192d7b7baa8f99fd84685e"},
+                    {"VideoApps.java", "a2d2e5d5d3ccd65e6dc2960a2e80d7237ede53230161fdf790f6812327dddea4"},
+                    {"VideoAppProbe.java", "5ea4249ba96be6c2fc3a948d8cced94297d073ea8f3c91656339d361cc157781"},
+                    {"LivePause.java", "a831315930feaf768dbf00dcdec317338a7ddce6707f3e134142a5b951aae984"},
+                    {"LspScope.java", "0a113408c4e7019c32529f347fc1693659dcd9e4afcfeccff10fb41d098fbc4e"},
+                    {"AppRegions.java", "10ce4e92cc47027ca4cdc4e316825bc7a6cc937aa30a9536514c7a4994ae9563"}
+            };
+            int ok = 0;
+            StringBuilder bad = new StringBuilder();
+            for (String[] fb : baseFiles) {
+                String h = sha256(read(dir.resolve(fb[0])));
+                if (fb[1].equals(h)) {
+                    ok++;
+                } else {
+                    bad.append(fb[0]).append('=').append(h.substring(0, 8)).append(' ');
+                }
+            }
+            String icHash = sha256(ic311);
+            boolean icOk = "fae472467cde62a45c6d3a4914de0e35eadc22632aad5441a176c62e6f13c950".equals(icHash);
+            check(ok == baseFiles.length && icOk,
+                    "T-53-A7 越界零改哈希（11 Hook 文件 + ic_tile）",
+                    "match=" + ok + "/" + baseFiles.length + " ic=" + icOk + " bad=" + bad);
+        }
+
+        // M · 变异实证（内存副本，真守卫自证）：α~η
+        {
+            // α：KS_FEED 词表加回"全屏观看" → A1 FAIL
+            String mutA = dy311.replace("String[] KS_FEED_KEYS = {\"含AI生成内容\", \"内容由AI生成\"}",
+                    "String[] KS_FEED_KEYS = {\"全屏观看\", \"含AI生成内容\", \"内容由AI生成\"}");
+            boolean caughtA = count(slice(mutA, "String[] KS_FEED_KEYS =", ";"), "全屏观看") > 0;
+            // β：删 alias 的 LAUNCHER → A3 FAIL
+            String mutB = man311.replace("<category android:name=\"android.intent.category.LAUNCHER\" />", "<!--removed-->");
+            boolean caughtB = count(slice(mutB, "<activity-alias", "</activity-alias>"), "LAUNCHER") == 0;
+            // γ：setExcludeFromRecents → finishAndRemoveTask（夹具，不依赖前端是否落地）
+            String gammaSrc = "t.setExcludeFromRecents(on);";
+            String mutG = gammaSrc.replace("setExcludeFromRecents", "finishAndRemoveTask");
+            boolean caughtG = count(mutG, "finishAndRemoveTask") == 1 && count(mutG, "setExcludeFromRecents\\(") == 0;
+            // δ：countContentCards 改回 !targetGeoOk(0.45) → A2c FAIL
+            String mutD = dy311.replace("hasCoverImage(c, 0) && hasChildByClass(c, \"TextView\")",
+                    "!targetGeoOk(c, 0.45f, 0.45f) && hasChildByClass(c, \"TextView\")");
+            boolean caughtD = count(mutD, "!targetGeoOk\\(c, 0\\.45f, 0\\.45f\\)") == 1;
+            // ε：注入 ConfStore.read(); 进 AppVisibilityStore → A4 FAIL
+            String mutE = vis311 + "\n    static void leak() { ConfStore.read(); }\n";
+            boolean caughtE = count(mutE, "ConfStore") > 0 || count(stripComments(mutE), "ConfStore") > 0;
+            // ζ：把 LAUNCHER 加回本体 activity → A3 FAIL（mainBlk 命中 + 全局==3）
+            String mutZ = man311.replace("android:name=\".MainActivity\"\n            android:exported=\"true\">",
+                    "android:name=\".MainActivity\"\n            android:exported=\"true\">\n"
+                            + "            <intent-filter><category android:name=\"android.intent.category.LAUNCHER\" /></intent-filter>");
+            boolean caughtZ = count(slice(mutZ, "android:name=\".MainActivity\"", "</activity>"), "LAUNCHER") >= 1
+                    && count(mutZ, "android.intent.category.LAUNCHER") == 3;
+            // η：把 isProfileContent 兜底加回结构锚 → A2c FAIL
+            String mutEta = dy311 + "\n    private static boolean isProfileContent(View g) { return false; }\n";
+            boolean caughtEta = count(mutEta, "isProfileContent") > 0;
+            check(caughtA && caughtB && caughtG && caughtD && caughtE && caughtZ && caughtEta,
+                    "T-53-M 变异实证：α/β/γ/δ/ε/ζ/η 全部 caught",
+                    "α=" + caughtA + " β=" + caughtB + " γ=" + caughtG + " δ=" + caughtD
+                            + " ε=" + caughtE + " ζ=" + caughtZ + " η=" + caughtEta);
+        }
+
+        // ---------- T-54 v3.0.11 P-1 heads-up 横幅可达性（真守卫，设计门禁 PASS 版） ----------
+        {
+            System.out.println();
+            System.out.println("== T-54 P-1 heads-up 可达性（G1~G9）==");
+            String p1ctrl = stripComments(read(dir.resolve("Controller.java")));
+            String ps = stripComments(read(dir.resolve("PixelShift.java")));
+            String ogo = stripComments(read(dir.resolve("OverlayGeometry.java")));
+            String bmsRaw = read(dir.resolve("BurnInMaskService.java"));
+            String cfg = read(dir.resolve("../../../../../res/xml/accessibility_service_config.xml"));
+
+            // G1 · 白名单函数存在 / 递归祖先扫描 / 只读 / isIconLike 保留
+            String body = slice(p1ctrl, "static boolean isHeadsUpContainer", "\n    }");
+            String scan = slice(p1ctrl, "static boolean containsHeadsUp", "\n    }");
+            check(body.contains("HeadsUp") && body.contains("HeadsUpNotificationView")
+                            && body.contains("NotificationShade") && body.contains("heads_up"),
+                    "T-54-G1a 白名单覆盖 AOSP/OEM/下拉面板/资源id 锚点", "");
+            check(scan.contains("isHeadsUpContainer") && scan.contains("getChildCount")
+                            && scan.contains("HEADS_UP_SCAN_MAX_DEPTH"),
+                    "T-54-G1b containsHeadsUp 递归扫描+深度上限存在", "");
+            boolean pure = !body.contains("setAlpha") && !body.contains("setTranslation")
+                    && !body.contains("setVisibility")
+                    && !scan.contains("setAlpha") && !scan.contains("setTranslation")
+                    && !scan.contains("setVisibility");
+            check(pure, "T-54-G1c 两函数只读（无 setAlpha/Translation/Visibility）", "");
+            check(slice(p1ctrl, "String[] bad = {", "};").contains("HeadsUp"),
+                    "T-54-G1d isIconLike 黑名单保留 HeadsUp 词（防回退）", "");
+
+            // G2 · 整窗 alpha=0 已移除 + 残留恢复（分两处降级各自 slice，第3轮门禁定稿）
+            String hide = slice(p1ctrl, "private static void hideStatusKeepNotify", "private static List<View> pathTo");
+            check(!hide.contains("sv.setAlpha(0f)") && !hide.contains("sv.setVisibility"),
+                    "T-54-G2a hideStatusKeepNotify 内无整窗 sv.setAlpha(0f)/setVisibility", "");
+            check(countLiteral(hide, "hideKnownStaticIconsOnly(sv, 0)") == 2,
+                    "T-54-G2b 两处降级均改走 hideKnownStaticIconsOnly", "");
+            String fbNoArea = slice(hide, "if (!(sv instanceof android.view.ViewGroup)", "return;");
+            String fbNoPath = slice(hide, "if (path == null || path.size() < 2)", "return;");
+            check(fbNoArea.contains("sv.setAlpha(1f)"),
+                    "T-54-G2c1 降级①(notifyArea 识别失败)恢复残留 sv.alpha=1", "");
+            check(fbNoPath.contains("sv.setAlpha(1f)"),
+                    "T-54-G2c2 降级②(path 缺失)恢复残留 sv.alpha=1", "");
+            String fb = slice(p1ctrl, "private static void hideKnownStaticIconsOnly", "\n    }");
+            check(fb.contains("containsHeadsUp(v, 0)") && !fb.contains("sv.setAlpha"),
+                    "T-54-G2d 降级递归含祖先守卫且不整窗透明", "");
+
+            // G3 · findNotificationNode 收紧（stripComments + 字面量构造规避转义）
+            String fnn = slice(p1ctrl, "private static View findNotificationNode", "private static String desc");
+            check(fnn.contains("containsHeadsUp(c, 0)") && fnn.contains("NotificationIcon")
+                            && !fnn.contains("n.contains(" + '"' + "Notification" + '"' + ")"),
+                    "T-54-G3 findNotificationNode 排除横幅祖先且收紧为 NotificationIcon 语义", "");
+
+            // G4 · dimAlong 祖先守卫
+            String dim = slice(p1ctrl, "private static void dimAlong", "private static void setAlphaTracked");
+            check(dim.contains("containsHeadsUp(c, 0)") && dim.contains("setAlphaTracked(c, 1f, false)"),
+                    "T-54-G4 dimAlong 对含 heads-up 的祖先 keep 且不记账", "");
+
+            // G5 · PixelShift 两处祖先守卫（countLiteral，期望恰 2）
+            int guardHits = countLiteral(ps, "Controller.containsHeadsUp(c, 0)");
+            check(guardHits == 2,
+                    "T-54-G5 PixelShift applyTo+enforce 均含祖先守卫", "hits=" + guardHits);
+
+            // G6 · 无障碍零事件 + 静态几何（反通知事件断言 + 几何上限）
+            String sb = slice(ogo, "public static Rect statusBar", "\n    }");
+            check(sb.contains("Math.min(statusBarHeight") && sb.contains("screenH / 4"),
+                    "T-54-G6a statusBar 几何上限 h=min(statusBarHeight,..) 未改（INV-4）", "");
+            check(!bmsRaw.contains("TYPE_NOTIFICATION_STATE_CHANGED")
+                            && !bmsRaw.contains("HEADS_UP_GRACE_MS") && !bmsRaw.contains("topForHeadsUp")
+                            && !bmsRaw.contains("inHeadsUpGrace"),
+                    "T-54-G6b 无障碍侧零通知事件/零 grace（安全 A2）", "");
+            check(!cfg.contains("typeNotificationStateChanged"),
+                    "T-54-G6c config 未声明通知事件（安全 A2）", "");
+
+            // G7 · 纯几何行为断言（反射真实 OverlayGeometry.statusBar）
+            Class<?> ogeh = Class.forName("io.github.wumisc.antiburn.OverlayGeometry");
+            java.lang.reflect.Method statusBarMethod = ogeh.getMethod("statusBar", int.class, int.class, int.class);
+            Object r1 = statusBarMethod.invoke(null, 1080, 2400, 72);
+            int bottom1 = r1.getClass().getField("bottom").getInt(r1);
+            check(r1 != null && bottom1 == 72,
+                    "T-54-G7a statusBar(1080,2400,72).bottom==statusBarHeight（横幅在其下方）", "bottom=" + bottom1);
+            Object r2 = statusBarMethod.invoke(null, 1080, 2400, 1000);
+            int bottom2 = r2.getClass().getField("bottom").getInt(r2);
+            check(bottom2 <= 2400 / 4,
+                    "T-54-G7b 异常高度钳制 bottom<=screenH/4", "bottom=" + bottom2);
+            Object r3 = statusBarMethod.invoke(null, 1080, 2400, 0);
+            check(r3 == null, "T-54-G7c statusBarHeight<=0 返回 null", "");
+
+            // G8 · 越界哈希零改（G8a 冻结 8 文件）+ 授权/无障碍文件基线（实测值，待主理人复核锁定）
+            String[][] p1Frozen = {
+                    {"Config.java",      "b3d39497ddd5b1ef5b18006e6a445447cd2f02d73104acf30bd2aa6199826193"},
+                    // v3.0.16 授权改动：enable_app_overlay 默认 1（仅无障碍引擎生效）
+                    {"ConfStore.java",   "44f94cd303b3d8a07403d0e6d9361e1c700f59f98a60a9f99fc4d73de06ac192"},
+                    {"ThhLiveGate.java", "09903e9bb86f1f9f044c04a869df71a9c6e31ea8d8e4746aa7381c0e81226c5f"},
+                    {"VideoApps.java",   "a2d2e5d5d3ccd65e6dc2960a2e80d7237ede53230161fdf790f6812327dddea4"},
+                    {"VideoAppProbe.java","5ea4249ba96be6c2fc3a948d8cced94297d073ea8f3c91656339d361cc157781"},
+                    {"LivePause.java",   "a831315930feaf768dbf00dcdec317338a7ddce6707f3e134142a5b951aae984"},
+                    {"LspScope.java",    "0a113408c4e7019c32529f347fc1693659dcd9e4afcfeccff10fb41d098fbc4e"},
+                    {"AppRegions.java",  "10ce4e92cc47027ca4cdc4e316825bc7a6cc937aa30a9536514c7a4994ae9563"}
+            };
+            int okP1 = 0;
+            StringBuilder badP1 = new StringBuilder();
+            for (String[] fbk : p1Frozen) {
+                String h = sha256(read(dir.resolve(fbk[0])));
+                if (fbk[1].equals(h)) {
+                    okP1++;
+                } else {
+                    badP1.append(fbk[0]).append('=').append(h.substring(0, 8)).append(' ');
+                }
+            }
+            check(okP1 == p1Frozen.length,
+                    "T-54-G8a 越界哈希：8 个非授权 Hook 文件逐字零改",
+                    "match=" + okP1 + "/" + p1Frozen.length + " bad=" + badP1);
+            // G8c：无障碍侧三文件零改（哈希=开工前基线，实施者按 sha256sum 实测，待主理人复核）
+            String cfgH = sha256(read(dir.resolve("../../../../../res/xml/accessibility_service_config.xml")));
+            boolean a11yZero = "7ca381181dbc1012478898c545e56d0d0e42d417fcaff8129fdb0c2b2ba0f908".equals(sha256(bmsRaw))
+                    && "c56258f24f1395ad4c2b6510b165a88785294109227cdf6d04a151938ba8e23c".equals(sha256(read(dir.resolve("OverlayGeometry.java"))))
+                    && "8b1bc2ba4e8de34ea02acd32ecce602b99e5a1b690da8b7456740800a77201c6".equals(cfgH);
+            check(a11yZero, "T-54-G8c 无障碍侧 3 文件逐字零改（含 config 未声明通知事件）", "");
+            // G8b：授权文件修复后基线（v3.0.14 偏移推进修复后实测，已按 sha256sum 重采）
+            // 注意：必须读原始文件（含注释），与 sha256sum 采集口径一致，不能用 stripComments 后的串。
+            boolean authZero = "9ede70eb26ebdbe840995045e2f619ad5c03b8362a442fd4b480ea90f38709f9"
+                            .equals(sha256(read(dir.resolve("Controller.java"))))
+                    && "c005357253ce9f3d7618695524c9a4daae3de7f4504d1374f12ce5f188f43137"
+                            .equals(sha256(read(dir.resolve("PixelShift.java"))));
+            check(authZero, "T-54-G8b 授权文件哈希==修复后实测基线（待主理人复核确认）", "");
+
+            // G9 · 变异实证（四处变异均被对应守卫命中）
+            String mutA = ps.replaceFirst("Controller\\.containsHeadsUp\\(c, 0\\)", "");
+            boolean caughtA = countLiteral(mutA, "Controller.containsHeadsUp(c, 0)") < 2;
+            String mutB = hide.replace("hideKnownStaticIconsOnly(sv, 0);", "sv.setAlpha(0f);");
+            boolean caughtB = mutB.contains("sv.setAlpha(0f)");
+            String mutC = sb.replace("Math.min(statusBarHeight", "Math.max(statusBarHeight");
+            boolean caughtC = !mutC.contains("Math.min(statusBarHeight");
+            String mutD = dim.replace("containsHeadsUp(c, 0)", "isHeadsUpContainer(c)");
+            boolean caughtD = !mutD.contains("containsHeadsUp(c, 0)");
+            check(caughtA && caughtB && caughtC && caughtD,
+                    "T-54-G9 变异实证：四处变异均被对应守卫命中",
+                    "α=" + caughtA + " β=" + caughtB + " γ=" + caughtC + " δ=" + caughtD);
+        }
+
+        // ---------- T-55 v3.0.13 隐藏桌面图标后仍可被 LSPosed / 系统入口启动（真守卫） ----------
+        {
+            System.out.println();
+            System.out.println("== T-55 v3.0.13 隐藏图标后外部启动可达性 ==");
+            String man313 = read(dir.resolve("../../../../../AndroidManifest.xml"));
+            String act313 = read(dir.resolve("MainActivity.kt"));
+            String vis313 = read(dir.resolve("AppVisibilityStore.java"));
+            String gradle313 = read(dir.resolve("../../../../../../../build.gradle"));
+
+            // A1 · 根因修复：本体补 MAIN+INFO 入口。LSPosed AppHelper 先查 CATEGORY_INFO，
+            //      隐藏态下 alias 被禁用也不影响该入口，getLaunchIntentForPackage 不再返回 null。
+            String mainBlk313 = slice(man313, "android:name=\".MainActivity\"", "</activity>");
+            int infoCat = count(mainBlk313, "android.intent.category.INFO");
+            int mainAct = count(mainBlk313, "android.intent.action.MAIN");
+            check(infoCat == 1 && mainAct == 1,
+                    "T-55-A1 MainActivity 承载 MAIN+INFO 入口（LSPosed 首查 INFO 即命中）",
+                    "info=" + infoCat + " mainAction=" + mainAct);
+
+            // A1b · v3.0.15：INFO 入口必须带 DEFAULT 类目。
+            //      getLaunchIntentForPackage 的 INFO 查询带 MATCH_DEFAULT_ONLY，缺 DEFAULT 即不命中，
+            //      LSPosed 仍拿不到启动 Intent（真机「开启隐藏图标后打不开」的根因）。
+            int infoDefault313 = count(mainBlk313, "android.intent.category.DEFAULT");
+            check(infoDefault313 == 1,
+                    "T-55-A1b INFO 入口带 DEFAULT 类目（MATCH_DEFAULT_ONLY 查询可命中）",
+                    "default=" + infoDefault313);
+
+            // A2 · 隐藏功能不退化：桌面只解析 LAUNCHER，本体必须仍为 0，否则隐藏态会冒出图标
+            int launcherInMain = count(mainBlk313, "LAUNCHER");
+            String aliasBlk313 = slice(man313, "<activity-alias", "</activity-alias>");
+            int aliasLauncher313 = count(aliasBlk313, "android.intent.category.LAUNCHER");
+            int totalLauncher313 = count(man313, "android.intent.category.LAUNCHER");
+            check(launcherInMain == 0 && aliasLauncher313 == 1 && totalLauncher313 == 2,
+                    "T-55-A2 隐藏不退化：桌面类目仍只由 alias 承载（本体0 / alias1 / 全局2）",
+                    "main=" + launcherInMain + " alias=" + aliasLauncher313 + " total=" + totalLauncher313);
+
+            // A3 · 可见性实现零改：仍只切 alias，仍带 DONT_KILL_APP（实现处恰好 1）
+            String vis313Strip = stripComments(vis313);
+            int aliasSwitch313 = count(vis313Strip, "LauncherAlias");
+            int dk313 = count(vis313Strip, "DONT_KILL_APP");
+            check(aliasSwitch313 == 1 && dk313 == 1,
+                    "T-55-A3 AppVisibilityStore 仍只切 alias 且保留 DONT_KILL_APP",
+                    "alias=" + aliasSwitch313 + " dk=" + dk313);
+
+            // A4 · 恢复指引必须是双路径，不得再只指向（此前已失效的）LSPosed 单一路径
+            int dualPath = count(act313, "从 LSPosed 模块管理器或「设置→应用管理→防烧屏」打开本应用");
+            int deadPath = count(act313, "从 LSPosed 模块管理器打开本应用");
+            check(dualPath == 1 && deadPath == 0,
+                    "T-55-A4 恢复文案给出 LSPosed + 系统设置双路径（旧单路径已删除）",
+                    "dual=" + dualPath + " dead=" + deadPath);
+
+            // A5 · 版本锚点
+            java.util.regex.Matcher cm313 = java.util.regex.Pattern
+                    .compile("versionCode\\s+(\\d+)").matcher(gradle313);
+            java.util.regex.Matcher nm313 = java.util.regex.Pattern
+                    .compile("versionName\\s+\"([^\"]+)\"").matcher(gradle313);
+            boolean ver313 = cm313.find() && nm313.find()
+                    && Integer.parseInt(cm313.group(1)) == 76
+                    && "3.0.16".equals(nm313.group(1));
+            check(ver313, "T-55-A5 版本锚点 76 / 3.0.16", "");
+
+            // A6 · 变异实证：把 INFO 类目改坏，A1 守卫必须失效（证明断言非空转）
+            String mutMan = man313.replace("android.intent.category.INFO", "android.intent.category.BOGUS");
+            int mutInfo = count(slice(mutMan, "android:name=\".MainActivity\"", "</activity>"),
+                    "android.intent.category.INFO");
+            check(mutInfo == 0, "T-55-A6 变异实证：删/改 INFO 入口即被拦截", "mut=" + mutInfo);
+
+            // A7 · 变异实证：删掉 DEFAULT 类目，A1b 守卫必须失效
+            String mutDefault = man313.replace(
+                    "<category android:name=\"android.intent.category.DEFAULT\" />", "");
+            int mutDefaultCount = count(
+                    slice(mutDefault, "android:name=\".MainActivity\"", "</activity>"),
+                    "android.intent.category.DEFAULT");
+            check(mutDefaultCount == 0, "T-55-A7 变异实证：删 DEFAULT 类目即被拦截", "mut=" + mutDefaultCount);
+        }
+
+        // ---------- T-56 v3.0.16 无障碍模式四 App 适配（红果 / 抖音 / 快手 / B站）----------
+        System.out.println();
+        System.out.println("== T-56 无障碍应用内遮盖四 App 适配 ==");
+        {
+            String mask316 = read(dir.resolve("BurnInMaskService.java"));
+            String regions316 = read(dir.resolve("AppRegions.java"));
+            String videos316 = read(dir.resolve("VideoApps.java"));
+            // A1 · 四个 App 都被识别为可遮盖目标
+            check(videos316.contains("DOUYIN") && videos316.contains("DRAMA")
+                            && videos316.contains("KUAISHOU") && videos316.contains("BILIBILI"),
+                    "T-56-A1 VideoApps 覆盖抖音/红果/快手/B站四类目标", "");
+            // A2 · 每 App 的配置前缀都在 resolveApp 里被消费
+            check(mask316.contains("\"dy_\"") && mask316.contains("\"dr_\"")
+                            && mask316.contains("\"ks_\"") && mask316.contains("\"bi_\""),
+                    "T-56-A2 四个 App 的区域开关前缀（dy_/dr_/ks_/bi_）均已接线", "");
+            // A3 · 默认三区：R+T+B；红果不画底部（选集入口可点）
+            check(mask316.contains("r = true;") && mask316.contains("t = true;")
+                            && mask316.contains("b = kind != VideoApps.Kind.DRAMA;"),
+                    "T-56-A3 未显式配置时默认右侧列+顶部+底部，红果底部不画", "");
+            // A4 · 几何单一真源：四区常量与真机标定比例
+            check(regions316.contains("public static final int R = 1")
+                            && regions316.contains("public static final int B = 4")
+                            && regions316.contains("w * 0.84f") && regions316.contains("h * 0.90f"),
+                    "T-56-A4 AppRegions 提供 R/T/B/C 四区与真机标定比例", "");
+            // A5 · 遮盖层不吃触摸，点赞评论照常可点
+            check(mask316.contains("FLAG_NOT_TOUCHABLE"),
+                    "T-56-A5 无障碍覆盖层不拦截触摸", "");
+            // A6 · 退出目标 App 立即清空矩形（前台包名变 NONE → appArea=false）
+            check(mask316.contains("resolveApp(c, foregroundPkg)")
+                            && mask316.contains("c.appKind = VideoApps.Kind.NONE;"),
+                    "T-56-A6 退出目标 App 即清空遮盖，不在设置页残留", "");
+            // A7 · 前台识别来自无障碍事件，不依赖目标进程注入
+            check(mask316.contains("TYPE_WINDOW_STATE_CHANGED") && mask316.contains("foregroundPkg"),
+                    "T-56-A7 前台包名由无障碍事件维护，无需注入目标进程", "");
         }
 
         System.out.println();

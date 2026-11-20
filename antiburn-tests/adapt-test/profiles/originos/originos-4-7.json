@@ -1,0 +1,19 @@
+{
+  "id": "originos-4-7",
+  "family": "originos",
+  "displayName": "OriginOS 4–7（vivo / iQOO）",
+  "match": {
+    "brand": ["vivo", "iQOO"],
+    "props": { "ro.vivo.os.version": "^[4-9]\\." },
+    "ids": ["status_bar_contents", "status_bar"]
+  },
+  "statusBar": {
+    "anchors": ["status_bar_contents", "status_bar"],
+    "hide": "alpha",
+    "guard": { "classes": ["*AtomicIsland*", "*AtomicNotification*", "*Capsule*"] },
+    "watchdogMs": 2000
+  },
+  "nav": { "anchors": ["navigation_bar"], "onlyInMode": ["three_button"] },
+  "fallback": "noop",
+  "confidence": "community"
+}

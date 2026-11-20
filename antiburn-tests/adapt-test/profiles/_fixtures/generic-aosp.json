@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "redacted": true,
+  "device": {"brand":"google","family":"aosp","romVersion":"36","navMode":"three_button","systemUiVersionName":"16"},
+  "statusBar":   {"class":"com.android.systemui.statusbar.window.StatusBarWindowView","id":"status_bar_window","children":[
+      {"class":"com.android.systemui.statusbar.phone.PhoneStatusBarView","id":"status_bar","children":[
+          {"class":"android.widget.LinearLayout","id":"status_bar_contents","children":[
+              {"class":"android.widget.FrameLayout","id":"status_bar_left_side","children":[
+                  {"class":"com.android.systemui.statusbar.policy.Clock"}
+              ]},
+              {"class":"android.widget.FrameLayout","id":"notification_icon_area","children":[
+                  {"class":"com.android.systemui.statusbar.notification.icon.NotificationIconContainer"},
+                  {"class":"com.android.systemui.statusbar.live.LiveUpdateCapsuleView"}
+              ]},
+              {"class":"android.widget.FrameLayout","id":"status_bar_right_side"}
+          ]}
+      ]}
+  ]},
+  "navBar":   {"class":"com.android.systemui.navigationbar.NavigationBarView","id":"navigation_bar"}
+}

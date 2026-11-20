@@ -1,0 +1,17 @@
+{
+  "id": "generic-aosp",
+  "family": "aosp",
+  "displayName": "原生 / 类原生（Pixel、LineageOS、crDroid、GrapheneOS）",
+  "match": {
+    "ids": ["status_bar_contents", "status_bar"]
+  },
+  "statusBar": {
+    "anchors": ["status_bar_contents", "status_bar_icons", "notification_icon_area", "status_bar"],
+    "hide": "alpha",
+    "guard": { "classes": ["*LiveUpdate*", "*Capsule*"] },
+    "watchdogMs": 0
+  },
+  "nav": { "anchors": ["navigation_bar"], "onlyInMode": ["three_button"] },
+  "fallback": "noop",
+  "confidence": "unverified"
+}

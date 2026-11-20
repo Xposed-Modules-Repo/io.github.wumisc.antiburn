@@ -1,0 +1,19 @@
+{
+  "id": "coloros-14-17",
+  "family": "coloros",
+  "displayName": "ColorOS 14–17（OPPO / 一加 / realme）",
+  "match": {
+    "brand": ["OPPO", "OnePlus", "realme", "oplus"],
+    "props": { "ro.build.version.oplusrom": "^1[4-7]\\." },
+    "ids": ["status_bar_contents", "status_bar"]
+  },
+  "statusBar": {
+    "anchors": ["status_bar_contents", "notification_icon_area", "status_bar"],
+    "hide": "alpha",
+    "guard": { "classes": ["*Capsule*", "*FluidCloud*", "*LiveAlert*", "*Ongoing*"] },
+    "watchdogMs": 2000
+  },
+  "nav": { "anchors": ["navigation_bar"], "onlyInMode": ["three_button"] },
+  "fallback": "noop",
+  "confidence": "community"
+}

@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "redacted": true,
+  "device": {"brand":"vivo","family":"originos","romVersion":"5.0","navMode":"gesture","systemUiVersionName":"15"},
+  "statusBar":   {"class":"com.vivo.systemui.statusbar.VivoStatusBarWindow","children":[
+      {"class":"com.vivo.systemui.statusbar.VivoStatusBar","id":"status_bar","children":[
+          {"class":"android.widget.LinearLayout","id":"status_bar_contents","children":[
+              {"class":"android.widget.FrameLayout","id":"status_bar_left_side","children":[
+                  {"class":"com.vivo.systemui.statusbar.clock.VivoClockView"}
+              ]},
+              {"class":"android.widget.FrameLayout","id":"status_bar_center","children":[
+                  {"class":"com.vivo.systemui.atomic.AtomicIslandView"}
+              ]}
+          ]}
+      ]}
+  ]},
+  "navBar":   {"class":"com.android.systemui.navigationbar.NavigationBarView","id":"navigation_bar"}
+}

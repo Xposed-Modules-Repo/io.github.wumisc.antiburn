@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/wumisc/antiburn/profiles/schema/profile.schema.json",
+  "title": "Antiburn 适配 profile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "family", "displayName", "match", "statusBar", "nav", "fallback", "confidence"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$",
+      "description": "小写短横线；禁止 final/v2/copy/test 等后缀"
+    },
+    "family": {
+      "type": "string",
+      "enum": ["hyperos", "magicos", "coloros", "originos", "aosp"]
+    },
+    "displayName": { "type": "string", "minLength": 4, "maxLength": 80 },
+    "match": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "brand": { "type": "array", "items": { "type": "string" }, "maxItems": 8 },
+        "props": {
+          "type": "object",
+          "additionalProperties": { "type": "string", "maxLength": 120 },
+          "description": "系统属性名 → 正则"
+        },
+        "classes": { "type": "array", "items": { "type": "string" }, "maxItems": 8 },
+        "ids": { "type": "array", "items": { "type": "string" }, "maxItems": 8 }
+      }
+    },
+    "statusBar": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["anchors", "hide"],
+      "properties": {
+        "anchors": { "type": "array", "items": { "type": "string", "pattern": "^[a-zA-Z0-9_]+$" }, "minItems": 1, "maxItems": 6 },
+        "hide": { "type": "string", "enum": ["alpha", "visibility", "tint", "poem"] },
+        "guard": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["classes"],
+          "properties": {
+            "classes": {
+              "type": "array",
+              "items": { "type": "string", "pattern": "^\\*?[A-Za-z0-9_.]*(\\*[A-Za-z0-9_.]*)*$" },
+              "minItems": 1,
+              "maxItems": 12,
+              "description": "通配符，仅允许 * 与类名片段，禁止正则元字符"
+            }
+          }
+        },
+        "watchdogMs": { "type": "integer", "minimum": 0, "maximum": 10000 }
+      }
+    },
+    "nav": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["anchors", "onlyInMode"],
+      "properties": {
+        "anchors": { "type": "array", "items": { "type": "string", "pattern": "^[a-zA-Z0-9_]+$" }, "maxItems": 4 },
+        "onlyInMode": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["three_button", "gesture"] },
+          "maxItems": 2
+        }
+      }
+    },
+    "fallback": { "type": "string", "enum": ["noop", "window", "anchor_parent"] },
+    "confidence": { "type": "string", "enum": ["verified", "community", "unverified"] }
+  }
+}

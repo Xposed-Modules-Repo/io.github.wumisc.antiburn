@@ -1,0 +1,4 @@
+1794409347729 MIRROR fast src=default
+1794409347750 WRITE ok rev=1804409347737 status=0 by=SaveV25Test.main:77 ch=enable_status=0
+1794409347758 MIRROR fast src=default
+1794409347759 WRITE ok rev=1794409347759 status=1 by=SaveV25Test.main:112 ch=enable_status=1,whitelist=com.foo,com.bar,hide_duration=77

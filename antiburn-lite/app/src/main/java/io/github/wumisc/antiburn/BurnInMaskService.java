@@ -70,13 +70,13 @@ public class BurnInMaskService extends AccessibilityService {
     /** 预览遮盖时长：给用户验证「到底盖没盖住」用 */
     public static final long PREVIEW_MS = 5000L;
     /**
-     * 应用内盖黑总闸 —— 编译期常量，恒 false。
+     * 应用内遮盖通道（v3.0.16 重新启用）。
      *
-     * <p>v2.8.6：用户已明确要求「不要在上面铺一层黑色，直接偏移」。这里留成常量而不是
-     * 只改配置默认值，是因为配置可以被旧文件、旧版本写入、Provider 镜像缺失等路径带回来；
-     * 编译期常量没有被绕过的可能。恢复这条通道必须改代码，不允许再悄悄打开。</p>
+     * <p>v2.8.6 曾在 LSPosed 引擎下硬关这条通道（黑块压画面、退出后残留）。
+     * v3.0.16 起改为「仅无障碍（overlay）引擎生效」：免 root 设备没有位置微移，
+     * 周期遮盖是唯一能保护抖音 / 红果 / 快手 / B站固定区域的通道。
+     * LSPosed 引擎仍不铺黑，由 Hook 的隐藏/微移负责。</p>
      */
-    private static final boolean APP_AREA_CHANNEL = false;
 
     // ---- 供同进程 UI 读取的运行状态（不给跨进程用，所以是普通静态字段） ----
     /** 服务是否已连接 */
@@ -280,11 +280,9 @@ public class BurnInMaskService extends AccessibilityService {
          *  - eng=lsposed：系统栏交给 SystemUI 真隐藏（这里不重复画），
          *    App 内区域由这里兜底，两条通道互补而不是互相覆盖。</p>
          */
-        // v2.8.6：默认 false，且 config() 读完后无条件再置 false。
-        // v2.8.4 只在命中 enable_app_overlay 键时置 false，镜像里缺这个键就回到 true，
-        // 真机日志里 appOn=true + areas=RTBC 自证「盖黑其实一直开着」，退出抖音后
-        // 五个黑块还挂在设置页上。这里改成默认关 + 硬关，两层保险。
-        boolean appAreaOn = false;
+        // v3.0.16：默认开。免 root 的 overlay 引擎没有位置微移，应用内遮盖是唯一防护；
+        // LSPosed 引擎由 step() 里的 c.maskAllowed 拦掉，不会被铺黑。
+        boolean appAreaOn = true;
         /** 当前前台应用归属；NONE 表示不是四个目标视频 App，不画应用内区域。 */
         VideoApps.Kind appKind = VideoApps.Kind.NONE;
         /** 用户是否显式配置过该 App 的区域开关；没配过就按默认三区全画，保证开箱可用。 */
@@ -612,12 +610,13 @@ public class BurnInMaskService extends AccessibilityService {
         // v2.8.2：两条通道分开判，互不覆盖。
         //  sysBar  —— 系统栏遮盖，只在 overlay 引擎下画；LSPosed 引擎的系统栏由
         //             SystemUI 真隐藏负责，这里再画一条黑边只会重影。
-        //  appArea —— 应用内固定 UI 兜底，不看引擎、不要求目标进程被注入，
-        //             只要无障碍服务连着就能画。真机日志显示视频 App 进程零注入，
-        //             这一条是那些设备上唯一能生效的通道。
+        //  appArea —— 应用内固定 UI 遮盖，仅无障碍（overlay）引擎生效：
+        //             免 root 设备没有位置微移，周期遮盖是唯一能保护四个视频 App
+        //             固定区域的通道。LSPosed 引擎不铺黑（c.maskAllowed=false），
+        //             由 Hook 的分区隐藏 / 像素微移负责，避免黑块压画面。
         boolean intervene = ListRules.shouldIntervene(c.mode, c.list, foregroundPkg);
         boolean sysBar = c.maskAllowed && (c.statusBarOn || c.navOn);
-        boolean appArea = c.appAreaOn && c.appKind != VideoApps.Kind.NONE
+        boolean appArea = c.maskAllowed && c.appAreaOn && c.appKind != VideoApps.Kind.NONE
                 && (c.appRight || c.appTop || c.appBottom || c.appCorner);
         boolean mayDraw = screenOn && !locked && c.masterOn && intervene
                 && (sysBar || appArea);
@@ -725,8 +724,9 @@ public class BurnInMaskService extends AccessibilityService {
                     } else if ("show_duration".equals(k)) {
                         c.showSec = clampDur(v, c.showSec, 1);
                     } else if ("enable_app_overlay".equals(k)) {
-                        // v2.8.4：暂停生效，恒 false（盖黑被位置微移取代）
-                        c.appAreaOn = false;
+                        // v3.0.16：读取真实开关。仅 overlay 引擎下由 step() 放行，
+                        // LSPosed 引擎仍不铺黑（尊重 v2.8.6 的「黑块压画面」反馈）。
+                        c.appAreaOn = "1".equals(v);
                     } else {
                         // v2.8.2：把各 App 的区域开关收进一张表，resolveApp() 按
                         // 前台包名挑用。缺省键不进表 —— 缺键和显式 0 都算「没配过」，
@@ -755,10 +755,6 @@ public class BurnInMaskService extends AccessibilityService {
         } catch (Throwable t) {
             Log.w(TAG, "read config failed", t);
         }
-        // v2.8.6：无论配置里写了什么，应用内盖黑一律关闭。
-        // 用户已明确否决「铺一层黑色」，这条通道只保留代码不再启用；
-        // 想恢复必须同时改这里和 APP_AREA_CHANNEL，避免又一次「以为关了其实开着」。
-        c.appAreaOn = false;
         cfg = c;
         return c;
     }
@@ -849,9 +845,6 @@ public class BurnInMaskService extends AccessibilityService {
      */
     private java.util.List<OverlayGeometry.Rect> appRects(Cfg c) {
         java.util.List<OverlayGeometry.Rect> out = new java.util.ArrayList<>();
-        if (!APP_AREA_CHANNEL) {
-            return out;
-        }
         if (!c.appAreaOn || c.appKind == VideoApps.Kind.NONE || screenW <= 0 || screenH <= 0) {
             return out;
         }

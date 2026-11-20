@@ -1,0 +1,7 @@
+1794409259253 TILE flip from=unknown to=1
+1794409259253 MIRROR fast src=default
+1794409259254 WRITE ok rev=1794409259254 status=1 by=SaveV23Test.main:105 ch=enable_status=1
+1794409259255 TILE flip from=1 to=0
+1794409259256 WRITE ok rev=1794409259255 status=0 by=SaveV23Test.main:111 ch=enable_status=0
+1794409259257 WRITE ok rev=1794409259256 status=0 by=SaveV23Test.main:118 ch=whitelist=com.ss.android.ugc.aweme~,blacklist=<del>
+1794409259258 WRITE ok rev=1794409259257 status=0 by=SaveV23Test.main:127 ch=ui_style=hyperos

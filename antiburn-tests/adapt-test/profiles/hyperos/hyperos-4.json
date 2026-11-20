@@ -1,0 +1,20 @@
+{
+  "id": "hyperos-4",
+  "family": "hyperos",
+  "displayName": "HyperOS 2–4（小米 / Redmi / POCO）",
+  "match": {
+    "brand": ["Xiaomi", "Redmi", "POCO"],
+    "props": { "ro.mi.os.version.name": "^OS[2-9]" },
+    "classes": ["com.android.systemui.statusbar.window.StatusBarWindowView"],
+    "ids": ["status_bar_contents"]
+  },
+  "statusBar": {
+    "anchors": ["status_bar_contents", "status_bar_icons", "notification_icon_area", "status_bar"],
+    "hide": "alpha",
+    "guard": { "classes": ["*Capsule*", "*FocusNotification*", "*SuperIsland*"] },
+    "watchdogMs": 2000
+  },
+  "nav": { "anchors": ["navigation_bar"], "onlyInMode": ["three_button"] },
+  "fallback": "noop",
+  "confidence": "verified"
+}

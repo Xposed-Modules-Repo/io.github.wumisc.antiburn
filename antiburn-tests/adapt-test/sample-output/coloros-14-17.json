@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "redacted": true,
+  "device": {"brand":"OPPO","family":"coloros","romVersion":"15.0.1","navMode":"three_button","systemUiVersionName":"15"},
+  "statusBar":   {"class":"com.oplus.systemui.statusbar.phone.OplusStatusBarWindowView","children":[
+      {"class":"com.oplus.systemui.statusbar.phone.OplusStatusBarView","id":"status_bar","children":[
+          {"class":"android.widget.FrameLayout","id":"status_bar_contents","children":[
+              {"class":"android.widget.LinearLayout","id":"status_bar_left_side","children":[
+                  {"class":"com.android.systemui.statusbar.policy.Clock"},
+                  {"class":"com.oplus.systemui.statusbar.fluid.FluidCloudCapsuleView"}
+              ]},
+              {"class":"android.widget.FrameLayout","id":"notification_icon_area","children":[
+                  {"class":"com.android.systemui.statusbar.notification.icon.NotificationIconAreaView"}
+              ]},
+              {"class":"android.widget.LinearLayout","id":"status_bar_right_side","children":[
+                  {"class":"com.android.systemui.statusbar.StatusBarIconView"}
+              ]}
+          ]}
+      ]}
+  ]},
+  "navBar":   {"class":"com.oplus.systemui.navigationbar.OplusNavigationBarView"}
+}

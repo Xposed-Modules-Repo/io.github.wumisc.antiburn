@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "redacted": true,
+  "device": {"brand":"HONOR","family":"magicos","romVersion":"11.0","navMode":"three_button","systemUiVersionName":"15"},
+  "statusBar":   {"class":"com.android.systemui.statusbar.window.StatusBarWindowView","id":"status_bar_window","children":[
+      {"class":"com.android.systemui.statusbar.phone.PhoneStatusBarView","id":"status_bar","children":[
+          {"class":"android.widget.LinearLayout","id":"status_bar_contents","children":[
+              {"class":"android.widget.LinearLayout","id":"status_bar_left_side","children":[
+                  {"class":"com.hihonor.systemui.statusbar.capsule.MagicCapsuleView"}
+              ]},
+              {"class":"android.widget.LinearLayout","id":"notification_icon_area","children":[
+                  {"class":"com.android.systemui.statusbar.notification.icon.NotificationIconAreaView"}
+              ]}
+          ]}
+      ]}
+  ]},
+  "navBar":   {"class":"com.android.systemui.navigationbar.NavigationBarView","id":"navigation_bar"}
+}

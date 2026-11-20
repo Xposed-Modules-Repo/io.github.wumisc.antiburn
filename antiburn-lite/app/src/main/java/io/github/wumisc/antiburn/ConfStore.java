@@ -222,11 +222,10 @@ public final class ConfStore {
         // 与引擎选择无关：即使 LSPosed 没把模块注入目标视频 App 进程（真机日志实证），
         // 只要无障碍服务连着，右侧按钮列 / 顶部标题 / 底部导航就能周期变黑。
         // 已有配置缺这个键时，BurnInMaskService.Cfg 同样按 true 处理，升级即生效。
-        // v2.8.4：两条「盖黑矩形」通道默认关闭。
-        // 真机反馈很直接：黑块盖住画面、影响观看，而防烧屏只需要让固定像素
-        // 不在同一个点常亮 —— 位置微移（DouyinHook 的 shiftDeep）就能做到，
-        // 画面完整可见。盖黑只在注入彻底失败时才有意义，留作手动开关。
-        sb.append("enable_app_overlay=0\n");
+        // v3.0.16：应用内遮盖默认开 —— 仅无障碍（overlay）引擎生效。
+        // 免 root 没有位置微移，这是保护抖音/红果/快手/B站固定区域的唯一通道；
+        // LSPosed 引擎下 Hook 侧仍强制不铺黑（Config.ao=false），两套互不干扰。
+        sb.append("enable_app_overlay=1\n");
         sb.append("enable_sys_overlay=0\n");
         return sb.toString();
     }

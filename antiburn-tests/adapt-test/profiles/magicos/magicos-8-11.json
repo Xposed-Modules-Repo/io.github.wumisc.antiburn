@@ -1,0 +1,20 @@
+{
+  "id": "magicos-8-11",
+  "family": "magicos",
+  "displayName": "MagicOS 8–11（荣耀）",
+  "match": {
+    "brand": ["HONOR"],
+    "props": { "ro.build.version.magic": "^([89]|1[01])\\." },
+    "classes": ["com.android.systemui.statusbar.window.StatusBarWindowView"],
+    "ids": ["status_bar_contents", "status_bar"]
+  },
+  "statusBar": {
+    "anchors": ["status_bar_contents", "status_bar"],
+    "hide": "alpha",
+    "guard": { "classes": ["*MagicCapsule*", "*Capsule*"] },
+    "watchdogMs": 2000
+  },
+  "nav": { "anchors": ["navigation_bar"], "onlyInMode": ["three_button"] },
+  "fallback": "noop",
+  "confidence": "community"
+}

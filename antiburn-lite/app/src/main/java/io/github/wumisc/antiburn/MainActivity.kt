@@ -189,13 +189,13 @@ data class AbState(
     val enableBall: Boolean = false,
     val enableLog: Boolean = false,
     /**
-     * v2.8.6：应用内盖黑通道已废弃，恒 false。
+     * v3.0.16：无障碍模式的应用内遮盖，默认开。
      *
-     * <p>v2.8.2 这里默认 true，靠无障碍覆盖层按屏幕比例画黑块；真机反馈是「整屏被盖住、
-     * 退出抖音后黑块还挂在设置页上」。用户已明确要求只做位置偏移，所以默认值、
-     * 恢复默认值、写盘值三处一起改成 false，不再让它从任何路径复活。</p>
+     * <p>仅 overlay（无障碍）引擎生效：免 root 没有位置微移，周期遮盖是保护
+     * 抖音/红果/快手/B站固定区域的唯一通道。LSPosed 引擎下 Hook 侧仍不铺黑，
+     * 所以这里默认 true 不会让 LSPosed 用户看到黑块。</p>
      */
-    val enableAppOverlay: Boolean = false,
+    val enableAppOverlay: Boolean = true,
     /** v2.8.6：SystemUI 覆盖层同上，恒 false。 */
     val enableSysOverlay: Boolean = false,
     val enableDouyinTop: Boolean = false,
@@ -357,8 +357,8 @@ private val AbStateSaver = listSaver(
                 enableBiliTop = Bool(35),
                 enableBiliBottom = Bool(36),
                 enableBiliCorner = Bool(37),
-                // v2.8.6：旧 Bundle 缺这两项时也不能回到 true，盖黑通道已废弃
-                enableAppOverlay = Bool(38, false),
+                // v3.0.16：旧 Bundle 缺这项时按开——仅 overlay 引擎生效，不会误铺黑
+                enableAppOverlay = Bool(38, true),
                 enableSysOverlay = Bool(39, false),
                 // v3.0.6：旧 Bundle 缺这三项时 getOrNull 兜底 false，开关默认关。
                 enableBottomCaption = Bool(40),
@@ -431,9 +431,8 @@ object AbConf {
             enablePoem = false,
             enableBall = b(map["enable_ball"]),
             enableLog = b(map["enable_log"]),
-            // 缺键（旧配置升级）默认开，保证装上就有兜底防护
-            // v2.8.4：盖黑通道暂停使用，配置值不再生效
-            enableAppOverlay = false,
+            // v3.0.16：缺键默认开（免 root 开箱可用）；LSPosed 引擎由服务端拦掉，不铺黑
+            enableAppOverlay = b(map["enable_app_overlay"], true),
             enableSysOverlay = false,
             enableDouyinTop = b(map["enable_douyin_top"]),
             enableDouyinBottom = b(map["enable_douyin_bottom"]),
@@ -2441,8 +2440,10 @@ private fun GeneralFeaturePage(
         onCheckedChange = { on -> onStateChange { s -> s.copy(enableLog = on) } })
     OptionRow("悬浮球", "点击切换隐藏控件", checked = state.enableBall, dark = dark,
         onCheckedChange = { on -> onStateChange { s -> s.copy(enableBall = on) } })
-    // v2.8.4：删掉两个「盖黑」开关。真机反馈黑块盖住画面、影响观看，
-    // 防烧屏改由位置微移承担，不再提供这条通道。
+    // v3.0.16：无障碍模式的应用内遮盖开关。仅 overlay 引擎生效，LSPosed 引擎不铺黑。
+    OptionRow("无障碍应用内遮盖", "免 root：周期遮盖抖音/红果/快手/B站固定区域（会短暂出现黑块）",
+        checked = state.enableAppOverlay, dark = dark,
+        onCheckedChange = { on -> onStateChange { s -> s.copy(enableAppOverlay = on) } })
     ListRow("周期时长", "隐藏 ${state.hideSec}s · 显示 ${state.showSec}s",
         { showCycleDialog = true }, dark, trailing = "›")
     HintText("App 内固定控件按周期真隐藏：藏 ${state.hideSec} 秒（像素不发光）→ 显示 ${state.showSec} 秒。隐藏的是叠加在画面上的按钮/栏，不影响视频与弹幕本身。")

@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "redacted": true,
+  "device": {"brand":"Xiaomi","family":"hyperos","romVersion":"OS4.0","navMode":"three_button","systemUiVersionName":"17"},
+  "statusBar":   {"class":"com.android.systemui.statusbar.window.StatusBarWindowView","id":"status_bar_window","children":[
+      {"class":"com.android.systemui.statusbar.phone.PhoneStatusBarView","id":"status_bar","children":[
+          {"class":"android.widget.LinearLayout","id":"status_bar_contents","children":[
+              {"class":"android.widget.FrameLayout","id":"status_bar_left_side","children":[
+                  {"class":"com.android.systemui.statusbar.policy.Clock"}
+              ]},
+              {"class":"com.android.systemui.statusbar.notification.icon.NotificationIconAreaView","id":"notification_icon_area"},
+              {"class":"android.widget.LinearLayout","id":"status_bar_right_side","children":[
+                  {"class":"com.android.systemui.statusbar.StatusBarIconView"},
+                  {"class":"com.android.systemui.statusbar.StatusBarIconView"}
+              ]}
+          ]}
+      ]},
+      {"class":"com.android.systemui.statusbar.focus.FocusNotificationView"}
+  ]},
+  "navBar":   {"class":"com.android.systemui.navigationbar.NavigationBarView","id":"navigation_bar","children":[
+      {"class":"android.widget.ImageView"},
+      {"class":"android.widget.ImageView"},
+      {"class":"android.widget.ImageView"}
+  ]}
+}

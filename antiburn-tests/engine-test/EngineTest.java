@@ -261,8 +261,14 @@ public class EngineTest {
         check(cap.contains("invalidate()"), "探测结果可作废", "重新检测的前提");
 
         String main = read(src + "/MainActivity.kt");
-        check(main.contains("EngineCard("), "首页有运行方式卡片", "");
-        check(main.contains("engineCard()"), "卡片被渲染到首页", "定义不等于展示");
+        check(main.contains("EngineCard("), "有运行方式卡片定义", "");
+        // v3.0.12：运行方式卡从首页下沉到 home-engine 二级页（EnginePage），首页仅留 onOpen 入口。
+        // 保持「定义不等于展示」的原始意图——断言 EngineCard 被 EnginePage 整体调用、EnginePage
+        // 在 SubPageHost 的 home-engine 分支被渲染、且首页有指向该 key 的入口，三者缺一即失败。
+        check(main.contains("EngineCard(state = state, onStateChange = onStateChange, dark = dark)")
+                        && main.contains("PAGE_HOME_ENGINE -> EnginePage(")
+                        && main.contains("onOpen(PAGE_HOME_ENGINE)"),
+                "运行方式卡已下沉 home-engine 二级页且首页有入口（定义即被展示）", "定义不等于展示");
         check(main.contains("改用它"), "无 root 时给一键切换", "避免只报错不给出路");
         check(main.contains("ConfStore.ENGINE_OVERLAY"), "引擎常量与配置层共用", "");
         check(main.contains("A11yRequiredNotice"), "无障碍卡片下有「关闭也要开无障碍」提示", "");
