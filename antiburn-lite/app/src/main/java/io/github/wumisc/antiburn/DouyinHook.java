@@ -275,6 +275,8 @@ public final class DouyinHook {
     private static volatile View ballView;             // 悬浮球（挂在当前页面 decorView 上）
     private static volatile int ballLeft = -1;         // 拖动后的悬浮球位置（-1=未自定义，用默认右缘/上部1/3）
     private static volatile int ballTop = -1;
+    /** v3.0.14：拖到屏幕最下方松手后「收起」，球隐藏；下次打开/进入新页面时自动恢复。 */
+    private static volatile boolean ballDocked = false;
 
     private static final Handler handler = new Handler(Looper.getMainLooper());
 
@@ -3276,11 +3278,37 @@ public final class DouyinHook {
             if (decor == null || !(decor instanceof ViewGroup)) {
                 return;
             }
+            // v3.0.14：已「拖到最下方收起」的球，同一页面内保持隐藏；
+            // 页面更换（新 Activity / 新窗口 = 下次打开）时才恢复。
+            if (ballDocked) {
+                if (ballView != null && ballView.getParent() == decor) {
+                    return;   // 同一页面：保持收起
+                }
+                ballDocked = false;   // 页面已更换 / 球对象已脱离：视为下次打开，恢复
+            }
+            Context ctx = decor.getContext();
+            DisplayMetrics dm = ctx.getResources().getDisplayMetrics();
+            int size = (int) (44 * dm.density + 0.5f);
+            int defLeft = ballLeft >= 0 ? ballLeft
+                    : (dm.widthPixels - size - (int) (8 * dm.density + 0.5f));
+            int defTop = ballTop >= 0 ? ballTop : dm.heightPixels / 3;
             if (ballView != null) {
                 // 小球仍在当前页面窗口上：只要保证它还在最上层就够了。
                 // v2.9.2：抖音页面内部会往 decor 里插新子视图（播放器、浮层），
                 // 一旦插在球之上，球就被盖住 —— 看起来「悬浮球失效」，其实是被压到下面。
                 if (ballView.getParent() == decor) {
+                    // 恢复被收起的球：重新可见 + 回到默认/上次位置
+                    if (ballView.getVisibility() != View.VISIBLE) {
+                        ballView.setVisibility(View.VISIBLE);
+                        ViewGroup.LayoutParams p = ballView.getLayoutParams();
+                        if (p instanceof android.widget.FrameLayout.LayoutParams) {
+                            android.widget.FrameLayout.LayoutParams flp =
+                                    (android.widget.FrameLayout.LayoutParams) p;
+                            flp.leftMargin = defLeft;
+                            flp.topMargin = defTop;
+                            ballView.setLayoutParams(flp);
+                        }
+                    }
                     ViewGroup dg = (ViewGroup) decor;
                     if (dg.indexOfChild(ballView) != dg.getChildCount() - 1) {
                         ballView.bringToFront();
@@ -3296,9 +3324,6 @@ public final class DouyinHook {
                 }
                 ballView = null;
             }
-            Context ctx = decor.getContext();
-            DisplayMetrics dm = ctx.getResources().getDisplayMetrics();
-            int size = (int) (44 * dm.density + 0.5f);
 
             TextView ball = new TextView(ctx);
             ball.setGravity(Gravity.CENTER);
@@ -3359,6 +3384,20 @@ public final class DouyinHook {
                     case MotionEvent.ACTION_CANCEL:
                         if (!dragged[0]) {
                             toggleForceShow(); // 短按 = 点击切换显/藏
+                        } else if (event.getActionMasked() == MotionEvent.ACTION_UP) {
+                            // v3.0.14：拖到屏幕最下方（贴底）松手 → 收起隐藏；
+                            // 下次打开/进入新页面时自动恢复（见 ensureBall 的 ballDocked 分支）。
+                            ViewGroup.LayoutParams p2 = v.getLayoutParams();
+                            if (p2 instanceof android.widget.FrameLayout.LayoutParams) {
+                                int top = ((android.widget.FrameLayout.LayoutParams) p2).topMargin;
+                                if (top + size >= dm.heightPixels - (int) (6 * dm.density)) {
+                                    ballDocked = true;
+                                    ballLeft = -1;
+                                    ballTop = -1;
+                                    v.setVisibility(View.GONE);
+                                    XposedInit.diag("BALL docked 已收起：下次打开恢复");
+                                }
+                            }
                         }
                         return true;
                     default:
@@ -3371,9 +3410,8 @@ public final class DouyinHook {
                     new android.widget.FrameLayout.LayoutParams(size, size);
             lp.gravity = Gravity.TOP | Gravity.START;
             // 位置：优先记住用户拖到的地方；未拖动过用默认（右缘 8dp、上部 1/3）
-            lp.leftMargin = ballLeft >= 0 ? ballLeft
-                    : (dm.widthPixels - size - (int) (8 * dm.density + 0.5f));
-            lp.topMargin = ballTop >= 0 ? ballTop : dm.heightPixels / 3;
+            lp.leftMargin = defLeft;
+            lp.topMargin = defTop;
             ((ViewGroup) decor).addView(ball, lp);
             // v2.9.2：显式提到最上层。addView 默认追加到末尾，但抖音的播放器/浮层
             // 若在随后插入，球会被盖住；这里先摆正一次，后续由 tick 的保活继续纠正。
@@ -3387,6 +3425,7 @@ public final class DouyinHook {
     }
 
     private static void removeBall() {
+        ballDocked = false;   // 关闭开关 / 换页后重建 → 不再保持收起
         if (ballView == null) {
             return;
         }
@@ -3985,7 +4024,10 @@ public final class DouyinHook {
         return false;
     }
 
-    /** A 实现：直接子节点中"内容卡"数量（早停于 2）。不做任何卡片绝对尺寸判断。 */
+    /** A 实现：内容卡数量（早停于 2）。直接子节点优先；不足时再下探一层
+     *  —— 主页作品网格常见「行容器 → 多个作品卡」，只看直接子节点会漏判，
+     *  导致作品封面被当成固定 UI 透明掉（v3.0.14 误伤修复）。
+     *  不做任何卡片绝对尺寸判断。 */
     private static int countContentCards(ViewGroup g) {
         int n = 0;
         for (int i = 0; i < g.getChildCount(); i++) {
@@ -3998,6 +4040,28 @@ public final class DouyinHook {
                 n++;
                 if (n >= 2) {
                     return 2;
+                }
+            }
+        }
+        // v3.0.14：二层识别 —— 行容器里的作品卡
+        for (int i = 0; i < g.getChildCount(); i++) {
+            View row = g.getChildAt(i);
+            if (!(row instanceof ViewGroup) || row.getVisibility() == View.GONE
+                    || row.getWidth() <= 0 || row.getHeight() <= 0) {
+                continue;
+            }
+            ViewGroup rg = (ViewGroup) row;
+            for (int j = 0; j < rg.getChildCount(); j++) {
+                View card = rg.getChildAt(j);
+                if (card == null || card.getVisibility() == View.GONE
+                        || card.getWidth() <= 0 || card.getHeight() <= 0) {
+                    continue;
+                }
+                if (hasCoverImage(card, 0) && hasChildByClass(card, "TextView")) {
+                    n++;
+                    if (n >= 2) {
+                        return 2;
+                    }
                 }
             }
         }

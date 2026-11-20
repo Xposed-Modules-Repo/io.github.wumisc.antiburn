@@ -430,15 +430,71 @@ public final class Controller {
     }
 
     /**
-     * P-1 祖先链守卫：v 自身或其子树（深度 ≤ HEADS_UP_SCAN_MAX_DEPTH）含 heads-up 则返回 true。
-     * 复用 containsVideoSurface 式递归扫描；只读不写。任何 alpha=0/translation/INVISIBLE
-     * 写操作前必须过本守卫，从而保护 heads-up 的整条祖先链（INV-1）。
+     * P-1 修复（v3.0.14）：heads-up 容器是否「此刻真的在显示横幅」（纯显示判据，不含类型识别）。
+     *
+     * <p>旧实现只按类名 / 资源 id 判存在，不看是否真的在显示。状态栏图标条里常驻一个
+     * 空的 heads-up 占位节点（HeadsUpStatusBarView / HeadsUpNotificationContainer 的空壳），
+     * 于是整条状态栏被永久误判为「有横幅」，偏移与隐藏被无条件跳过 ——
+     * 等于用牺牲全部防烧屏功能换来微信通知正常。</p>
+     *
+     * <p>真显示判据（须全部满足，任一不满足即视为空占位）：</p>
+     * ① 自身 VISIBLE 且 isShown()（祖先链可见、已 attach）；② 宽高均 &gt; 0；
+     * ③ 自身 alpha &gt; 0；④ 是 ViewGroup 时至少有一个可见且有尺寸的子节点。
+     * 类型命中由调用方 {@link #isHeadsUpContainer} 先行判定。
+     * 只读不写；任何异常一律按「未显示」处理，绝不让守卫本身把 UI 线程写崩。
+     */
+    static boolean isHeadsUpVisible(View v) {
+        if (v == null) {
+            return false;
+        }
+        try {
+            if (v.getVisibility() != View.VISIBLE || !v.isShown()) {
+                return false;
+            }
+            if (v.getWidth() <= 0 || v.getHeight() <= 0) {
+                return false;
+            }
+            if (v.getAlpha() <= 0.01f) {
+                return false;
+            }
+            if (v instanceof android.view.ViewGroup) {
+                android.view.ViewGroup g = (android.view.ViewGroup) v;
+                boolean hasContent = false;
+                for (int i = 0; i < g.getChildCount(); i++) {
+                    View c = g.getChildAt(i);
+                    if (c != null && c.getVisibility() == View.VISIBLE
+                            && c.getWidth() > 0 && c.getHeight() > 0
+                            && c.getAlpha() > 0.01f) {
+                        hasContent = true;
+                        break;
+                    }
+                }
+                if (!hasContent) {
+                    return false;      // 空容器：只有壳没有内容 → 不是正在显示的横幅
+                }
+            }
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
+     * P-1 祖先链守卫：v 自身或其子树（深度 ≤ HEADS_UP_SCAN_MAX_DEPTH）有
+     * 「正在显示」的 heads-up 则返回 true。只读不写。
+     *
+     * <p>v3.0.14 起不再以「节点存在」为判据，改用「类型识别 + 真显示」双重判定
+     * （{@link #isHeadsUpContainer} &amp;&amp; {@link #isHeadsUpVisible}）——
+     * 空的常驻占位节点不再把整条状态栏钉成「有横幅」，横幅真正弹出时仍完整保护
+     * 其整条祖先链（INV-1）。</p>
      */
     static boolean containsHeadsUp(View v, int depth) {
         if (v == null) {
             return false;
         }
-        if (isHeadsUpContainer(v)) {
+        // 类型识别仍由 isHeadsUpContainer 负责；此处额外要求「真的在显示」，
+        // 否则状态栏图标条里的空占位节点会把整条栏误判成「有横幅」。
+        if (isHeadsUpContainer(v) && isHeadsUpVisible(v)) {
             return true;
         }
         if (depth >= HEADS_UP_SCAN_MAX_DEPTH || !(v instanceof android.view.ViewGroup)) {
@@ -1021,7 +1077,10 @@ public final class Controller {
                 PixelShift.bind(statusView, navView);
                 // v2.7.5：系统栏已整体透明（hidden）时位移看不见，跳过步进，
                 // 省掉每 8 秒一次的状态栏重绘。恢复显示时相位照常继续。
-                if (!hidden) {
+                // v3.0.14：hidden 只代表「已进入隐藏相位」。P-1 降级路径下状态栏窗口
+                // 本身仍可见（alpha 保持 1.0），此时跳过步进会让相位彻底停住 ——
+                // 真机表现就是「状态栏偏移失效」。仅当整窗确实不可见时才跳过。
+                if (!hidden || statusWindowVisible()) {
                     PixelShift.tick();
                 }
             });
@@ -1057,6 +1116,26 @@ public final class Controller {
 
     /** 上一次应用到 PixelShift 的 UI 方案，变化时才重设并打日志 */
     private static String lastShiftStyle = "";
+
+    /**
+     * v3.0.14：状态栏 / 导航栏窗口是否「真的可见」。
+     * 用于决定像素偏移是否值得推进——hidden 相位下若整窗仍可见（P-1 降级只透明子项），
+     * 位移必须继续，否则相位停住，用户看到的就是「偏移失效」。
+     */
+    private static boolean statusWindowVisible() {
+        try {
+            if (statusView != null && statusView.getVisibility() == View.VISIBLE
+                    && statusView.getAlpha() > 0.01f) {
+                return true;
+            }
+            if (navView != null && navView.getVisibility() == View.VISIBLE
+                    && navView.getAlpha() > 0.01f) {
+                return true;
+            }
+        } catch (Throwable ignored) {
+        }
+        return false;
+    }
 
     /** 上一次 applyHide 时两个系统栏开关的状态，用于「开关变了立刻重画」 */
     private static boolean lastStatusBarSwitch = true;

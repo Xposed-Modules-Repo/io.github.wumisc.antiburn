@@ -1984,7 +1984,7 @@ private fun HomeTilePage(
         // P1 桌面图标隐藏：OptionRow 内嵌 Material3 Switch（整行可点），切换即落盘 + 组件别名生效。
         OptionRow(
             title = "隐藏桌面图标",
-            subtitle = "开后桌面无图标，从 LSPosed 打开本应用可恢复",
+            subtitle = "开后桌面无图标，可从 LSPosed 或系统设置打开",
             checked = hideLauncher,
             dark = dark,
             onCheckedChange = { on ->
@@ -1996,7 +1996,7 @@ private fun HomeTilePage(
         // 恢复提示：常驻可见（开/关都显示），口径与 PRD §一 / design-backend §5.3 一致，
         // 避免用户自锁后无措；不承诺备用图标/通知/磁贴，adb 兜底不塞进 UI。
         Text(
-            "隐藏后桌面不再显示本应用；需要恢复时，从 LSPosed 模块管理器打开本应用，回到此处关闭开关即可。",
+            "隐藏后桌面不再显示本应用；需要恢复时，从 LSPosed 模块管理器或「设置→应用管理→防烧屏」打开本应用，回到此处关闭开关即可。",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.fillMaxWidth().padding(start = 4.dp, top = 4.dp),

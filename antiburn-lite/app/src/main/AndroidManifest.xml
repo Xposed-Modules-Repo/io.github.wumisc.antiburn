@@ -37,9 +37,25 @@
         <activity
             android:name=".MainActivity"
             android:exported="true">
+            <!-- v3.0.13 修复（P1）：隐藏桌面图标时 .LauncherAlias 被禁用，包内不再有任何
+                 MAIN + 桌面启动类目的组件，PackageManager.getLaunchIntentForPackage() 直接返回 null，
+                 LSPosed（AppHelper.getLaunchIntentForPackage 先查 INFO 类目）、系统设置
+                 「打开」与第三方启动器全部失效，用户被锁在 App 外。
+                 此处补一个 MAIN + INFO 类目的入口：桌面与启动器只解析桌面启动类目，
+                 故隐藏态仍不显示图标；而 getLaunchIntentForPackage 会优先命中本组件，
+                 使一切外部启动路径恢复。纯加性，不改可见性切换逻辑。 -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.INFO" />
+                <!-- v3.0.15：getLaunchIntentForPackage 的 INFO 查询带 MATCH_DEFAULT_ONLY，
+                     不声明 DEFAULT 类目的 filter 不会被匹配，LSPosed 仍拿不到启动 Intent。
+                     补上后隐藏图标态也能被「打开」；桌面只解析桌面类目，故不显示图标。 -->
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
         </activity>
 
-        <!-- v3.0.11 P1：可切换桌面入口。禁 alias 不禁本体 → 桌面无图标但 App 仍可由 LSPosed 打开 -->
+        <!-- v3.0.11 P1：可切换桌面入口。隐藏态禁 alias 后桌面不再有图标；
+             外部启动能力由 .MainActivity 的 CATEGORY_INFO 入口承担（v3.0.13 修复）。 -->
         <activity-alias
             android:name=".LauncherAlias"
             android:targetActivity=".MainActivity"
