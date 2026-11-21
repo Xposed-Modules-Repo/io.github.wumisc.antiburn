@@ -1210,6 +1210,9 @@ public final class Controller {
         if (sv.getAlpha() != 1f) {
             sv.setAlpha(1f);
         }
+        if (!Config.statusClockOn && !Config.statusIconsOn) {
+            return;      // v3.0.20：时间与图标都关 → 整条栏保持不动
+        }
         if (!(sv instanceof android.view.ViewGroup)) {
             hideKnownStaticIconsOnly(sv, 0);
             return;
@@ -1267,13 +1270,13 @@ public final class Controller {
         }
         lastZoneH = 0;
         int n = dimLeaves(root, 0, w, 0,
-                (int) (w * 0.34f), (int) (w * 0.62f));
+                (int) (w * 0.34f), (int) (w * 0.62f), w);
         lastZone = "w" + w + "/n" + n + "/h" + lastZoneH;
         return n;
     }
 
     private static int dimLeaves(View v, int left, int right, int depth,
-                                 int leftLimit, int rightLimit) {
+                                 int leftLimit, int rightLimit, int width) {
         if (v == null || depth > ICON_SCAN_MAX_DEPTH) {
             return 0;
         }
@@ -1296,7 +1299,7 @@ public final class Controller {
                     continue;
                 }
                 n += dimLeaves(c, left + c.getLeft(), left + c.getRight(), depth + 1,
-                        leftLimit, rightLimit);
+                        leftLimit, rightLimit, width);
             }
             return n;
         }
@@ -1306,6 +1309,9 @@ public final class Controller {
         }
         int cx = (left + right) / 2;
         if (cx < leftLimit || cx > rightLimit) {
+            if (!sideAllowed(cx, width)) {
+                return 0;      // 该侧开关关掉：保留
+            }
             setAlphaTracked(v, 0f, true);
             return 1;
         }
@@ -1321,6 +1327,7 @@ public final class Controller {
      * 其余叶子全透明 —— 效果是「状态栏只剩通知」，隐藏明确可见且通知不误伤。</p>
      */
     private static int dimAllExceptNotify(android.view.ViewGroup root) {
+        int w = root.getWidth();
         int n = 0;
         for (int i = 0; i < root.getChildCount(); i++) {
             View c = root.getChildAt(i);
@@ -1332,10 +1339,14 @@ public final class Controller {
                     lastZoneH++;
                     continue;          // 只跳过真正显示中的横幅容器本身
                 }
-                n += dimTreeExceptNotify((android.view.ViewGroup) c);
+                n += dimTreeExceptNotify((android.view.ViewGroup) c,
+                        c.getLeft(), c.getRight(), w);
             } else {
                 if (isNotifyish(c)) {
                     continue;          // 通知图标叶子保留
+                }
+                if (!sideAllowed((c.getLeft() + c.getRight()) / 2, w)) {
+                    continue;          // v3.0.20：该侧开关关掉 → 保留
                 }
                 setAlphaTracked(c, 0f, true);
                 n++;
@@ -1344,21 +1355,27 @@ public final class Controller {
         return n;
     }
 
-    private static int dimTreeExceptNotify(android.view.ViewGroup g) {
+    private static int dimTreeExceptNotify(android.view.ViewGroup g,
+                                           int left, int right, int w) {
         int n = 0;
         for (int i = 0; i < g.getChildCount(); i++) {
             View c = g.getChildAt(i);
             if (c == null || c.getVisibility() == View.GONE) {
                 continue;
             }
+            int cl = left + c.getLeft();
+            int cr = left + c.getRight();
             if (c instanceof android.view.ViewGroup) {
                 if (isHeadsUpBanner(c) && isHeadsUpVisible(c)) {
                     lastZoneH++;
                     continue;
                 }
-                n += dimTreeExceptNotify((android.view.ViewGroup) c);
+                n += dimTreeExceptNotify((android.view.ViewGroup) c, cl, cr, w);
             } else {
                 if (isNotifyish(c)) {
+                    continue;
+                }
+                if (!sideAllowed((cl + cr) / 2, w)) {
                     continue;
                 }
                 setAlphaTracked(c, 0f, true);
@@ -1391,12 +1408,35 @@ public final class Controller {
     }
 
     /**
+     * v3.0.20：状态栏左右两侧的独立开关（隐藏时间 / 隐藏右侧图标）。
+     *
+     * <p>两个都开时返回 true —— 保持 v3.0.19 已验证的「整栏除通知外全清」行为；
+     * 只开一侧时按水平中心分区：左区（&lt;34%）归时间开关，右区（&gt;62%）归图标开关，
+     * 中间 34%~62% 是通知图标区，任何情况下都不清。</p>
+     */
+    private static boolean sideAllowed(int cx, int w) {
+        if (w <= 0) {
+            return false;
+        }
+        if (Config.statusClockOn && Config.statusIconsOn) {
+            return true;
+        }
+        int left = (int) (w * 0.34f);
+        int right = (int) (w * 0.62f);
+        if (cx >= left && cx <= right) {
+            return false;
+        }
+        return cx < left ? Config.statusClockOn : Config.statusIconsOn;
+    }
+
+    /**
      * 第三级（必胜）兜底：除正在显示的横幅容器外，整棵状态栏一律透明。
      * <p>前两级都命中不足时才会走到这里，用于 ROM 把整条状态栏自绘在一个 View 里的情况。
      * heads-up 横幅在 HyperOS/AOSP 都是独立窗口，不在 statusView 子树内，
      * 因此这里不会误伤横幅；下拉通知面板同样在独立窗口，也不受影响。</p>
      */
     private static int dimAllExceptBanner(android.view.ViewGroup root) {
+        int w = root.getWidth();
         int n = 0;
         for (int i = 0; i < root.getChildCount(); i++) {
             View c = root.getChildAt(i);
@@ -1407,8 +1447,12 @@ public final class Controller {
                 continue;
             }
             if (c instanceof android.view.ViewGroup) {
-                n += dimTreeAllExceptBanner((android.view.ViewGroup) c);
+                n += dimTreeAllExceptBanner((android.view.ViewGroup) c,
+                        c.getLeft(), c.getRight(), w);
             } else {
+                if (!sideAllowed((c.getLeft() + c.getRight()) / 2, w)) {
+                    continue;
+                }
                 setAlphaTracked(c, 0f, true);
                 n++;
             }
@@ -1416,19 +1460,25 @@ public final class Controller {
         return n;
     }
 
-    private static int dimTreeAllExceptBanner(android.view.ViewGroup g) {
+    private static int dimTreeAllExceptBanner(android.view.ViewGroup g,
+                                              int left, int right, int w) {
         int n = 0;
         for (int i = 0; i < g.getChildCount(); i++) {
             View c = g.getChildAt(i);
             if (c == null || c.getVisibility() == View.GONE) {
                 continue;
             }
+            int cl = left + c.getLeft();
+            int cr = left + c.getRight();
             if (isHeadsUpBanner(c) && isHeadsUpVisible(c)) {
                 continue;
             }
             if (c instanceof android.view.ViewGroup) {
-                n += dimTreeAllExceptBanner((android.view.ViewGroup) c);
+                n += dimTreeAllExceptBanner((android.view.ViewGroup) c, cl, cr, w);
             } else {
+                if (!sideAllowed((cl + cr) / 2, w)) {
+                    continue;
+                }
                 setAlphaTracked(c, 0f, true);
                 n++;
             }

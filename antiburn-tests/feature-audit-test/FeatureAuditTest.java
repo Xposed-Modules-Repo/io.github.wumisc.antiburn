@@ -433,10 +433,11 @@ public class FeatureAuditTest {
         // ---------- T-07 首页关键入口仍在 ----------
         System.out.println("== T-07 首页入口 ==");
         String features = slice(main, "private fun FeaturesPage", "private fun AboutPage");
-        check(features.contains("ListRow(\"周期时长\"") && main.contains("CycleDialog("),
-                "T-07a 周期时长入口在「通用」二级页 + 弹窗小窗（不在首页）", "");
-        check(count(main, "ListRow\\(\"周期时长\"") == 1,
-                "T-07c 周期时长全 App 只有 1 处入口", "出现=" + count(main, "ListRow\\(\"周期时长\""));
+        check(features.contains("ListRow(\"周期时间\"") && main.contains("CycleDialog("),
+                "T-07a 周期时间入口移到功能区首页（仍是弹窗小窗）", "");
+        check(count(main, "ListRow\\(\"周期时间\"") == 1
+                        && count(main, "ListRow\\(\"周期时长\"") == 0,
+                "T-07c 周期时间全 App 只有 1 处入口，旧入口已删", "新=" + count(main, "ListRow\\(\"周期时间\""));
         check(count(main, "ListModeChips\\(") == 2,
                 "T-07b 名单卡片全局只有 1 处调用（1 定义 + 1 调用）", "");
 
@@ -1794,8 +1795,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 79
-                    && "3.0.19".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 80
+                    && "3.0.20".equals(nm.group(1));
             check(ok, "T-42b versionCode 恰为 78 / versionName 恰为 3.0.13（非区间，锁死发布锚点）", "");
         }
         check(hook297raw.contains("SAFE_RESTORE") && hook297raw.contains("DRAMA_PAYWALL_HIDE"),
@@ -1870,8 +1871,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 79
-                    && "3.0.19".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 80
+                    && "3.0.20".equals(nm.group(1));
             // 与 T-42b 断言同源，是发布前的双重防回退锁，不冒充新增不变量（评审建议改标签）。
             check(ok, "T-43c P3 版本锚点与 T-42b 双重锁定（发布前防回退，非新增不变量）", "");
         }
@@ -1909,9 +1910,9 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 79
-                    && "3.0.19".equals(nm.group(1));
-            check(ok, "T-44c 版本号恰为 79 / 3.0.19（发布锚点）", "");
+                    && Integer.parseInt(cm.group(1)) == 80
+                    && "3.0.20".equals(nm.group(1));
+            check(ok, "T-44c 版本号恰为 80 / 3.0.20（发布锚点）", "");
         }
 
         // ---------- T-45 v3.0.3 右上角安全修复 + 两处只读探测越界防护 ----------
@@ -1952,9 +1953,9 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 79
-                    && "3.0.19".equals(nm.group(1));
-            check(ok, "T-45c 版本号恰为 79 / 3.0.19（发布锚点）", "");
+                    && Integer.parseInt(cm.group(1)) == 80
+                    && "3.0.20".equals(nm.group(1));
+            check(ok, "T-45c 版本号恰为 80 / 3.0.20（发布锚点）", "");
         }
 
         // ---------- T-46 v3.0.4 快手右侧作者栏放行（用户授权绕 rw>=0.30 红线） ----------
@@ -2029,8 +2030,8 @@ public class FeatureAuditTest {
             // ⑤ 版本锚点 + 辅助方法只读性
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
-            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 79
-                    && "3.0.19".equals(nm.group(1));
+            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 80
+                    && "3.0.20".equals(nm.group(1));
             String helper = stripComments(slice(dy304raw, "private static boolean hasChildByClass(View v, String target)",
                     "private static int scoreRight(ViewGroup g)"));
             boolean readonly = helper.contains("MAX_DEPTH") && helper.contains("catch (Throwable")
@@ -2074,9 +2075,9 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 79
-                    && "3.0.19".equals(nm.group(1));
-            check(ok, "T-47c 版本号恰为 79 / 3.0.19（v3.0.13 发布锚点）", "");
+                    && Integer.parseInt(cm.group(1)) == 80
+                    && "3.0.20".equals(nm.group(1));
+            check(ok, "T-47c 版本号恰为 80 / 3.0.20（v3.0.13 发布锚点）", "");
         }
 
         // ---------- T-48 v3.0.6 三处精准隐藏（红点禁藏为开发门禁，缺一即失败） ----------
@@ -2342,7 +2343,7 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ver = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 79 && "3.0.19".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 80 && "3.0.20".equals(nm.group(1));
             check(ver, "T-48-VER 版本锚点 78/3.0.18（T-42b~T-47c 六处已同步）", "");
         }
 
@@ -2694,14 +2695,14 @@ public class FeatureAuditTest {
             // 属授权改动（T-54 已单独验收全绿）；经 git diff 逐行核对，其余 6 段逐字未改仍 MATCH 基线。
             // v3.0.14 重锁：段[3] enableShift 区间含偏移推进修复（hidden 但窗口可见时仍 tick），20→23 行。
             // v3.0.17 重锁：段[5] applyHide→applyShow 区间含状态栏几何分区透明（dimByZone/dimLeaves），157→220 行。
-            int[] a2Lines = {5, 16, 18, 23, 11, 385, 41};
+            int[] a2Lines = {5, 16, 18, 23, 11, 434, 41};
             String[] a2Sha = {
                     "b1e940509f7ec1d0f5e85264d4559d8429583bc6a7133abf657744823762f9bc",
                     "d438516ad9b062d17fc3710c5e95816d9eb8af0f5033a0244bc444106931b315",
                     "2e15d96a58c8952746da6ca190add42c7bfeb7ab76fc24c70f03c89d1fa90c91",
                     "a8a3c21d8ec069e7d778a2e3e18682c9b4a68f25945bdb80452ebf823f138d35",
                     "31f7e195cb32c1bf85b3631c5e2ac43dc8d795b5cc2e48e1137371646ba36020",
-                    "b41a23523ab318b80b7ce3a15550c1dbcedcb390221c4532528b5aa2ed2e4a1f",
+                    "5926af3e557a23e3750f32346637a0c96c11e4c8d871359c65b7381581a6b332",
                     "29a926668a181c748745072486318738514980532d0c6d971a90b77e5e8363a9"
             };
             StringBuilder drift = new StringBuilder();
@@ -2981,8 +2982,8 @@ public class FeatureAuditTest {
                     // P-1 授权改动：Controller.java 基线为修复后实测值
                     // （v3.0.14：containsHeadsUp 双判据 + hidden 下窗口可见时仍推进偏移）。
                     // v3.0.17：dimByZone 几何分区透明（HyperOS 类名不命中兜底），基线重锁
-                    {"Controller.java", "3cf16056c1c67d84794f8fb493cedb74e4677c0bafead194742fbaf2c016ec30"},
-                    {"Config.java", "b3d39497ddd5b1ef5b18006e6a445447cd2f02d73104acf30bd2aa6199826193"},
+                    {"Controller.java", "d499b62a4a9c67e6b3baf22b8df591e61c4d0d30faf7fa3fa4abd11188dafa64"},
+                    {"Config.java", "772e1bee87f099efa467fa8d5b113da8bd18cab4afb8300faf682b93ec05bb30"},
                     // v3.0.16 授权改动：enable_app_overlay 默认值 0→1（仅无障碍引擎生效）
                     {"ConfStore.java", "44f94cd303b3d8a07403d0e6d9361e1c700f59f98a60a9f99fc4d73de06ac192"},
                     {"ThhLiveGate.java", "09903e9bb86f1f9f044c04a869df71a9c6e31ea8d8e4746aa7381c0e81226c5f"},
@@ -3135,7 +3136,7 @@ public class FeatureAuditTest {
 
             // G8 · 越界哈希零改（G8a 冻结 8 文件）+ 授权/无障碍文件基线（实测值，待主理人复核锁定）
             String[][] p1Frozen = {
-                    {"Config.java",      "b3d39497ddd5b1ef5b18006e6a445447cd2f02d73104acf30bd2aa6199826193"},
+                    {"Config.java",      "772e1bee87f099efa467fa8d5b113da8bd18cab4afb8300faf682b93ec05bb30"},
                     // v3.0.16 授权改动：enable_app_overlay 默认 1（仅无障碍引擎生效）
                     {"ConfStore.java",   "44f94cd303b3d8a07403d0e6d9361e1c700f59f98a60a9f99fc4d73de06ac192"},
                     {"ThhLiveGate.java", "09903e9bb86f1f9f044c04a869df71a9c6e31ea8d8e4746aa7381c0e81226c5f"},
@@ -3166,7 +3167,7 @@ public class FeatureAuditTest {
             check(a11yZero, "T-54-G8c 无障碍侧 3 文件逐字零改（含 config 未声明通知事件）", "");
             // G8b：授权文件修复后基线（v3.0.14 偏移推进修复后实测，已按 sha256sum 重采）
             // 注意：必须读原始文件（含注释），与 sha256sum 采集口径一致，不能用 stripComments 后的串。
-            boolean authZero = "3cf16056c1c67d84794f8fb493cedb74e4677c0bafead194742fbaf2c016ec30"
+            boolean authZero = "d499b62a4a9c67e6b3baf22b8df591e61c4d0d30faf7fa3fa4abd11188dafa64"
                             .equals(sha256(read(dir.resolve("Controller.java"))))
                     && "c005357253ce9f3d7618695524c9a4daae3de7f4504d1374f12ce5f188f43137"
                             .equals(sha256(read(dir.resolve("PixelShift.java"))));
@@ -3242,9 +3243,9 @@ public class FeatureAuditTest {
             java.util.regex.Matcher nm313 = java.util.regex.Pattern
                     .compile("versionName\\s+\"([^\"]+)\"").matcher(gradle313);
             boolean ver313 = cm313.find() && nm313.find()
-                    && Integer.parseInt(cm313.group(1)) == 79
-                    && "3.0.19".equals(nm313.group(1));
-            check(ver313, "T-55-A5 版本锚点 79 / 3.0.19", "");
+                    && Integer.parseInt(cm313.group(1)) == 80
+                    && "3.0.20".equals(nm313.group(1));
+            check(ver313, "T-55-A5 版本锚点 80 / 3.0.20", "");
 
             // A6 · 变异实证：把 INFO 类目改坏，A1 守卫必须失效（证明断言非空转）
             String mutMan = man313.replace("android.intent.category.INFO", "android.intent.category.BOGUS");
@@ -3361,6 +3362,44 @@ public class FeatureAuditTest {
                     "T-59-A2 transparentDeep 入口 forceShow 一律转恢复（覆盖直播/兜底路径）", "");
             check(hook319.contains("ball.setText(forceShow ? \"显\" : \"藏\")"),
                     "T-59-A3 悬浮球「显/藏」文字与 forceShow 语义绑定", "");
+        }
+
+        // ---------- T-60 v3.0.20 状态栏左右细分 + 周期时间前置 ----------
+        System.out.println();
+        System.out.println("== T-60 状态栏左右细分 ==");
+        {
+            String cfg320 = read(dir.resolve("Config.java"));
+            check(cfg320.contains("public static volatile boolean statusClockOn = true")
+                            && cfg320.contains("public static volatile boolean statusIconsOn = true"),
+                    "T-60-A1 Config 两个开关默认 true（老配置缺键不改变行为）", "");
+            check(cfg320.contains("case \"status_clock_on\"") && cfg320.contains("case \"status_icons_on\""),
+                    "T-60-A2 conf 两个新键被 parse 识别", "");
+
+            String ctrl320 = read(dir.resolve("Controller.java"));
+            check(ctrl320.contains("private static boolean sideAllowed(int cx, int w)"),
+                    "T-60-A3 Controller 按水平中心判定该侧是否允许隐藏", "");
+            check(ctrl320.contains("if (cx >= left && cx <= right) {")
+                            && ctrl320.contains("return false;"),
+                    "T-60-A4 中间 34%~62% 通知区任何情况下都保留", "");
+            check(ctrl320.contains("if (!Config.statusClockOn && !Config.statusIconsOn) {")
+                            && ctrl320.contains("return;      // v3.0.20"),
+                    "T-60-A5 两侧都关时直接不动整条栏", "");
+
+            String act320 = read(dir.resolve("MainActivity.kt"));
+            check(act320.contains("val statusClockOn: Boolean = true")
+                            && act320.contains("val statusIconsOn: Boolean = true"),
+                    "T-60-A6 AbState 两字段存在且默认 true", "");
+            check(act320.contains("lines[\"status_clock_on\"]") && act320.contains("lines[\"status_icons_on\"]")
+                            && act320.contains("putB(\"status_clock_on\"") && act320.contains("putB(\"status_icons_on\""),
+                    "T-60-A7 两键写入 + diff 落盘齐全", "");
+            check(act320.contains("OptionRow(\"隐藏时间\"") && act320.contains("OptionRow(\"隐藏右侧图标\""),
+                    "T-60-A8 通用页出现「隐藏时间」「隐藏右侧图标」两行", "");
+            String feat = slice(act320, "private fun FeaturesPage(", "private fun OptionRow(");
+            String general = slice(act320, "private fun GeneralFeaturePage(", "private fun DouyinFeaturePage(");
+            check(feat.contains("ListRow(\"周期时间\"") && feat.contains("CycleDialog("),
+                    "T-60-A9 功能首页出现「周期时间」卡并可弹周期设置", "");
+            check(!general.contains("ListRow(\"周期时长\"") && !general.contains("CycleDialog("),
+                    "T-60-A10 通用页不再重复周期入口（单一真源）", "");
         }
 
         System.out.println();

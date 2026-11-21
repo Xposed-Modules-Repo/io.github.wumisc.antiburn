@@ -211,9 +211,9 @@ public class ListModeTest {
         check(!main.contains("OptionRow(\"状态栏偏移\""),
                 "T-15d 通用二级页已无「状态栏偏移」开关（像素微移改内置常开）", "");
         String features2 = slice(main, "private fun FeaturesPage", "private fun AboutPage");
-        check(features2.contains("ListRow(\"周期时长\"") && main.contains("CycleDialog(")
+        check(features2.contains("ListRow(\"周期时间\"") && main.contains("CycleDialog(")
                         && main.contains("if (showCycleDialog)"),
-                "T-15e 周期时长在通用二级页 + 弹窗小窗", "");
+                "T-15e 周期时间在功能首页 + 弹窗小窗", "");
 
         check(main.contains("tabProgress = {"), "T-15f 导航栏接收连续页进度", "");
         check(main.contains("currentPageOffsetFraction"), "T-15g 进度源含页内偏移（否则仍是整页跳）", "");

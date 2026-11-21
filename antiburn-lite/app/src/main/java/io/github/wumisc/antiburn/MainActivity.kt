@@ -179,6 +179,10 @@ data class AbState(
      * 直接复用会让所有老用户升级后状态栏突然不再隐藏。</p>
      */
     val enableStatusBar: Boolean = true,
+    /** v3.0.20：隐藏状态栏时连左侧时间一起清；关掉则只清右侧图标。缺键按 true。 */
+    val statusClockOn: Boolean = true,
+    /** v3.0.20：隐藏状态栏时清右侧信号/网络/电量；缺键按 true。 */
+    val statusIconsOn: Boolean = true,
     /**
      * 目标 UI 适配方案：hyperos / magicos / coloros / originos / harmonyos / flyme / aosp。
      * 决定 Hook 侧用哪套「胶囊保护区 + 导航栏结构」配置，见 profiles/ 与 Config.uiStyle。
@@ -298,6 +302,8 @@ private val AbStateSaver = listSaver(
             // v3.0.7：索引 43/44/45/46，纯追加不动旧索引 0-42。
             s.enableKsLiveHits, s.enableDyLiveHits,
             s.enableKsFeedHits, s.enableDramaInfoHits,
+            // v3.0.20：索引 47/48，状态栏左右两侧独立开关。
+            s.statusClockOn, s.statusIconsOn,
         )
     },
     restore = { l: List<Any> ->
@@ -369,6 +375,8 @@ private val AbStateSaver = listSaver(
                 enableDyLiveHits = Bool(44),
                 enableKsFeedHits = Bool(45),
                 enableDramaInfoHits = Bool(46),
+                statusClockOn = Bool(47, true),
+                statusIconsOn = Bool(48, true),
             )
         }
     },
@@ -424,6 +432,8 @@ object AbConf {
             enableIcon = b(map["enable_icon"]),
             // 缺失键按 true：v2.6.3 及以前的配置没有这个键，升级后行为必须保持不变
             enableStatusBar = b(map["enable_status_bar"], true),
+            statusClockOn = b(map["status_clock_on"], true),
+            statusIconsOn = b(map["status_icons_on"], true),
             // v2.7.4：缺键时按机型识别（魅族 → flyme），已有键一律以用户选择为准
             uiStyle = if (map.containsKey("ui_style")) normUiStyle(map["ui_style"]) else detectedUiStyle(),
             // 诗句功能已下线（Hook 侧实现同步移除）：界面无入口、消费端已删，
@@ -510,6 +520,8 @@ object AbConf {
         lines["enable_shift"] = if (s.enableShift) "1" else "0"
         lines["enable_icon"] = if (s.enableIcon) "1" else "0"
         lines["enable_status_bar"] = if (s.enableStatusBar) "1" else "0"
+        lines["status_clock_on"] = if (s.statusClockOn) "1" else "0"
+        lines["status_icons_on"] = if (s.statusIconsOn) "1" else "0"
         lines["ui_style"] = normUiStyle(s.uiStyle)
         lines["enable_navigation"] = if (s.enableNav) "1" else "0"
         // 字段恒为 false（load 已固定），因此这里恒写 0：老配置里的 1
@@ -595,6 +607,8 @@ object AbConf {
         putB("enable_shift", old.enableShift, new.enableShift)
         putB("enable_icon", old.enableIcon, new.enableIcon)
         putB("enable_status_bar", old.enableStatusBar, new.enableStatusBar)
+        putB("status_clock_on", old.statusClockOn, new.statusClockOn)
+        putB("status_icons_on", old.statusIconsOn, new.statusIconsOn)
         if (old.uiStyle != new.uiStyle) m["ui_style"] = normUiStyle(new.uiStyle)
         putB("enable_navigation", old.enableNav, new.enableNav)
         // 诗句字段恒为 false（功能已下线），此行使字段与 conf 的写入路径保持完整，
@@ -1108,6 +1122,7 @@ private fun BurnInProtectApp() {
                         1 -> FeaturesPage(
                             state = state,
                             onOpen = openSub,
+                            onStateChange = onStateChange,
                             saveBar = saveBar,
                         )
                         2 -> AboutPage(onOpen = openSub, onOpenUrl = openUrl)
@@ -2238,9 +2253,11 @@ private fun InjectStatusCard(dark: Boolean, onEnableAll: () -> Unit) {
 private fun FeaturesPage(
     state: AbState,
     onOpen: (String) -> Unit,
+    onStateChange: ((AbState) -> AbState) -> Unit,
     saveBar: @Composable () -> Unit,
 ) {
     val dark = isSystemInDarkTheme()
+    var showCycleDialog by remember { mutableStateOf(false) }
     Column(
         Modifier
             .fillMaxSize()
@@ -2262,10 +2279,15 @@ private fun FeaturesPage(
         saveBar()
         Spacer(Modifier.height(10.dp))
 
+        // v3.0.20：周期时间从「通用」提到功能首页 —— 它是整套隐藏机制的节奏，
+        // 放在二级页里太多人找不到。调完立即落盘，各区域共用同一节奏。
+        ListRow("周期时间", "藏 ${state.hideSec}s · 显 ${state.showSec}s · 状态栏与视频控件共用",
+            { showCycleDialog = true }, dark, trailing = "›")
+
         val generalOn = listOf(
             state.enableStatusBar, state.enableNav, state.enableLog, state.enableBall,
         ).count { it }
-        ListRow("通用", "系统栏 / 日志 / 悬浮球 / 周期时长 · 已开启 $generalOn/4 项",
+        ListRow("通用", "系统栏 / 日志 / 悬浮球 · 已开启 $generalOn/3 项",
             { onOpen("feat-general") }, dark)
 
         val douyinOn = listOf(
@@ -2297,6 +2319,14 @@ private fun FeaturesPage(
 
         Spacer(Modifier.height(14.dp))
         RoadmapCard(dark)
+    }
+    if (showCycleDialog) {
+        CycleDialog(
+            state = state,
+            onStateChange = onStateChange,
+            dark = dark,
+            onDismiss = { showCycleDialog = false },
+        )
     }
 }
 
@@ -2427,13 +2457,19 @@ private fun GeneralFeaturePage(
     onStateChange: ((AbState) -> AbState) -> Unit,
     dark: Boolean,
 ) {
-    var showCycleDialog by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var scopeText by remember { mutableStateOf<String?>(null) }
     GroupTitle("系统栏与通用")
     OptionRow("状态栏", "顶部图标周期性隐藏", checked = state.enableStatusBar, dark = dark,
         onCheckedChange = { on -> onStateChange { s -> s.copy(enableStatusBar = on) } })
+    // v3.0.20：状态栏细分为「左侧时间」与「右侧图标」两个独立开关。
+    OptionRow("隐藏时间", "左侧时钟；关掉就只清右侧图标", checked = state.statusClockOn, dark = dark,
+        enabled = state.enableStatusBar,
+        onCheckedChange = { on -> onStateChange { s -> s.copy(statusClockOn = on) } })
+    OptionRow("隐藏右侧图标", "信号 / 网络 / 电量 / 网速", checked = state.statusIconsOn, dark = dark,
+        enabled = state.enableStatusBar,
+        onCheckedChange = { on -> onStateChange { s -> s.copy(statusIconsOn = on) } })
     OptionRow("导航栏", "底部系统导航栏", checked = state.enableNav, dark = dark,
         onCheckedChange = { on -> onStateChange { s -> s.copy(enableNav = on) } })
     OptionRow("诊断日志", "写 diag.log 排查，出问题请先打开它", checked = state.enableLog, dark = dark,
@@ -2444,8 +2480,6 @@ private fun GeneralFeaturePage(
     OptionRow("无障碍应用内遮盖", "免 root：周期遮盖抖音/红果/快手/B站固定区域（会短暂出现黑块）",
         checked = state.enableAppOverlay, dark = dark,
         onCheckedChange = { on -> onStateChange { s -> s.copy(enableAppOverlay = on) } })
-    ListRow("周期时长", "隐藏 ${state.hideSec}s · 显示 ${state.showSec}s",
-        { showCycleDialog = true }, dark, trailing = "›")
     HintText("App 内固定控件按周期真隐藏：藏 ${state.hideSec} 秒（像素不发光）→ 显示 ${state.showSec} 秒。隐藏的是叠加在画面上的按钮/栏，不影响视频与弹幕本身。")
     HintText("隐藏期间这些控件不显示也不响应点击；需要操作时点悬浮球或等显示窗口。只在模块注入对应 App 进程时生效，首页「注入状态」可直接看有没有注入。")
     HintText("各 App 的区域开关决定哪几块参与隐藏；四个都关时按「右侧按钮列 + 顶部标题 + 底部导航」三区执行。")
@@ -2470,14 +2504,6 @@ private fun GeneralFeaturePage(
             dark = dark,
             onOpenLsposed = { openLsposedManager(context) },
             onDismiss = { scopeText = null },
-        )
-    }
-    if (showCycleDialog) {
-        CycleDialog(
-            state = state,
-            onStateChange = onStateChange,
-            dark = dark,
-            onDismiss = { showCycleDialog = false },
         )
     }
 }

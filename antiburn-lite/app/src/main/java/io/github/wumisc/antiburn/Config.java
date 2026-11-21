@@ -88,6 +88,15 @@ public final class Config {
      * 关掉它只影响状态栏，导航栏仍由 {@link #enableNav} 独立控制。</p>
      */
     public static volatile boolean enableStatusBar = true;
+    /**
+     * v3.0.20：隐藏状态栏时是否连左侧时间一起隐藏。
+     *
+     * <p>老配置缺键按 true 解释 —— 与 v3.0.19 之前「整条栏都清」的行为一致，
+     * 升级后不会突然留下一块时间。</p>
+     */
+    public static volatile boolean statusClockOn = true;
+    /** v3.0.20：隐藏状态栏时是否隐藏右侧网络/信号/电量等图标。缺键按 true。 */
+    public static volatile boolean statusIconsOn = true;
     public static volatile boolean enableLog = false;
     /** v2.8.2：应用内区域兜底遮盖；Config 侧留存并打进 CONF apply，真正消费方是 BurnInMaskService。 */
     /**
@@ -757,6 +766,7 @@ public final class Config {
         boolean ao = enableAppOverlay;
         boolean so = enableSysOverlay;
         boolean sb = enableStatusBar;
+        boolean scl = statusClockOn, sic = statusIconsOn;
         String style = uiStyle;
         String custom = customPoems;
         int h = hideSec, s = showSec;
@@ -857,6 +867,8 @@ public final class Config {
                 case "enable_ball": ball = "1".equals(v); break;
                 case "enable_icon": ic = "1".equals(v); break;
                 case "enable_status_bar": sb = "1".equals(v); break;
+                case "status_clock_on": scl = "1".equals(v); break;
+                case "status_icons_on": sic = "1".equals(v); break;
                 case "enable_log": lg = "1".equals(v); break;
                 // v2.8.4：暂停生效。配置里即使还是 1（v2.8.2/2.8.3 写进去的），
                 // 也不再生效 —— 否则用户升级后照样被黑块盖住。
@@ -909,6 +921,8 @@ public final class Config {
 
         enableStatus = es;
         enableNav = en;
+        statusClockOn = scl;
+        statusIconsOn = sic;
         engine = ConfStore.normEngine(engRaw);
         enableShift = sh;
         enableDouyinTop = dtop;
