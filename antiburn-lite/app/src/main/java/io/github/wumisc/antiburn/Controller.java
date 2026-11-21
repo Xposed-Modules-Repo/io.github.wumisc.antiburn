@@ -1162,6 +1162,7 @@ public final class Controller {
                 + (navView.isAttachedToWindow() ? "" : "(det)");
         return " hid=" + hidden + " cyc=" + Config.hideSec + "/" + Config.showSec
                 + " sv=" + s + " nv=" + n + " dim=" + dimmed.size()
+                + " zone=" + lastZone
                 + " svok=" + isPlausibleStatusBar(statusView);
     }
 
@@ -1217,10 +1218,9 @@ public final class Controller {
         if (notifyArea == null) {
             // v3.0.17：HyperOS 4 的类名与 AOSP 不同，Clock/Signal/Battery 匹配全不命中
             // （真机 SYS 行 dim=0），状态栏在隐藏相位完全没变化。先按几何分区透明：
-            // 左区时钟 / 右区信号电池透明，中区通知图标整棵保留；0 命中才回退类名方案。
-            if (dimByZone(svg) == 0) {
-                hideKnownStaticIconsOnly(sv, 0);
-            }
+            // 左区时钟 / 右区信号电池透明，中区通知图标整棵保留。
+            // v3.0.18：几何命中 < 2 时再走「除通知外全透明」兜底，仍为 0 才回退类名。
+            dimFallbackChain(sv, svg);
             return;
         }
         // 父容器恢复为可见，再沿「通知区路径」逐层只隐藏兄弟节点
@@ -1235,9 +1235,7 @@ public final class Controller {
         }
         if (path == null || path.size() < 2) {
             notifyArea = null;
-            if (dimByZone(svg) == 0) {
-                hideKnownStaticIconsOnly(sv, 0);
-            }
+            dimFallbackChain(sv, svg);
             return;
         }
         dimAlong(path, 0);
@@ -1258,13 +1256,20 @@ public final class Controller {
      *
      * @return 实际透明化的叶子数量；0 表示拿不到几何信息，调用方回退类名方案。
      */
+    /** v3.0.18：最近一次几何分区的诊断（宽/命中/被横幅跳过数），写进 SYS 行 */
+    private static String lastZone = "";
+    private static int lastZoneH = 0;
+
     private static int dimByZone(android.view.ViewGroup root) {
         int w = root.getWidth();
         if (w <= 0) {
             return 0;
         }
-        return dimLeaves(root, 0, w, 0,
+        lastZoneH = 0;
+        int n = dimLeaves(root, 0, w, 0,
                 (int) (w * 0.34f), (int) (w * 0.62f));
+        lastZone = "w" + w + "/n" + n + "/h" + lastZoneH;
+        return n;
     }
 
     private static int dimLeaves(View v, int left, int right, int depth,
@@ -1283,8 +1288,12 @@ public final class Controller {
                 if (c == null || c.getVisibility() == View.GONE) {
                     continue;
                 }
-                if (containsHeadsUp(c, 0)) {
-                    continue;   // 横幅子树不碰（INV-1）
+                if (isHeadsUpBanner(c) && isHeadsUpVisible(c)) {
+                    // v3.0.18：只跳过「真正在显示的横幅容器」本身。
+                    // 旧版 containsHeadsUp(c, 0) 会把整个右侧系统图标容器一起跳过
+                    // （真机 dim=1 即由此而来），状态栏看起来几乎没有变化。
+                    lastZoneH++;
+                    continue;
                 }
                 n += dimLeaves(c, left + c.getLeft(), left + c.getRight(), depth + 1,
                         leftLimit, rightLimit);
@@ -1301,6 +1310,171 @@ public final class Controller {
             return 1;
         }
         return 0;
+    }
+
+    /**
+     * v3.0.18：几何分区命中不足时的强兜底 —— 除通知分支外，整棵状态栏全部透明。
+     *
+     * <p>真机 v3.0.17 的 {@code dim=1} 说明状态栏视图树与分区假设不一致：右侧系统图标
+     * 整支被 heads-up 误判跳过，只剩一个时钟叶子被透明。这里退一步递归遍历，
+     * 凡类名/资源名带 notification 的分支、以及真正显示中的横幅容器一律保留，
+     * 其余叶子全透明 —— 效果是「状态栏只剩通知」，隐藏明确可见且通知不误伤。</p>
+     */
+    private static int dimAllExceptNotify(android.view.ViewGroup root) {
+        int n = 0;
+        for (int i = 0; i < root.getChildCount(); i++) {
+            View c = root.getChildAt(i);
+            if (c == null || c.getVisibility() == View.GONE) {
+                continue;
+            }
+            if (c instanceof android.view.ViewGroup) {
+                if (isHeadsUpBanner(c) && isHeadsUpVisible(c)) {
+                    lastZoneH++;
+                    continue;          // 只跳过真正显示中的横幅容器本身
+                }
+                n += dimTreeExceptNotify((android.view.ViewGroup) c);
+            } else {
+                if (isNotifyish(c)) {
+                    continue;          // 通知图标叶子保留
+                }
+                setAlphaTracked(c, 0f, true);
+                n++;
+            }
+        }
+        return n;
+    }
+
+    private static int dimTreeExceptNotify(android.view.ViewGroup g) {
+        int n = 0;
+        for (int i = 0; i < g.getChildCount(); i++) {
+            View c = g.getChildAt(i);
+            if (c == null || c.getVisibility() == View.GONE) {
+                continue;
+            }
+            if (c instanceof android.view.ViewGroup) {
+                if (isHeadsUpBanner(c) && isHeadsUpVisible(c)) {
+                    lastZoneH++;
+                    continue;
+                }
+                n += dimTreeExceptNotify((android.view.ViewGroup) c);
+            } else {
+                if (isNotifyish(c)) {
+                    continue;
+                }
+                setAlphaTracked(c, 0f, true);
+                n++;
+            }
+        }
+        return n;
+    }
+
+    /**
+     * 严格判定「heads-up 悬浮横幅」：类名或资源名带 heads_up / headsup 才算，
+     * 不再用 notification 关键字（HyperOS 4 的通知图标区资源名同样带 notification，
+     * 旧判据会把它当横幅整支跳过，真机 dim=1 就是这么来的）。
+     */
+    private static boolean isHeadsUpBanner(View v) {
+        String n = v.getClass().getSimpleName().toLowerCase(java.util.Locale.ROOT);
+        if (n.contains("heads_up") || n.contains("headsup") || n.contains("heads-up")) {
+            return true;
+        }
+        try {
+            if (v.getId() == 0) {
+                return false;
+            }
+            String r = v.getResources().getResourceName(v.getId())
+                    .toLowerCase(java.util.Locale.ROOT);
+            return r.contains("heads_up") || r.contains("headsup") || r.contains("heads-up");
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    /**
+     * 第三级（必胜）兜底：除正在显示的横幅容器外，整棵状态栏一律透明。
+     * <p>前两级都命中不足时才会走到这里，用于 ROM 把整条状态栏自绘在一个 View 里的情况。
+     * heads-up 横幅在 HyperOS/AOSP 都是独立窗口，不在 statusView 子树内，
+     * 因此这里不会误伤横幅；下拉通知面板同样在独立窗口，也不受影响。</p>
+     */
+    private static int dimAllExceptBanner(android.view.ViewGroup root) {
+        int n = 0;
+        for (int i = 0; i < root.getChildCount(); i++) {
+            View c = root.getChildAt(i);
+            if (c == null || c.getVisibility() == View.GONE) {
+                continue;
+            }
+            if (isHeadsUpBanner(c) && isHeadsUpVisible(c)) {
+                continue;
+            }
+            if (c instanceof android.view.ViewGroup) {
+                n += dimTreeAllExceptBanner((android.view.ViewGroup) c);
+            } else {
+                setAlphaTracked(c, 0f, true);
+                n++;
+            }
+        }
+        return n;
+    }
+
+    private static int dimTreeAllExceptBanner(android.view.ViewGroup g) {
+        int n = 0;
+        for (int i = 0; i < g.getChildCount(); i++) {
+            View c = g.getChildAt(i);
+            if (c == null || c.getVisibility() == View.GONE) {
+                continue;
+            }
+            if (isHeadsUpBanner(c) && isHeadsUpVisible(c)) {
+                continue;
+            }
+            if (c instanceof android.view.ViewGroup) {
+                n += dimTreeAllExceptBanner((android.view.ViewGroup) c);
+            } else {
+                setAlphaTracked(c, 0f, true);
+                n++;
+            }
+        }
+        return n;
+    }
+
+    /**
+     * 状态栏隐藏的三级降级链（v3.0.18）：
+     * <ol>
+     * <li>几何分区：左时钟 / 右信号电池透明，中间通知区保留；</li>
+     * <li>除通知外全透明：递归所有容器（不再整体跳过），通知叶子保留；</li>
+     * <li>除横幅外全透明：只留真正在显示的 heads-up，其余全透明（必胜）。</li>
+     * </ol>
+     * 三级都为 0 才回退旧类名方案（不放弃旧 ROM）。命中数与层级写进 SYS 行的 zone=。
+     */
+    private static int dimFallbackChain(View sv, android.view.ViewGroup svg) {
+        int z = dimByZone(svg);
+        if (z >= 2) {
+            return z;
+        }
+        z = dimAllExceptNotify(svg);
+        lastZone += "/f2=" + z;
+        if (z >= 2) {
+            return z;
+        }
+        z = dimAllExceptBanner(svg);
+        lastZone += "/f3=" + z;
+        if (z == 0) {
+            hideKnownStaticIconsOnly(sv, 0);
+        }
+        return z;
+    }
+
+    /** 类名或资源名带 notification 的视图 = 通知图标/通知区，永远保留。 */
+    private static boolean isNotifyish(View v) {
+        String n = v.getClass().getSimpleName().toLowerCase(java.util.Locale.ROOT);
+        if (n.contains("notification")) {
+            return true;
+        }
+        try {
+            return v.getId() != 0 && v.getResources().getResourceName(v.getId())
+                    .toLowerCase(java.util.Locale.ROOT).contains("notification");
+        } catch (Throwable ignored) {
+            return false;
+        }
     }
 
     /**
