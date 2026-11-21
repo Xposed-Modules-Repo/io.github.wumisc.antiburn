@@ -1795,8 +1795,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 81
-                    && "3.0.21".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 82
+                    && "3.0.22".equals(nm.group(1));
             check(ok, "T-42b versionCode 恰为 78 / versionName 恰为 3.0.13（非区间，锁死发布锚点）", "");
         }
         check(hook297raw.contains("SAFE_RESTORE") && hook297raw.contains("DRAMA_PAYWALL_HIDE"),
@@ -1871,8 +1871,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 81
-                    && "3.0.21".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 82
+                    && "3.0.22".equals(nm.group(1));
             // 与 T-42b 断言同源，是发布前的双重防回退锁，不冒充新增不变量（评审建议改标签）。
             check(ok, "T-43c P3 版本锚点与 T-42b 双重锁定（发布前防回退，非新增不变量）", "");
         }
@@ -1910,9 +1910,9 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 81
-                    && "3.0.21".equals(nm.group(1));
-            check(ok, "T-44c 版本号恰为 81 / 3.0.21（发布锚点）", "");
+                    && Integer.parseInt(cm.group(1)) == 82
+                    && "3.0.22".equals(nm.group(1));
+            check(ok, "T-44c 版本号恰为 82 / 3.0.22（发布锚点）", "");
         }
 
         // ---------- T-45 v3.0.3 右上角安全修复 + 两处只读探测越界防护 ----------
@@ -1953,9 +1953,9 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 81
-                    && "3.0.21".equals(nm.group(1));
-            check(ok, "T-45c 版本号恰为 81 / 3.0.21（发布锚点）", "");
+                    && Integer.parseInt(cm.group(1)) == 82
+                    && "3.0.22".equals(nm.group(1));
+            check(ok, "T-45c 版本号恰为 82 / 3.0.22（发布锚点）", "");
         }
 
         // ---------- T-46 v3.0.4 快手右侧作者栏放行（用户授权绕 rw>=0.30 红线） ----------
@@ -2030,8 +2030,8 @@ public class FeatureAuditTest {
             // ⑤ 版本锚点 + 辅助方法只读性
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
-            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 81
-                    && "3.0.21".equals(nm.group(1));
+            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 82
+                    && "3.0.22".equals(nm.group(1));
             String helper = stripComments(slice(dy304raw, "private static boolean hasChildByClass(View v, String target)",
                     "private static int scoreRight(ViewGroup g)"));
             boolean readonly = helper.contains("MAX_DEPTH") && helper.contains("catch (Throwable")
@@ -2075,9 +2075,9 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 81
-                    && "3.0.21".equals(nm.group(1));
-            check(ok, "T-47c 版本号恰为 81 / 3.0.21（v3.0.13 发布锚点）", "");
+                    && Integer.parseInt(cm.group(1)) == 82
+                    && "3.0.22".equals(nm.group(1));
+            check(ok, "T-47c 版本号恰为 82 / 3.0.22（v3.0.13 发布锚点）", "");
         }
 
         // ---------- T-48 v3.0.6 三处精准隐藏（红点禁藏为开发门禁，缺一即失败） ----------
@@ -2343,7 +2343,7 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ver = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 81 && "3.0.21".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 82 && "3.0.22".equals(nm.group(1));
             check(ver, "T-48-VER 版本锚点 78/3.0.18（T-42b~T-47c 六处已同步）", "");
         }
 
@@ -2796,7 +2796,7 @@ public class FeatureAuditTest {
             int fixed45 = count(act310, "(?m)^[ \\t]*val[ \\t]+navMicroSec[ \\t]*=[ \\t]*45[ \\t]*$");
             int boundSaveable = count(act310,
                     "navMicroSec[^\\n]*rememberSaveable|rememberSaveable[^\\n]*navMicroSec");
-            check("4b7ae0c22b16f49581dc535fad8b7d62421c224f8cbc6a578f276c425fbffda2".equals(dyNormHash)
+            check("f0ece4401a371dfc6d3931e0009b47c03951394e665d60bf82ed1f0209ac029f".equals(dyNormHash)
                             && fetchLines == 11
                             && "e9395fb642fcb791b8af95ce676fb109cd7c16196ac7ff8d9242def575ba39a7".equals(fetchHash)
                             && t60 == 1 && t2 == 1 && t20 == 1 && t90 == 1
@@ -3243,9 +3243,9 @@ public class FeatureAuditTest {
             java.util.regex.Matcher nm313 = java.util.regex.Pattern
                     .compile("versionName\\s+\"([^\"]+)\"").matcher(gradle313);
             boolean ver313 = cm313.find() && nm313.find()
-                    && Integer.parseInt(cm313.group(1)) == 81
-                    && "3.0.21".equals(nm313.group(1));
-            check(ver313, "T-55-A5 版本锚点 81 / 3.0.21", "");
+                    && Integer.parseInt(cm313.group(1)) == 82
+                    && "3.0.22".equals(nm313.group(1));
+            check(ver313, "T-55-A5 版本锚点 82 / 3.0.22", "");
 
             // A6 · 变异实证：把 INFO 类目改坏，A1 守卫必须失效（证明断言非空转）
             String mutMan = man313.replace("android.intent.category.INFO", "android.intent.category.BOGUS");
@@ -3414,7 +3414,7 @@ public class FeatureAuditTest {
             String chrome = slice(hook321, "private static void collectBottomChrome(View v, List<View> list, int depth)",
                     "/** 子树里是否有输入框");
             check(chrome.contains("w >= sw * 0.5f") && chrome.contains("h <= sh * 0.14f")
-                            && chrome.contains("(l[1] + h) >= sh * 0.86f"),
+                            && chrome.contains("bottomInRoot >= sh * 0.86f"),
                     "T-61-A2 几何三门槛：半屏宽 / 不高于 14% / 下缘贴 86%", "");
             check(chrome.contains("!hasQuietHint(g, 2)"),
                     "T-61-A3 音量浮层（取消静音）不参与固定条隐藏", "");
@@ -3431,6 +3431,20 @@ public class FeatureAuditTest {
             check(ht.contains("有什么想法") && ht.contains("展开说说")
                             && ht.contains("合集") && ht.contains("下一集"),
                     "T-61-A6 固定条文案覆盖评论条 / 合集条 / 下一集", "");
+        }
+
+        // ---------- T-62 v3.0.22 底部 chrome 坐标系校准 + 计数修正 ----------
+        System.out.println();
+        System.out.println("== T-62 校准 ==");
+        {
+            String hook322 = stripComments(read(dir.resolve("DouyinHook.java")));
+            check(hook322.contains("int bottomInRoot = l != null ? l[1] + h - baseY : 0"),
+                    "T-62-A1 贴底判定换算到根视图坐标系（沉浸式不再差一个状态栏）", "");
+            check(hook322.contains("\"BOTTOMCHROME add \""),
+                    "T-62-A2 命中底部 chrome 时写诊断日志（下轮可直接验证）", "");
+            String act322 = read(dir.resolve("MainActivity.kt"));
+            check(act322.contains("已开启 $generalOn/4 项"),
+                    "T-62-A3 通用页计数口径与四项开关一致（3↔4 错位已修）", "");
         }
 
         System.out.println();

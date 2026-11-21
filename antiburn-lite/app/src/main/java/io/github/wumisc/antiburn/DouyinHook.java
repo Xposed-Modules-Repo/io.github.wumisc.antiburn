@@ -999,15 +999,22 @@ public final class DouyinHook {
         }
         int[] l = loc(g);
         int sh = screenH(g);
-        int sw = g.getResources().getDisplayMetrics().widthPixels;
+        int sw = screenW(g);
         int w = g.getWidth();
         int h = g.getHeight();
+        // getLocationOnScreen 是屏幕坐标，screenH 是根视图高度；沉浸式下两者差一个状态栏。
+        // 先减掉根视图自身的屏幕 y，换算到同一坐标系再比 86%。
+        int[] rl = loc(g.getRootView());
+        int baseY = rl != null ? rl[1] : 0;
+        int bottomInRoot = l != null ? l[1] + h - baseY : 0;
         if (l != null && sh > 0 && sw > 0 && h > 0
-                && w >= sw * 0.5f && h <= sh * 0.14f && (l[1] + h) >= sh * 0.86f
+                && w >= sw * 0.5f && h <= sh * 0.14f && bottomInRoot >= sh * 0.86f
                 && !hasQuietHint(g, 2)
                 && (hasEditBox(g, 2) || hasBottomChromeText(g, 2))
                 && !list.contains(g)) {
             list.add(g);
+            Log.i(TAG, "BOTTOMCHROME add " + geo(g)
+                    + " hasEdit=" + hasEditBox(g, 2));
         }
         for (int i = 0; i < g.getChildCount(); i++) {
             collectBottomChrome(g.getChildAt(i), list, depth + 1);

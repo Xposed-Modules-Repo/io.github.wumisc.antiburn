@@ -2287,7 +2287,7 @@ private fun FeaturesPage(
         val generalOn = listOf(
             state.enableStatusBar, state.enableNav, state.enableLog, state.enableBall,
         ).count { it }
-        ListRow("通用", "系统栏 / 日志 / 悬浮球 · 已开启 $generalOn/3 项",
+        ListRow("通用", "系统栏 / 日志 / 悬浮球 · 已开启 $generalOn/4 项",
             { onOpen("feat-general") }, dark)
 
         val douyinOn = listOf(
