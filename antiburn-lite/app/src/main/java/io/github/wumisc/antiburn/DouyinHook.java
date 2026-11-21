@@ -2336,6 +2336,10 @@ public final class DouyinHook {
      * 即使容器 height=0、或 tab 子项越界显示，也能彻底藏掉。比 setAlpha 可靠。
      */
     private static void transparentDeep(View v, String what) {
+        if (forceShow) {
+            showDeep(v);
+            return;      // v3.0.19：显式「显」模式下任何路径都不得隐藏
+        }
         if (v == null) {
             return;
         }
@@ -2950,6 +2954,14 @@ public final class DouyinHook {
         }
         if ("right".equals(what)) {
             ksRightAllow = "-";
+        }
+        // v3.0.19：悬浮球「显」模式是用户明确要求「全部正常显示」的开关。
+        // 旧版只在 hideEnabled 入口挡了一次，布局监听/rescan 仍会从这里把右侧按钮
+        // 再藏一遍（真机表现：绿球写着「显」，旁边点赞评论却不见了）。
+        // 在这里统一拦截：任何隐藏请求在 forceShow 下都转为恢复。
+        if (forceShow) {
+            showDeep(v);
+            return;
         }
         // v2.9.2：模块自己的悬浮球永不参与隐藏。它就挂在 decor 上、位置正好落在
         // 「右侧按钮列」的几何区间里，不挡住这一条就会被当成按钮列藏掉。

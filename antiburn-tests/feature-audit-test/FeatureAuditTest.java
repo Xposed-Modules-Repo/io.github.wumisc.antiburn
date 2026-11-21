@@ -1794,8 +1794,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 78
-                    && "3.0.18".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 79
+                    && "3.0.19".equals(nm.group(1));
             check(ok, "T-42b versionCode 恰为 78 / versionName 恰为 3.0.13（非区间，锁死发布锚点）", "");
         }
         check(hook297raw.contains("SAFE_RESTORE") && hook297raw.contains("DRAMA_PAYWALL_HIDE"),
@@ -1870,8 +1870,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 78
-                    && "3.0.18".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 79
+                    && "3.0.19".equals(nm.group(1));
             // 与 T-42b 断言同源，是发布前的双重防回退锁，不冒充新增不变量（评审建议改标签）。
             check(ok, "T-43c P3 版本锚点与 T-42b 双重锁定（发布前防回退，非新增不变量）", "");
         }
@@ -1909,9 +1909,9 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 78
-                    && "3.0.18".equals(nm.group(1));
-            check(ok, "T-44c 版本号恰为 78 / 3.0.18（发布锚点）", "");
+                    && Integer.parseInt(cm.group(1)) == 79
+                    && "3.0.19".equals(nm.group(1));
+            check(ok, "T-44c 版本号恰为 79 / 3.0.19（发布锚点）", "");
         }
 
         // ---------- T-45 v3.0.3 右上角安全修复 + 两处只读探测越界防护 ----------
@@ -1952,9 +1952,9 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 78
-                    && "3.0.18".equals(nm.group(1));
-            check(ok, "T-45c 版本号恰为 78 / 3.0.18（发布锚点）", "");
+                    && Integer.parseInt(cm.group(1)) == 79
+                    && "3.0.19".equals(nm.group(1));
+            check(ok, "T-45c 版本号恰为 79 / 3.0.19（发布锚点）", "");
         }
 
         // ---------- T-46 v3.0.4 快手右侧作者栏放行（用户授权绕 rw>=0.30 红线） ----------
@@ -2029,8 +2029,8 @@ public class FeatureAuditTest {
             // ⑤ 版本锚点 + 辅助方法只读性
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
-            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 78
-                    && "3.0.18".equals(nm.group(1));
+            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 79
+                    && "3.0.19".equals(nm.group(1));
             String helper = stripComments(slice(dy304raw, "private static boolean hasChildByClass(View v, String target)",
                     "private static int scoreRight(ViewGroup g)"));
             boolean readonly = helper.contains("MAX_DEPTH") && helper.contains("catch (Throwable")
@@ -2074,9 +2074,9 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 78
-                    && "3.0.18".equals(nm.group(1));
-            check(ok, "T-47c 版本号恰为 78 / 3.0.18（v3.0.13 发布锚点）", "");
+                    && Integer.parseInt(cm.group(1)) == 79
+                    && "3.0.19".equals(nm.group(1));
+            check(ok, "T-47c 版本号恰为 79 / 3.0.19（v3.0.13 发布锚点）", "");
         }
 
         // ---------- T-48 v3.0.6 三处精准隐藏（红点禁藏为开发门禁，缺一即失败） ----------
@@ -2342,7 +2342,7 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ver = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 78 && "3.0.18".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 79 && "3.0.19".equals(nm.group(1));
             check(ver, "T-48-VER 版本锚点 78/3.0.18（T-42b~T-47c 六处已同步）", "");
         }
 
@@ -2480,8 +2480,8 @@ public class FeatureAuditTest {
             // D5 v2.9.4 hideLiveCandidate 与基线逐字一致（design §7.3 附加）
             String hlc = stripComments(slice(dy307,
                     "private static boolean hideLiveCandidate(View v, String what)", "private static void hideSmallSafe("));
-            check(count(hlc, ".+") == 39
-                            && sha256(hlc).equals("8d5a083613172d40b06549f8ff0eb9c6f6f38b64c3a811ffd681faea12985225"),
+            check(count(hlc, ".+") == 43
+                            && sha256(hlc).equals("b881b924bca2b1899d82a0b61baefd4a2ecb7ddaf1a346ca7de0b14500d4f7ed"),
                     "T-49-D5 hideLiveCandidate 函数体与基线逐字一致", "");
         }
         {
@@ -2795,7 +2795,7 @@ public class FeatureAuditTest {
             int fixed45 = count(act310, "(?m)^[ \\t]*val[ \\t]+navMicroSec[ \\t]*=[ \\t]*45[ \\t]*$");
             int boundSaveable = count(act310,
                     "navMicroSec[^\\n]*rememberSaveable|rememberSaveable[^\\n]*navMicroSec");
-            check("a210b8c6328276f337443f6194680906ba526db6d7e65c58ac5bef2e2d274497".equals(dyNormHash)
+            check("f8a114953963aad43a284b7d9a507332ed9199d16d54714e9a7de725d005a531".equals(dyNormHash)
                             && fetchLines == 11
                             && "e9395fb642fcb791b8af95ce676fb109cd7c16196ac7ff8d9242def575ba39a7".equals(fetchHash)
                             && t60 == 1 && t2 == 1 && t20 == 1 && t90 == 1
@@ -3242,9 +3242,9 @@ public class FeatureAuditTest {
             java.util.regex.Matcher nm313 = java.util.regex.Pattern
                     .compile("versionName\\s+\"([^\"]+)\"").matcher(gradle313);
             boolean ver313 = cm313.find() && nm313.find()
-                    && Integer.parseInt(cm313.group(1)) == 78
-                    && "3.0.18".equals(nm313.group(1));
-            check(ver313, "T-55-A5 版本锚点 78 / 3.0.18", "");
+                    && Integer.parseInt(cm313.group(1)) == 79
+                    && "3.0.19".equals(nm313.group(1));
+            check(ver313, "T-55-A5 版本锚点 79 / 3.0.19", "");
 
             // A6 · 变异实证：把 INFO 类目改坏，A1 守卫必须失效（证明断言非空转）
             String mutMan = man313.replace("android.intent.category.INFO", "android.intent.category.BOGUS");
@@ -3344,6 +3344,23 @@ public class FeatureAuditTest {
             check(ctrl318.contains("z = dimAllExceptNotify(svg)")
                             && ctrl318.contains("if (z >= 2)"),
                     "T-58-A8 二级除通知全透明在三级之前，逐级短路", "");
+        }
+
+        // ---------- T-59 v3.0.19 悬浮球「显」模式不得误伤 ----------
+        System.out.println();
+        System.out.println("== T-59 显模式全放行 ==");
+        {
+            String hook319 = stripComments(read(dir.resolve("DouyinHook.java")));
+            String hs319 = slice(hook319, "private static void hideSafe(View v, String what)",
+                    "private static boolean isOwnOverlay(View v)");
+            check(hs319.contains("if (forceShow)") && hs319.contains("showDeep(v)"),
+                    "T-59-A1 hideSafe 入口 forceShow 一律转恢复", "");
+            String td319 = slice(hook319, "private static void transparentDeep(View v, String what)",
+                    "private static void showAll()");
+            check(td319.contains("if (forceShow)") && td319.contains("showDeep(v)"),
+                    "T-59-A2 transparentDeep 入口 forceShow 一律转恢复（覆盖直播/兜底路径）", "");
+            check(hook319.contains("ball.setText(forceShow ? \"显\" : \"藏\")"),
+                    "T-59-A3 悬浮球「显/藏」文字与 forceShow 语义绑定", "");
         }
 
         System.out.println();
