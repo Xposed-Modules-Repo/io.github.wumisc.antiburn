@@ -925,6 +925,10 @@ public final class DouyinHook {
         // 精确容器 height=0 占位时兜底抓不到，手动补入；两者合并覆盖
         // 首页导航与视频页作者条/输入条等全部底部固定 UI。
         collectBottomNode(root, list, 0);
+        // v3.0.21：合集页 / 搜索结果单视频页的底部固定条（评论输入条 + 合集条）。
+        // 这些容器含 EditText / Compose，被 containsDynamicUi 整棵跳过，
+        // 真机表现就是「底部一整条在隐藏相位纹丝不动」。
+        collectBottomChrome(root, list, 0);
         if (precise != null && !list.contains(precise)) {
             list.add(0, precise);
         }
@@ -971,6 +975,112 @@ public final class DouyinHook {
             }
         }
         return null;
+    }
+
+    /**
+     * v3.0.21：底部固定 chrome 收集（合集页 / 搜索结果单视频页）。
+     *
+     * <p>{@link #collectBottomNode} 遇到 EditText / Compose 会把整棵跳过（防误藏滚动评论区），
+     * 但合集页底部那条「有什么想法，展开说说」输入条、以及「合集 · xxx」固定条本身
+     * 就是长期静止的，正是要防烧屏的对象。这里按几何单独收：横条（≥ 半屏宽）、
+     * 矮（≤ 14% 屏高）、贴底（下缘 ≥ 86% 屏高），且要么含输入框、要么含固定条文案。</p>
+     *
+     * <p>「取消静音」是抖音自己的音量浮层（几秒后自动消失），不能当固定条藏掉 ——
+     * 藏它只会让浮层闪一下，反而更像 bug。</p>
+     */
+    private static void collectBottomChrome(View v, List<View> list, int depth) {
+        if (v == null || depth > MAX_DEPTH || v.getVisibility() == View.GONE
+                || !(v instanceof ViewGroup)) {
+            return;
+        }
+        ViewGroup g = (ViewGroup) v;
+        if (containsVideoSurface(g, 0)) {
+            return;
+        }
+        int[] l = loc(g);
+        int sh = screenH(g);
+        int sw = g.getResources().getDisplayMetrics().widthPixels;
+        int w = g.getWidth();
+        int h = g.getHeight();
+        if (l != null && sh > 0 && sw > 0 && h > 0
+                && w >= sw * 0.5f && h <= sh * 0.14f && (l[1] + h) >= sh * 0.86f
+                && !hasQuietHint(g, 2)
+                && (hasEditBox(g, 2) || hasBottomChromeText(g, 2))
+                && !list.contains(g)) {
+            list.add(g);
+        }
+        for (int i = 0; i < g.getChildCount(); i++) {
+            collectBottomChrome(g.getChildAt(i), list, depth + 1);
+        }
+    }
+
+    /** 子树里是否有输入框（原生 EditText 或类名带 EditText/InputCompat 的自绘输入条） */
+    private static boolean hasEditBox(View v, int depth) {
+        if (v == null || depth > MAX_DEPTH) {
+            return false;
+        }
+        if (v instanceof android.widget.EditText) {
+            return true;
+        }
+        String n = v.getClass().getName();
+        if (n.contains("EditText") || n.contains("InputCompat")) {
+            return true;
+        }
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) {
+                if (hasEditBox(g.getChildAt(i), depth + 1)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** 底部固定条文案：评论输入条 / 合集条 / 下一集 */
+    private static boolean hasBottomChromeText(View v, int depth) {
+        if (v == null || depth > MAX_DEPTH) {
+            return false;
+        }
+        if (v instanceof TextView) {
+            TextView tv = (TextView) v;
+            String t = normText(tv.getText()) + " " + normText(tv.getHint());
+            if (t.contains("有什么想法") || t.contains("展开说说") || t.contains("说点什么")
+                    || t.contains("合集") || t.contains("下一集")) {
+                return true;
+            }
+        }
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) {
+                if (hasBottomChromeText(g.getChildAt(i), depth + 1)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** 音量浮层（取消静音 / 静音提示）不参与固定条隐藏 */
+    private static boolean hasQuietHint(View v, int depth) {
+        if (v == null || depth > MAX_DEPTH) {
+            return false;
+        }
+        if (v instanceof TextView) {
+            String t = normText(((TextView) v).getText());
+            if (t.contains("取消静音") || t.contains("开启静音") || t.equals("静音")) {
+                return true;
+            }
+        }
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) {
+                if (hasQuietHint(g.getChildAt(i), depth + 1)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private static void collectBottomNode(View v, List<View> list, int depth) {
