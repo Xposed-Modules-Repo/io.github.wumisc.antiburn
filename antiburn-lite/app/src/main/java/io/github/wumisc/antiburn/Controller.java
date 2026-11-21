@@ -1205,37 +1205,102 @@ public final class Controller {
         if (sv == null) {
             return;
         }
-        if (!(sv instanceof android.view.ViewGroup) || notifyArea == null) {
-            // P-1（R1）：绝不整窗透明。S2：先把旧版残留的整窗透明恢复（这是"恢复"非"隐藏"）。
-            if (sv.getAlpha() != 1f) {
-                sv.setAlpha(1f);
-            }
-            hideKnownStaticIconsOnly(sv, 0);
-            return;
-        }
-        // 父容器恢复为可见，再沿「通知区路径」逐层只隐藏兄弟节点
+        // P-1（R1）：绝不整窗透明。S2：先把旧版残留的整窗透明恢复（这是"恢复"非"隐藏"）。
         if (sv.getAlpha() != 1f) {
             sv.setAlpha(1f);
         }
+        if (!(sv instanceof android.view.ViewGroup)) {
+            hideKnownStaticIconsOnly(sv, 0);
+            return;
+        }
+        android.view.ViewGroup svg = (android.view.ViewGroup) sv;
+        if (notifyArea == null) {
+            // v3.0.17：HyperOS 4 的类名与 AOSP 不同，Clock/Signal/Battery 匹配全不命中
+            // （真机 SYS 行 dim=0），状态栏在隐藏相位完全没变化。先按几何分区透明：
+            // 左区时钟 / 右区信号电池透明，中区通知图标整棵保留；0 命中才回退类名方案。
+            if (dimByZone(svg) == 0) {
+                hideKnownStaticIconsOnly(sv, 0);
+            }
+            return;
+        }
+        // 父容器恢复为可见，再沿「通知区路径」逐层只隐藏兄弟节点
         List<View> path = pathTo(sv, notifyArea);
         if (path == null) {
             // 通知区已经不在当前视图树里（SystemUI 重建过窗口 / 换了主题）。
             // 旧版此时会把整条栏全隐藏，用户表现为「通知图标也没了」。
-            // 先就地重找一次，还找不到才退化成整条透明，下一轮 checkViewsAlive 再兜底。
+            // 先就地重找一次，还找不到才走几何分区/类名降级，下一轮 checkViewsAlive 再兜底。
             Log.w(TAG, "notify area detached, re-resolve");
             findNotifyArea(sv);
             path = (notifyArea != null) ? pathTo(sv, notifyArea) : null;
         }
         if (path == null || path.size() < 2) {
             notifyArea = null;
-            if (sv.getAlpha() != 1f) {
-                sv.setAlpha(1f);
+            if (dimByZone(svg) == 0) {
+                hideKnownStaticIconsOnly(sv, 0);
             }
-            hideKnownStaticIconsOnly(sv, 0);
             return;
         }
         dimAlong(path, 0);
         setAlphaTracked(notifyArea, 1f, false);
+    }
+
+    /**
+     * v3.0.17：按几何分区透明状态栏静态图标，不依赖 ROM 类名。
+     *
+     * <p>真机日志（HyperOS 4 / Android 17）里 {@code sv=FrameLayout@1.0 dim=0}：
+     * 状态栏视图抓到了、隐藏相位也进了，但类名匹配一个都没命中，整条栏纹丝不动，
+     * 用户看到的就是「状态栏偏移失效」。</p>
+     *
+     * <p>分区规则（按 root 宽度）：水平中心 &lt; 34% = 左侧时钟区；
+     * &gt; 62% = 右侧信号/电池/网速区；中间 34%~62% 是通知图标区，整棵保留。
+     * 类名含 Notification 的叶子无论落在哪个区都保留，避免通知误伤；
+     * 含 heads-up 的子树直接跳过，横幅照常显示。</p>
+     *
+     * @return 实际透明化的叶子数量；0 表示拿不到几何信息，调用方回退类名方案。
+     */
+    private static int dimByZone(android.view.ViewGroup root) {
+        int w = root.getWidth();
+        if (w <= 0) {
+            return 0;
+        }
+        return dimLeaves(root, 0, w, 0,
+                (int) (w * 0.34f), (int) (w * 0.62f));
+    }
+
+    private static int dimLeaves(View v, int left, int right, int depth,
+                                 int leftLimit, int rightLimit) {
+        if (v == null || depth > ICON_SCAN_MAX_DEPTH) {
+            return 0;
+        }
+        if (v.getVisibility() != View.VISIBLE || v.getAlpha() <= 0.01f) {
+            return 0;
+        }
+        if (v instanceof android.view.ViewGroup) {
+            android.view.ViewGroup g = (android.view.ViewGroup) v;
+            int n = 0;
+            for (int i = 0; i < g.getChildCount(); i++) {
+                View c = g.getChildAt(i);
+                if (c == null || c.getVisibility() == View.GONE) {
+                    continue;
+                }
+                if (containsHeadsUp(c, 0)) {
+                    continue;   // 横幅子树不碰（INV-1）
+                }
+                n += dimLeaves(c, left + c.getLeft(), left + c.getRight(), depth + 1,
+                        leftLimit, rightLimit);
+            }
+            return n;
+        }
+        String n = v.getClass().getSimpleName();
+        if (n.contains("Notification")) {
+            return 0;   // 通知图标：无论落在哪个区都保留
+        }
+        int cx = (left + right) / 2;
+        if (cx < leftLimit || cx > rightLimit) {
+            setAlphaTracked(v, 0f, true);
+            return 1;
+        }
+        return 0;
     }
 
     /**

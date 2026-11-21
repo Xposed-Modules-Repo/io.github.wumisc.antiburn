@@ -1,6 +1,6 @@
 # 防止烧屏（Antiburn）
 
-防 OLED 烧屏工具，当前稳定版 **v3.0.16（versionCode 76）**，包名 `io.github.wumisc.antiburn`，签名不变，可直接覆盖安装。
+防 OLED 烧屏工具，当前稳定版 **v3.0.17（versionCode 77）**，包名 `io.github.wumisc.antiburn`，签名不变，可直接覆盖安装。
 
 OLED 像素会随点亮时长累积衰减。状态栏的时钟、信号、电量，导航栏的三个按键，短视频里固定不动的点赞、评论按钮，长期停在一处就会留下擦不掉的残影。模块让它们别一直亮在同一处：能透明化就透明化，不能就周期遮盖、像素微移，把曝光摊开。
 
@@ -44,8 +44,9 @@ v2.8.3 曾用覆盖层把这几块区域盖黑，真机反馈会连视频画面�
 - 无障碍模式可周期遮盖抖音 / 红果 / 快手 / B站 的右侧按钮列、顶部标题与底部导航（免 root，仅 overlay 引擎）
 - 感谢名单（酷安 / 心之所及等）与支持捐赠
 
-## 最近更新（v3.0.13 → v3.0.16）
+## 最近更新（v3.0.13 → v3.0.17）
 
+- **v3.0.17**：修状态栏隐藏/偏移在 HyperOS 4 上完全不生效——类名匹配（Clock/Signal/Battery）一个都不命中（真机 `dim=0`），改为按几何分区透明：左区时钟、右区信号电池透明，中区通知图标区整棵保留；含 `Notification` 的叶子和 heads-up 子树一律不动，通知与悬浮横幅不误伤。
 - **v3.0.16**：无障碍模式重新启用应用内遮盖，红果 / 抖音 / 快手 / B站 的固定区域终于有防护：删除编译期总闸 `APP_AREA_CHANNEL`，`enable_app_overlay` 默认 1，且只在 overlay 引擎生效（LSPosed 引擎仍不铺黑，避免黑块压画面）。新增「功能 → 通用 → 无障碍应用内遮盖」开关。
 - **v3.0.15**：修好「开启隐藏桌面图标后从 LSPosed 打不开」——`getLaunchIntentForPackage()` 查询 INFO 入口时带 `MATCH_DEFAULT_ONLY`，原 `MAIN + INFO` 过滤器缺 `CATEGORY_DEFAULT` 不会被命中，补上后 LSPosed / 系统设置 / 第三方启动器均可打开，桌面仍不显示图标。
 - **v3.0.14**：修状态栏偏移失效（进入隐藏相位但窗口仍可见时相位停住）；修抖音主页作品卡被误判为固定控件而透明化；悬浮球支持拖到最下方收起、下次打开自动恢复。
@@ -70,7 +71,7 @@ v2.8.3 曾用覆盖层把这几块区域盖黑，真机反馈会连视频画面�
 
 ## 构建与测试
 
-JDK 21 + Gradle 9.6+（9.8.2 实测可用）+ SDK Platform 37：`cd antiburn-lite && gradle assembleRelease`。纯 JVM 回归测试 `./run-all.sh`，七套件 716 项全绿。
+JDK 21 + Gradle 9.6+（9.8.2 实测可用）+ SDK Platform 37：`cd antiburn-lite && gradle assembleRelease`。纯 JVM 回归测试 `./run-all.sh`，七套件 723 项全绿。
 
 ## 其他
 

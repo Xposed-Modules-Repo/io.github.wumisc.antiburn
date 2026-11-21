@@ -1794,9 +1794,9 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 76
-                    && "3.0.16".equals(nm.group(1));
-            check(ok, "T-42b versionCode 恰为 76 / versionName 恰为 3.0.13（非区间，锁死发布锚点）", "");
+                    && Integer.parseInt(cm.group(1)) == 77
+                    && "3.0.17".equals(nm.group(1));
+            check(ok, "T-42b versionCode 恰为 77 / versionName 恰为 3.0.13（非区间，锁死发布锚点）", "");
         }
         check(hook297raw.contains("SAFE_RESTORE") && hook297raw.contains("DRAMA_PAYWALL_HIDE"),
                 "T-42c 3.0 沿用 v2.9.7/v2.9.6 定稿功能（恢复路径 + 红果弹窗均在）", "");
@@ -1870,8 +1870,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 76
-                    && "3.0.16".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 77
+                    && "3.0.17".equals(nm.group(1));
             // 与 T-42b 断言同源，是发布前的双重防回退锁，不冒充新增不变量（评审建议改标签）。
             check(ok, "T-43c P3 版本锚点与 T-42b 双重锁定（发布前防回退，非新增不变量）", "");
         }
@@ -1909,9 +1909,9 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 76
-                    && "3.0.16".equals(nm.group(1));
-            check(ok, "T-44c 版本号恰为 76 / 3.0.16（发布锚点）", "");
+                    && Integer.parseInt(cm.group(1)) == 77
+                    && "3.0.17".equals(nm.group(1));
+            check(ok, "T-44c 版本号恰为 77 / 3.0.17（发布锚点）", "");
         }
 
         // ---------- T-45 v3.0.3 右上角安全修复 + 两处只读探测越界防护 ----------
@@ -1952,9 +1952,9 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 76
-                    && "3.0.16".equals(nm.group(1));
-            check(ok, "T-45c 版本号恰为 76 / 3.0.16（发布锚点）", "");
+                    && Integer.parseInt(cm.group(1)) == 77
+                    && "3.0.17".equals(nm.group(1));
+            check(ok, "T-45c 版本号恰为 77 / 3.0.17（发布锚点）", "");
         }
 
         // ---------- T-46 v3.0.4 快手右侧作者栏放行（用户授权绕 rw>=0.30 红线） ----------
@@ -2029,14 +2029,14 @@ public class FeatureAuditTest {
             // ⑤ 版本锚点 + 辅助方法只读性
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
-            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 76
-                    && "3.0.16".equals(nm.group(1));
+            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 77
+                    && "3.0.17".equals(nm.group(1));
             String helper = stripComments(slice(dy304raw, "private static boolean hasChildByClass(View v, String target)",
                     "private static int scoreRight(ViewGroup g)"));
             boolean readonly = helper.contains("MAX_DEPTH") && helper.contains("catch (Throwable")
                     && !helper.contains("setVisibility") && !helper.contains("setAlpha")
                     && !helper.contains("setTranslation");
-            check(ver && readonly, "T-46e 版本 76/3.0.16；hasChildByClass 有深度上限+异常收敛且只读", "");
+            check(ver && readonly, "T-46e 版本 77/3.0.17；hasChildByClass 有深度上限+异常收敛且只读", "");
         }
 
         // ---------- T-47 v3.0.5 底部标题栏只读探针 TDUMP ----------
@@ -2074,9 +2074,9 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 76
-                    && "3.0.16".equals(nm.group(1));
-            check(ok, "T-47c 版本号恰为 76 / 3.0.16（v3.0.13 发布锚点）", "");
+                    && Integer.parseInt(cm.group(1)) == 77
+                    && "3.0.17".equals(nm.group(1));
+            check(ok, "T-47c 版本号恰为 77 / 3.0.17（v3.0.13 发布锚点）", "");
         }
 
         // ---------- T-48 v3.0.6 三处精准隐藏（红点禁藏为开发门禁，缺一即失败） ----------
@@ -2338,12 +2338,12 @@ public class FeatureAuditTest {
                     "T-48-UPG 升级回归：三新键默认 false，老配置缺键三功能全关", "");
         }
         {
-            // VER 版本锚点：七处旧断言已同步 76/3.0.16（此前 71/3.0.11、70/3.0.10、69/3.0.9 依次同步，精确相等）
+            // VER 版本锚点：七处旧断言已同步 77/3.0.17（此前 71/3.0.11、70/3.0.10、69/3.0.9 依次同步，精确相等）
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ver = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 76 && "3.0.16".equals(nm.group(1));
-            check(ver, "T-48-VER 版本锚点 76/3.0.16（T-42b~T-47c 六处已同步）", "");
+                    && Integer.parseInt(cm.group(1)) == 77 && "3.0.17".equals(nm.group(1));
+            check(ver, "T-48-VER 版本锚点 77/3.0.17（T-42b~T-47c 六处已同步）", "");
         }
 
         // ---------- T-49 v3.0.7 定向隐藏通道 THH 测试锁（安全命门确定性守卫） ----------
@@ -2693,14 +2693,15 @@ public class FeatureAuditTest {
             // （hideStatusKeepNotify 取消整窗 alpha=0 降级 + 新增 hideKnownStaticIconsOnly + dimAlong 祖先守卫），
             // 属授权改动（T-54 已单独验收全绿）；经 git diff 逐行核对，其余 6 段逐字未改仍 MATCH 基线。
             // v3.0.14 重锁：段[3] enableShift 区间含偏移推进修复（hidden 但窗口可见时仍 tick），20→23 行。
-            int[] a2Lines = {5, 16, 18, 23, 11, 157, 41};
+            // v3.0.17 重锁：段[5] applyHide→applyShow 区间含状态栏几何分区透明（dimByZone/dimLeaves），157→220 行。
+            int[] a2Lines = {5, 16, 18, 23, 11, 220, 41};
             String[] a2Sha = {
                     "b1e940509f7ec1d0f5e85264d4559d8429583bc6a7133abf657744823762f9bc",
                     "d438516ad9b062d17fc3710c5e95816d9eb8af0f5033a0244bc444106931b315",
                     "2e15d96a58c8952746da6ca190add42c7bfeb7ab76fc24c70f03c89d1fa90c91",
                     "a8a3c21d8ec069e7d778a2e3e18682c9b4a68f25945bdb80452ebf823f138d35",
                     "31f7e195cb32c1bf85b3631c5e2ac43dc8d795b5cc2e48e1137371646ba36020",
-                    "504f7e117ec96c570f74ed6fc2b2b39d7899fd3881cee95510d2a23c1bc9c501",
+                    "5456e1ff670d1f273abfda91b5cc1fd5b756598e2d54d26fa313c6a84836d19c",
                     "29a926668a181c748745072486318738514980532d0c6d971a90b77e5e8363a9"
             };
             StringBuilder drift = new StringBuilder();
@@ -2979,7 +2980,8 @@ public class FeatureAuditTest {
             String[][] baseFiles = {
                     // P-1 授权改动：Controller.java 基线为修复后实测值
                     // （v3.0.14：containsHeadsUp 双判据 + hidden 下窗口可见时仍推进偏移）。
-                    {"Controller.java", "9ede70eb26ebdbe840995045e2f619ad5c03b8362a442fd4b480ea90f38709f9"},
+                    // v3.0.17：dimByZone 几何分区透明（HyperOS 类名不命中兜底），基线重锁
+                    {"Controller.java", "4c105b5d475060b4f02ccc9f625c30d1c701b008b070e6ab998d142147575b3e"},
                     {"Config.java", "b3d39497ddd5b1ef5b18006e6a445447cd2f02d73104acf30bd2aa6199826193"},
                     // v3.0.16 授权改动：enable_app_overlay 默认值 0→1（仅无障碍引擎生效）
                     {"ConfStore.java", "44f94cd303b3d8a07403d0e6d9361e1c700f59f98a60a9f99fc4d73de06ac192"},
@@ -3076,14 +3078,15 @@ public class FeatureAuditTest {
             String hide = slice(p1ctrl, "private static void hideStatusKeepNotify", "private static List<View> pathTo");
             check(!hide.contains("sv.setAlpha(0f)") && !hide.contains("sv.setVisibility"),
                     "T-54-G2a hideStatusKeepNotify 内无整窗 sv.setAlpha(0f)/setVisibility", "");
-            check(countLiteral(hide, "hideKnownStaticIconsOnly(sv, 0)") == 2,
-                    "T-54-G2b 两处降级均改走 hideKnownStaticIconsOnly", "");
-            String fbNoArea = slice(hide, "if (!(sv instanceof android.view.ViewGroup)", "return;");
-            String fbNoPath = slice(hide, "if (path == null || path.size() < 2)", "return;");
-            check(fbNoArea.contains("sv.setAlpha(1f)"),
-                    "T-54-G2c1 降级①(notifyArea 识别失败)恢复残留 sv.alpha=1", "");
-            check(fbNoPath.contains("sv.setAlpha(1f)"),
-                    "T-54-G2c2 降级②(path 缺失)恢复残留 sv.alpha=1", "");
+            check(countLiteral(hide, "hideKnownStaticIconsOnly(sv, 0)") == 3,
+                    "T-54-G2b 非容器分支 + 两处降级（几何 0 命中回退类名）共 3 处调用", "");
+            String headG2 = slice(hide, "View sv = statusView;",
+                    "if (!(sv instanceof android.view.ViewGroup))");
+            check(headG2.contains("sv.setAlpha(1f)"),
+                    "T-54-G2c1 入口统一恢复残留 sv.alpha=1（降级前生效）", "");
+            check(hide.contains("if (sv.getAlpha() != 1f) {")
+                            && hide.contains("sv.setAlpha(1f);"),
+                    "T-54-G2c2 两处降级仍保留 alpha 恢复（统一入口，无整窗透明）", "");
             String fb = slice(p1ctrl, "private static void hideKnownStaticIconsOnly", "\n    }");
             check(fb.contains("containsHeadsUp(v, 0)") && !fb.contains("sv.setAlpha"),
                     "T-54-G2d 降级递归含祖先守卫且不整窗透明", "");
@@ -3162,7 +3165,7 @@ public class FeatureAuditTest {
             check(a11yZero, "T-54-G8c 无障碍侧 3 文件逐字零改（含 config 未声明通知事件）", "");
             // G8b：授权文件修复后基线（v3.0.14 偏移推进修复后实测，已按 sha256sum 重采）
             // 注意：必须读原始文件（含注释），与 sha256sum 采集口径一致，不能用 stripComments 后的串。
-            boolean authZero = "9ede70eb26ebdbe840995045e2f619ad5c03b8362a442fd4b480ea90f38709f9"
+            boolean authZero = "4c105b5d475060b4f02ccc9f625c30d1c701b008b070e6ab998d142147575b3e"
                             .equals(sha256(read(dir.resolve("Controller.java"))))
                     && "c005357253ce9f3d7618695524c9a4daae3de7f4504d1374f12ce5f188f43137"
                             .equals(sha256(read(dir.resolve("PixelShift.java"))));
@@ -3238,9 +3241,9 @@ public class FeatureAuditTest {
             java.util.regex.Matcher nm313 = java.util.regex.Pattern
                     .compile("versionName\\s+\"([^\"]+)\"").matcher(gradle313);
             boolean ver313 = cm313.find() && nm313.find()
-                    && Integer.parseInt(cm313.group(1)) == 76
-                    && "3.0.16".equals(nm313.group(1));
-            check(ver313, "T-55-A5 版本锚点 76 / 3.0.16", "");
+                    && Integer.parseInt(cm313.group(1)) == 77
+                    && "3.0.17".equals(nm313.group(1));
+            check(ver313, "T-55-A5 版本锚点 77 / 3.0.17", "");
 
             // A6 · 变异实证：把 INFO 类目改坏，A1 守卫必须失效（证明断言非空转）
             String mutMan = man313.replace("android.intent.category.INFO", "android.intent.category.BOGUS");
@@ -3291,6 +3294,29 @@ public class FeatureAuditTest {
             // A7 · 前台识别来自无障碍事件，不依赖目标进程注入
             check(mask316.contains("TYPE_WINDOW_STATE_CHANGED") && mask316.contains("foregroundPkg"),
                     "T-56-A7 前台包名由无障碍事件维护，无需注入目标进程", "");
+        }
+
+        // ---------- T-57 v3.0.17 状态栏几何分区透明（HyperOS 类名不命中的兜底）----------
+        System.out.println();
+        System.out.println("== T-57 状态栏几何分区透明 ==");
+        {
+            String ctrl317 = read(dir.resolve("Controller.java"));
+            check(ctrl317.contains("private static int dimByZone(android.view.ViewGroup root)"),
+                    "T-57-A1 dimByZone 几何分区入口存在", "");
+            check(ctrl317.contains("(int) (w * 0.34f), (int) (w * 0.62f)"),
+                    "T-57-A2 左区 34% / 右区 62%，中间通知图标区保留", "");
+            check(ctrl317.contains("if (n.contains(\"Notification\"))"),
+                    "T-57-A3 类名含 Notification 的叶子一律保留（通知不误伤）", "");
+            check(ctrl317.contains("if (containsHeadsUp(c, 0))") && ctrl317.contains("continue;"),
+                    "T-57-A4 heads-up 子树跳过（悬浮横幅不误伤）", "");
+            check(ctrl317.contains("if (dimByZone(svg) == 0)"),
+                    "T-57-A5 几何 0 命中才回退类名方案（不放弃旧 ROM）", "");
+            check(ctrl317.contains("setAlphaTracked(v, 0f, true)"),
+                    "T-57-A6 只透明叶子并记账，applyShow 可完整恢复", "");
+            // 变异实证：删掉 Notification 保护 → A3 失效
+            String mutZone = ctrl317.replace("if (n.contains(\"Notification\")) {", "if (false) {");
+            check(!mutZone.contains("if (n.contains(\"Notification\"))"),
+                    "T-57-A7 变异实证：删 Notification 保护即被拦截", "");
         }
 
         System.out.println();
