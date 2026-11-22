@@ -833,9 +833,15 @@ public final class ConfStore {
             int hdiag = occurrences(all, "HOOK app=");
             int mask = occurrences(all, "MASK ");
             boolean injected = dy > 0 || dr > 0 || ks > 0 || bi > 0 || hdiag > 0;
+            // v3.0.23：共享日志只有 system uid 写得进；三方进程没 HOOK 行不等于没注入。
+            String lsp = LspScope.logHitsShort();
+            boolean lspHit = !"none".equals(lsp);
             String hint = injected
                     ? "hook=alive（各 App 真隐藏通道可用，继续看 HOOK app= 的 sw/R/T/B）"
-                    : "hook=NONE（LSPosed 没把模块加载进视频 App 进程，真隐藏一行都没执行）；"
+                    : lspHit
+                    ? "hook=NONE（共享日志里还没有 HOOK 行，但 LSPosed 日志已见命中：" + lsp
+                    + "；三方 App 写盘受限，不代表没加载）；处理：先强行停止该 App 再打开"
+                    : "hook=NONE（共享日志和 LSPosed 日志都还没采到视频 App 命中）；"
                     + "处理：功能 › 通用 › 作用域自检，勾上打 ✗ 的 App → 强行停止该 App 再打开；"
                     + "若是覆盖安装/更新了本模块，需重启手机一次（不是只重启系统界面）："
                     + "SystemUI 会自动重注，但抖音/快手等三方 App 只有重启手机后才会重新加载新 dex。";
@@ -853,6 +859,7 @@ public final class ConfStore {
                     // 而实际生效的 ao=false，两者互相矛盾，把排查带偏过一轮。
                     + " app_overlay=0"
                     + " enter=" + enter
+                    + " lsp=" + lsp
                     + " " + hint;
             appendRaw(line);
         } catch (Throwable ignored) {

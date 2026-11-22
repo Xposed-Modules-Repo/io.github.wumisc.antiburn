@@ -46,7 +46,84 @@ final class LspScope {
             "/data/adb/modules/zygisk_lsposed/config/modules_config.db",
     };
 
+    /** v3.0.23：目标包名（含常见渠道包），用于从 LSPosed 日志里判断注入命中。 */
+    private static final String[] VIDEO_PKGS = {
+            "com.ss.android.ugc.aweme", "com.ss.android.ugc.aweme.lite",
+            "com.phoenix.read.oversea.gp", "com.smile.gifmaker",
+            "tv.danmaku.bili", "com.bilibili.app",
+    };
+
+    /**
+     * v3.0.23：LSPosed 日志里的注入命中缓存。
+     *
+     * <p>为什么不能只信 {@code ENTER}：{@code ENTER} 是 {@code diagForce} 往
+     * {@code /storage/emulated/0} 下的共享日志追加，需要 root；SystemUI 是 system uid
+     * 写得进去，抖音/红果这些普通应用 uid 的进程写不进去。于是共享日志里永远只有
+     * {@code sysui,sys,self}，自检却据此断言「四个 App 一个都没命中、LSPosed 没加载模块」——
+     * 这是证据缺失，不是注入失败。LSPosed 自己的 modules.log 由 root 服务写，
+     * 应用侧 su 读得到，才是可信口径。</p>
+     */
+    private static volatile Set<String> logHits;
+    private static volatile long logHitsAt;
+
+    /** 预热只跑一次 su，别在 UI 线程等。 */
+    private static final java.util.concurrent.ExecutorService LOG_EXEC =
+            java.util.concurrent.Executors.newSingleThreadExecutor();
+
     private LspScope() {
+    }
+
+    /** v3.0.23：后台预热 LSPosed 日志命中；可重复调用，5 分钟内直接命中缓存。 */
+    static void warmLogHits(Context ctx) {
+        LOG_EXEC.execute(() -> lspdLogHits(ctx, false));
+    }
+
+    /** UI 线程可用的只读版本：只取缓存，绝不跑 su。 */
+    static Set<String> logHitsCached() {
+        Set<String> s = logHits;
+        return s == null ? java.util.Collections.emptySet() : s;
+    }
+
+    /** 日志一行用的简写：douyin,drama… ；没命中返回 none。 */
+    static String logHitsShort() {
+        Set<String> s = logHits;
+        if (s == null || s.isEmpty()) {
+            return "none";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (String p : s) {
+            if (sb.length() > 0) {
+                sb.append(',');
+            }
+            sb.append(zh(p));
+        }
+        return sb.toString();
+    }
+
+    /** 读 LSPosed 日志里的注入命中（含模块名与目标包名的行），缓存 5 分钟。 */
+    static Set<String> lspdLogHits(Context ctx, boolean force) {
+        long now = System.currentTimeMillis();
+        Set<String> c = logHits;
+        if (!force && c != null && now - logHitsAt < 5 * 60_000L) {
+            return c;
+        }
+        Set<String> hits = new LinkedHashSet<>();
+        String out = lspLogTail();
+        if (!out.isEmpty()) {
+            for (String line : out.split("\n")) {
+                if (!(line.contains(MODULE) || line.contains("antiburn"))) {
+                    continue;
+                }
+                for (String p : VIDEO_PKGS) {
+                    if (line.contains(p)) {
+                        hits.add(p);
+                    }
+                }
+            }
+        }
+        logHits = hits;
+        logHitsAt = now;
+        return hits;
     }
 
     /** 一次自检的结论；字段全部为 null / 空时看 {@link #error}。 */
@@ -448,13 +525,31 @@ final class LspScope {
     static String diagnose(Context ctx) {
         Report r = probe(ctx);
         StringBuilder sb = new StringBuilder();
-        // v2.8.8：先给注入证据。ENTER 是 handleLoadPackage 的第一行、走 diagForce，
-        // 它没命中的包，后面作用域勾得再对也白搭 —— 顺序不能反着讲。
+        // v3.0.23：证据分两路。ENTER 共享日志只有 system uid 写得了；
+        // LSPosed 自己的 modules.log 才是三方 App 注入的可信证据。
         String hits = ConfStore.enterHits();
-        sb.append("注入证据（ENTER 命中的进程）：").append(hits).append('\n');
+        Set<String> logHitsNow = lspdLogHits(ctx, true);
+        sb.append("注入证据（ENTER 命中的进程）：").append(hits.isEmpty() ? "（无）" : hits).append('\n');
+        if (!logHitsNow.isEmpty()) {
+            sb.append("注入证据（LSPosed 日志命中）：");
+            int n = 0;
+            for (String p : logHitsNow) {
+                if (n++ > 0) {
+                    sb.append("，");
+                }
+                sb.append(zh(p));
+            }
+            sb.append('\n');
+        }
         if (!hits.contains("OK:")) {
-            sb.append("  → 四个视频 App 一个都没命中，模块代码从未进过这些进程。\n")
-                    .append("    这不是定位算法的问题，是 LSPosed 没加载模块。\n");
+            if (logHitsNow.isEmpty()) {
+                sb.append("  → 暂未采到四个视频 App 的注入记录。\n")
+                        .append("    三方 App 进程默认写不进共享日志，这更可能是「证据缺失」，\n")
+                        .append("    不能据此断定 LSPosed 没加载模块。\n")
+                        .append("    先强行停止对应 App 再打开；仍无效果就按下面的作用域清单逐个核对。\n");
+            } else {
+                sb.append("  → ENTER 共享日志没采到（三方 App 写盘受限），但 LSPosed 日志已见命中：注入是通的。\n");
+            }
         }
         sb.append('\n');
         sb.append("配置库：").append(r.db == null ? "未找到" : r.db).append('\n');
@@ -525,6 +620,19 @@ final class LspScope {
         return sb.toString();
     }
 
+    /** v3.0.23：原始 LSPosed 日志（tail 600），供摘要与命中解析共用。 */
+    private static String lspLogTail() {
+        try {
+            String out = ConfStore.execSuCapture(
+                    "for f in /data/adb/lspd/log/modules.log /data/adb/lspd/log/verbose.log; do "
+                            + "[ -f \"$f\" ] && echo \"==$f\" && tail -600 \"$f\"; done 2>/dev/null",
+                    12_000L);
+            return out == null ? "" : out.trim();
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
     /**
      * 从 LSPosed 自己的日志里筛出与本模块相关的最近几行。
      *
@@ -534,11 +642,8 @@ final class LspScope {
      */
     private static String lspLogDigest() {
         try {
-            String out = ConfStore.execSuCapture(
-                    "for f in /data/adb/lspd/log/modules.log /data/adb/lspd/log/verbose.log; do "
-                            + "[ -f \"$f\" ] && echo \"==$f\" && tail -600 \"$f\"; done 2>/dev/null",
-                    12_000L);
-            if (out == null || out.trim().isEmpty()) {
+            String out = lspLogTail();
+            if (out.isEmpty()) {
                 return "";
             }
             StringBuilder sb = new StringBuilder();

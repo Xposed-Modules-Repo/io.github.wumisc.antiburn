@@ -2159,9 +2159,11 @@ private fun InjectStatusCard(dark: Boolean, onEnableAll: () -> Unit) {
     var scopeText by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) {
         // 用户切去视频 App 再切回来时，状态要跟着更新，所以 15 秒轮询一次
+        LspScope.warmLogHits(context)
         while (true) {
             delay(STATUS_REFRESH_MS)
             now = System.currentTimeMillis()
+            LspScope.warmLogHits(context)
         }
     }
     val apps = listOf(
@@ -2187,8 +2189,8 @@ private fun InjectStatusCard(dark: Boolean, onEnableAll: () -> Unit) {
             Spacer(Modifier.height(10.dp))
             for ((kind, label) in apps) {
                 val ts = ConfigProvider.lastInject(context, kind)
-                // 24 小时内的记录才算数：更早的痕迹说明不了「刚装这版」的状态
-                val fresh = ts > 0L && now - ts < 24L * 3600_000L
+                // v3.0.23：时间戳可能写不回来，统一走 recentlyInjected（含 LSPosed 日志证据）
+                val fresh = recentlyInjected(context, kind)
                 Row(
                     Modifier.fillMaxWidth().padding(vertical = 3.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -2196,7 +2198,10 @@ private fun InjectStatusCard(dark: Boolean, onEnableAll: () -> Unit) {
                     Text(label, style = MaterialTheme.typography.bodyMedium,
                         color = UiPalette.ink(dark), modifier = Modifier.weight(1f))
                     Text(
-                        if (fresh) "已注入 · " + agoText(now - ts) else "未检测到",
+                        if (fresh) {
+                            val freshTs = ts > 0L && now - ts < 24L * 3600_000L
+                            "已注入 · " + if (freshTs) agoText(now - ts) else "LSPosed 日志"
+                        } else "未检测到",
                         style = MaterialTheme.typography.bodySmall,
                         color = if (fresh) UiPalette.accent(dark) else UiPalette.warn(dark),
                     )
@@ -2423,10 +2428,11 @@ private fun ScopePendingNotice(dark: Boolean, onSelfCheck: () -> Unit) {
         colors = CardDefaults.cardColors(containerColor = UiPalette.warn(dark).copy(alpha = 0.12f)),
     ) {
         Column(Modifier.padding(14.dp)) {
-            Text("红果未注入 · 待勾选作用域",
+            Text("红果注入未确认",
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.Bold, color = alertText)
-            Text("本机未检测到红果注入，开关可先开但暂不生效；请在 LSPosed 勾选红果谷歌版作用域后重启。",
+            Text("暂未采到红果进程的注入记录。三方 App 默认写不进共享日志，这不等于模块没被加载；" +
+                "开关可先开，先强行停止红果再打开，或点「作用域自检」核对作用域。",
                 style = MaterialTheme.typography.bodySmall,
                 color = alertText, modifier = Modifier.padding(top = 6.dp))
             if (dark) {
@@ -2587,14 +2593,16 @@ private fun DramaFeaturePage(
     var now by remember { mutableStateOf(System.currentTimeMillis()) }
     var scopeText by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) {
+        // v3.0.23：先在后台读一次 LSPosed 日志，注入证据只取缓存，UI 不卡 su
+        LspScope.warmLogHits(context)
         // 与首页同款 15s 轮询：切去 LSPosed 勾选再回来自动刷新，无需重进设置页
         while (true) {
             delay(STATUS_REFRESH_MS)
             now = System.currentTimeMillis()
+            LspScope.warmLogHits(context)
         }
     }
-    val injectTs = ConfigProvider.lastInject(context, "drama")
-    val dramaFresh = injectTs > 0L && now - injectTs < 24L * 3600_000L
+    val dramaFresh = recentlyInjected(context, "drama")
     if (!overlay && !dramaFresh) {
         ScopePendingNotice(dark) {
             scopeText = "正在读取 LSPosed 配置…"
@@ -2756,7 +2764,19 @@ private fun GroupTitle(t: String) {
 // 注入痕迹是否新鲜（24h 口径，与首页 InjectStatusCard 单一真源一致）。只读 prefs，不写配置。
 private fun recentlyInjected(context: Context, kind: String): Boolean {
     val ts = ConfigProvider.lastInject(context, kind)
-    return ts > 0L && System.currentTimeMillis() - ts < 24L * 3600_000L
+    if (ts > 0L && System.currentTimeMillis() - ts < 24L * 3600_000L) return true
+    // v3.0.23：注入时间戳由视频 App 进程跨 UID 写回，权限受限时常写不进来，
+    // 于是「已注入」永远显示未检测到。LSPosed 自己的日志由 root 服务写、su 读得到，
+    // 补作第二证据源（预热后只读内存缓存，UI 线程不跑 su）。
+    val pkgs = when (kind) {
+        "douyin" -> listOf("com.ss.android.ugc.aweme", "com.ss.android.ugc.aweme.lite")
+        "drama" -> listOf("com.phoenix.read.oversea.gp")
+        "kuaishou" -> listOf("com.smile.gifmaker")
+        "bilibili" -> listOf("tv.danmaku.bili", "com.bilibili.app")
+        else -> emptyList()
+    }
+    val hits = LspScope.logHitsCached()
+    return pkgs.any { hits.contains(it) }
 }
 
 /**
