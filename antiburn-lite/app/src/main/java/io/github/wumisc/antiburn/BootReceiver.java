@@ -56,6 +56,11 @@ public final class BootReceiver extends BroadcastReceiver {
         }
         // 3) 可观测：强制落一条，证明广播确实到达（用户导出日志即可核对）。
         XposedInit.diagForce("BOOT restore action=" + a + " attempt=1");
+        // 4) v3.0.24：开机后拉起常驻运行通知，用户不打开 App 也能保后台。
+        try {
+            GuardService.ensure(c.getApplicationContext());
+        } catch (Throwable ignored) {
+        }
         // 说明：无需 goAsync() —— 上述均为同步幂等操作或系统 API，无长任务。
     }
 }

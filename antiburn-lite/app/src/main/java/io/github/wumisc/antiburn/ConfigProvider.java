@@ -150,6 +150,9 @@ public final class ConfigProvider extends ContentProvider {
                     .edit()
                     .putLong(kind, System.currentTimeMillis())
                     .apply();
+            // v3.0.24：注入也算一次「目标 App 出现」，让常驻通知在节流窗口内换个文案。
+            // 这里跑在 Binder 线程，refreshIfDue 只做一次时间比较 + post 到主线程。
+            GuardService.refreshIfDue(ctx);
         } catch (Throwable ignored) {
             // 记录注入痕迹失败不得影响日志落盘
         }

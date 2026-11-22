@@ -412,6 +412,8 @@ public class BurnInMaskService extends AccessibilityService {
             }
             if (!pkg.equals(foregroundPkg)) {
                 foregroundPkg = pkg;
+                // v3.0.24：把前台包名交给常驻通知的实时判断（非目标包只更新前台，不覆盖目标）
+                ForegroundWatch.onForeground(this, pkg);
                 // v2.7.5：空转期间是 5 秒一帧，若只等下一帧，切进目标应用后要 5 秒才盖上，
                 // 用户会当成「没生效」。这里立刻插一帧，响应仍是一次事件驱动，不增加常驻唤醒。
                 handler.removeCallbacks(tick);

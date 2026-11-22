@@ -698,6 +698,15 @@ class MainActivity : ComponentActivity() {
         setContent { BurnInProtectApp() }
         // v3.0.11 P2：冷启动时按 prefs 真值对本任务栈幂等生效（onResume 亦会再校正一次）。
         applyRecentsVisibility(this)
+        // v3.0.24：常驻运行通知。在用户可见时启动前台服务才不受后台启动限制，
+        // 所以放在这里而不是 Application；重复调用只改同一条通知。
+        GuardService.ensure(this)
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission("android.permission.POST_NOTIFICATIONS") !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf("android.permission.POST_NOTIFICATIONS"), 1001)
+        }
     }
 
     override fun onStop() {
@@ -2186,6 +2195,18 @@ private fun InjectStatusCard(dark: Boolean, onEnableAll: () -> Unit) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp))
+            // v3.0.24：实时判断（无障碍窗口事件优先，其次 LSPosed 注入回传），
+            // 与常驻通知同源，避免两处各算一套。
+            val fgPkg = ForegroundWatch.recentTarget(context)
+            val fgAt = ForegroundWatch.recentTargetAt(context)
+            Text(
+                if (fgPkg == null) "当前前台：未检测到目标 App"
+                else "当前前台：" + videoLabel(fgPkg) + " · " + clockText(fgAt),
+                style = MaterialTheme.typography.bodySmall,
+                color = if (fgPkg == null) MaterialTheme.colorScheme.onSurfaceVariant
+                else UiPalette.accent(dark),
+                modifier = Modifier.padding(top = 6.dp),
+            )
             Spacer(Modifier.height(10.dp))
             for ((kind, label) in apps) {
                 val ts = ConfigProvider.lastInject(context, kind)
@@ -2762,6 +2783,20 @@ private fun GroupTitle(t: String) {
 
 // ===== v3.0.11 P6：UI 简洁化三件套（design-ui §2）——纯视觉收纳，不删任何开关 =====
 // 注入痕迹是否新鲜（24h 口径，与首页 InjectStatusCard 单一真源一致）。只读 prefs，不写配置。
+/** v3.0.24：目标包名的中文标签，通知与首页共用同一套映射（不在两处各写一份 when）。 */
+private fun videoLabel(pkg: String): String = when (VideoApps.of(pkg)) {
+    VideoApps.Kind.DOUYIN -> "抖音"
+    VideoApps.Kind.DRAMA -> "红果"
+    VideoApps.Kind.KUAISHOU -> "快手"
+    VideoApps.Kind.BILIBILI -> "B站"
+    else -> "其它"
+}
+
+/** v3.0.24：时间戳 → HH:mm；0 表示没有记录，返回空串。 */
+private fun clockText(ts: Long): String =
+    if (ts <= 0L) "" else java.text.SimpleDateFormat(
+        "HH:mm", java.util.Locale.getDefault()).format(java.util.Date(ts))
+
 private fun recentlyInjected(context: Context, kind: String): Boolean {
     val ts = ConfigProvider.lastInject(context, kind)
     if (ts > 0L && System.currentTimeMillis() - ts < 24L * 3600_000L) return true
