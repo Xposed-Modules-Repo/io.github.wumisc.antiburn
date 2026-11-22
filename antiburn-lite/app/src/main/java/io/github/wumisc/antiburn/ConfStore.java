@@ -876,9 +876,9 @@ public final class ConfStore {
      * 于是「导出时追加自检」永远静默失败。这里改走 su 追加（base64 传输避免引号转义），
      * su 不可用时才退回直写。</p>
      */
-    private static void appendRaw(String line) {
+    private static boolean appendRaw(String line) {
         if (line == null || line.isEmpty()) {
-            return;
+            return false;
         }
         String payload = android.util.Base64.encodeToString(
                 (line + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8),
@@ -888,12 +888,24 @@ public final class ConfStore {
                 + "| tee -a \"" + LOG_FILE + "\" "
                 + "| tee -a \"" + LOG_DIR_FALLBACK + "/antiburn.log\" >/dev/null 2>&1; true";
         if (execSu(cmd)) {
-            return;
+            return true;
         }
         try (java.io.FileOutputStream fo = new java.io.FileOutputStream(LOG_FILE, true)) {
             fo.write((line + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return true;
         } catch (Throwable ignored) {
+            return false;
         }
+    }
+
+    /**
+     * v3.0.25：把已经拼好的整行（可含换行，例如崩溃堆栈）追加进共享日志。
+     *
+     * <p>返回是否写成功。崩溃回放必须知道结果：旧版回放走分区存储直写，
+     * 失败却照样删掉 pending 文件，于是「下次启动回放崩溃」永远看不到任何堆栈。</p>
+     */
+    public static boolean appendRawLine(String line) {
+        return appendRaw(line);
     }
 
     /**

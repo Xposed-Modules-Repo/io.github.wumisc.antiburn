@@ -54,14 +54,9 @@ public final class AbApplication extends Application {
     /** 崩溃时：尽力写共享日志 + 必写应用内部 pending 文件。全程 try/catch，绝不二次抛出。 */
     private void writeCrash(Thread thread, Throwable ex) {
         String text = formatCrash(thread, ex);
+        // v3.0.25：崩溃当场就尝试 su 追加（旧版直写分区存储必失败，等于没写）
         try {
-            java.io.File f = new java.io.File(ConfStore.LOG_FILE);
-            java.io.File parent = f.getParentFile();
-            if (parent != null && (parent.exists() || parent.mkdirs())) {
-                try (java.io.FileOutputStream fo = new java.io.FileOutputStream(f, true)) {
-                    fo.write(text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-                }
-            }
+            ConfStore.appendRawLine(text);
         } catch (Throwable ignored) {
         }
         try {
@@ -100,12 +95,10 @@ public final class AbApplication extends Application {
                     + " [app/" + android.os.Process.myPid()
                     + "] CRASH-REPLAY 上次进程崩溃堆栈（回放）\n"
                     + new String(buf, java.nio.charset.StandardCharsets.UTF_8);
-            java.io.File f = new java.io.File(ConfStore.LOG_FILE);
-            java.io.File parent = f.getParentFile();
-            if (parent != null && (parent.exists() || parent.mkdirs())) {
-                try (java.io.FileOutputStream fo = new java.io.FileOutputStream(f, true)) {
-                    fo.write(replay.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-                }
+            // v3.0.25：旧版这里直接 FileOutputStream 写 /sdcard/Android/...，
+            // 分区存储下必然失败，可失败后照样 pend.delete()，于是崩溃堆栈永远回放不出来
+            // —— 用户反复闪退，日志里一条 CRASH 都没有。改走 su 追加，只有真写成功才删。
+            if (ConfStore.appendRawLine(replay)) {
                 pend.delete();
             }
         } catch (Throwable ignored) {

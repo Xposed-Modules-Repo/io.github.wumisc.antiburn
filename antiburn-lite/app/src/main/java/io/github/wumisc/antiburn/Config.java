@@ -1084,6 +1084,15 @@ public final class Config {
         if (!enableStatus) {
             return false;
         }
+        // v3.0.25：本模块自己的界面一律不动。
+        // white 模式语义是「名单外都干预」，于是用户在本 App 里调开关、导日志时，
+        // SystemUI 会跟着周期隐藏/恢复状态栏（真机日志 top=io.github.wumisc.antiburn、
+        // hid=true 反复出现），HyperOS 4 上实测把 SystemUI 拖进 30 秒级的重启循环
+        // （pid 5284→6433→8071→10226），用户感知就是「使用过程中闪退」。
+        // 设置界面本来也不需要防烧屏，豁免自己是零代价的止血。
+        if ("io.github.wumisc.antiburn".equals(pkg)) {
+            return false;
+        }
         // 用户选了无障碍遮盖引擎：Hook 必须完全让位，否则两套引擎同时动手，
         // 表现是「状态栏被隐藏后又盖了一条黑边」，比任何单套都更难看。
         if (ConfStore.ENGINE_OVERLAY.equals(engine)) {
