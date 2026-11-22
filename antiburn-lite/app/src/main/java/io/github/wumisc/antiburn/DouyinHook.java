@@ -267,8 +267,15 @@ public final class DouyinHook {
     /** v2.9.6 R5：上一次 DPH 诊断的命中节点数 / 被拒候选数，与 dphLastN 组成状态签名。 */
     private static volatile int dphLastHits = -1;
     private static volatile int dphLastRej = -1;
-    /** v2.9.6：DPH 扫描节流间隔。tick 与 onResume/onGlobalLayout 双路径共用，避免重复全树遍历。 */
-    private static final long DPH_SCAN_INTERVAL_MS = 400L;
+    /**
+     * v2.9.6：DPH 扫描节流间隔。tick 与 onResume/onGlobalLayout 双路径共用，避免重复全树遍历。
+     *
+     * <p><b>v3.2.3 功耗：400ms → 1500ms。</b> onGlobalLayout 在红果/抖音播放时被弹幕、
+     * 进度条、字幕刷新反复触发（高刷机上接近每帧一次），400ms 节流意味着稳态下
+     * 每秒 2.5 次 <b>整棵 DecorView 递归 + 文本比对</b>。付费弹窗不是逐帧动画，
+     * 1.5 秒的首次命中延迟肉眼几乎无感，扫描量却掉到原来的 27%。</p>
+     */
+    private static final long DPH_SCAN_INTERVAL_MS = 1500L;
     /** v2.9.6：最近一次真正执行扫描的时刻（elapsedRealtime），0 = 尚未扫过。 */
     private static volatile long lastDphScanAt = 0L;
 

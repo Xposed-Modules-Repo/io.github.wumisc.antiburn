@@ -67,13 +67,18 @@ public final class AppRegions {
         }
         int inset = Math.max(0, Math.min(topInset, h / 4));
         if ((mask & R) != 0) {
-            add(out, (int) (w * 0.84f), (int) (h * 0.28f), w, (int) (h * 0.92f));
+            // v3.2.5：左边界 84% → 80%。真机截图里快手/抖音的互动列在部分页面
+            // 从 80% 就开始（头像、关注按钮比点赞列更靠左），84% 起会漏掉那一条。
+            add(out, (int) (w * 0.80f), (int) (h * 0.28f), w, (int) (h * 0.92f));
         }
         if ((mask & T) != 0) {
             add(out, 0, inset, w, Math.max(inset + 8, (int) (h * 0.11f)));
         }
         if ((mask & B) != 0) {
-            add(out, 0, (int) (h * 0.90f), w, h);
+            // v3.2.5：起点 90% → 86%。用户截图里的快手带货卡（「立即抢购」+ 评论区）
+            // 落在 84%~90% 这一段，旧值从 90% 起等于整块漏在外面。
+            // 代价是底部多遮 4% 画面 —— 这 4% 本来就是固定控件区，不是视频主体。
+            add(out, 0, (int) (h * 0.86f), w, h);
         }
         if ((mask & C) != 0) {
             add(out, (int) (w * 0.78f), inset, w, (int) (h * 0.20f));

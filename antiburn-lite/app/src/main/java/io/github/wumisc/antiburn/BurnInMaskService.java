@@ -54,8 +54,15 @@ public class BurnInMaskService extends AccessibilityService {
 
     private static final String TAG = "AntiburnMask";
 
-    /** 配置重读间隔：遮盖每秒走一帧，没必要每帧都读盘 */
-    private static final long CONFIG_TTL_MS = 3000L;
+    /**
+     * 配置重读间隔。
+     *
+     * <p>v3.2.3 功耗：3 秒 → 8 秒；v3.2.5 再放宽到 15 秒。这个值决定「多久读一次配置」，
+     * 每次都是 <b>读盘 + 全文 split(32 行) + 逐行解析</b>，在遮盖常驻的整段时间里
+     * 一直重复。用户改完开关靠 {@link #invalidateConfig()} 立刻失效缓存，
+     * 所以 TTL 只影响「外部进程改配置」这条罕见路径，体感依然是即时的。</p>
+     */
+    private static final long CONFIG_TTL_MS = 15_000L;
     /**
      * 状态机步进间隔。
      *
@@ -113,6 +120,46 @@ public class BurnInMaskService extends AccessibilityService {
     /** 当前相位开始时间与相位（true = 遮盖中） */
     private long phaseStart = 0L;
     private boolean masked = false;
+
+    /**
+     * v3.2.3 功耗：灭屏后是否「已停车」。
+     *
+     * <p>旧版灭屏后仍按 {@code IDLE_TICK_MS}（5 秒）永久自我重排 —— 一夜 8 小时
+     * 约 5760 次唤醒 + 5760 次配置读盘（每次都是文件 IO + 全文解析）。屏幕黑着
+     * 本来什么都不用画，这些唤醒纯属白烧电。现在灭屏/锁屏那一帧撤完窗就直接
+     * 停止排队，等 {@link #screenReceiver} 的亮屏广播再把自己叫醒。</p>
+     */
+    private boolean idleParked = false;
+
+    /**
+     * v3.2.3 功耗：屏幕状态广播。
+     *
+     * <p>停车之后必须有人能把 tick 重新叫起来，否则亮屏后遮盖永久不恢复。
+     * 只用三个系统广播：亮屏 / 灭屏 / 解锁，都是 framework 常驻发送，不需要
+     * 额外的部分唤醒锁，也不会让进程常驻活跃。</p>
+     */
+    private final android.content.BroadcastReceiver screenReceiver =
+            new android.content.BroadcastReceiver() {
+                @Override
+                public void onReceive(android.content.Context ctx, android.content.Intent it) {
+                    if (it == null) {
+                        return;
+                    }
+                    String a = it.getAction();
+                    if (android.content.Intent.ACTION_SCREEN_OFF.equals(a)) {
+                        idleParked = false;
+                        handler.removeCallbacks(tick);
+                        handler.post(tick);          // 走一帧：撤窗后由 step 停车
+                    } else if (android.content.Intent.ACTION_SCREEN_ON.equals(a)
+                            || android.content.Intent.ACTION_USER_PRESENT.equals(a)) {
+                        cfgAt = 0L;                  // 顺手重读配置，避免亮屏后还用灭屏前的旧值
+                        lockedAt = 0L;               // 解锁/亮屏后立刻重查，别信缓存
+                        idleParked = false;
+                        handler.removeCallbacks(tick);
+                        handler.post(tick);
+                    }
+                }
+            };
 
     /**
      * 预览强制遮盖的截止时刻（uptimeMillis），0 表示没有预览。
@@ -406,6 +453,21 @@ public class BurnInMaskService extends AccessibilityService {
             ConfStore.init(getApplicationContext());
             metricsDirty = true;
             instance = this;
+            // v3.2.3 功耗：亮/灭屏广播 —— 停车之后唯一的唤醒源。重复注册会抛
+            // IllegalArgumentException，所以先试着注销一次再注册。
+            try {
+                android.content.IntentFilter f = new android.content.IntentFilter();
+                f.addAction(android.content.Intent.ACTION_SCREEN_ON);
+                f.addAction(android.content.Intent.ACTION_SCREEN_OFF);
+                f.addAction(android.content.Intent.ACTION_USER_PRESENT);
+                try {
+                    unregisterReceiver(screenReceiver);
+                } catch (Throwable ignored) {
+                }
+                registerReceiver(screenReceiver, f, android.content.Context.RECEIVER_NOT_EXPORTED);
+            } catch (Throwable t) {
+                Log.w(TAG, "screen receiver failed", t);
+            }
             // v2.7.5：不再一连接就把全屏覆盖层挂上去。旧版无论用户选哪条引擎都先 addView，
             // LSPosed 用户等于白多一层全屏合成；现在由第一帧 step 判定「真的需要画」才建窗。
             handler.removeCallbacks(tick);
@@ -606,9 +668,34 @@ public class BurnInMaskService extends AccessibilityService {
     private void teardown() {
         connected = false;
         lastMayDrawAt = 0L;
+        idleParked = false;
         handler.removeCallbacks(tick);
+        try {
+            unregisterReceiver(screenReceiver);
+        } catch (Throwable ignored) {
+        }
         detachWindow();
         maskDiagForce("teardown");
+    }
+
+    /**
+     * v3.2.3 功耗：界面保存配置后调用，立刻作废本进程内的配置缓存。
+     *
+     * <p>没有这个方法时，缓存只能等 {@link #CONFIG_TTL_MS} 自然过期，
+     * 用户改完开关要盯着屏幕数秒才生效。现在保存即失效，缓存周期也可以放心拉长。</p>
+     */
+    public static void invalidateConfig() {
+        BurnInMaskService s = instance;
+        if (s == null) {
+            return;
+        }
+        try {
+            s.cfgAt = 0L;
+            s.idleParked = false;
+            s.handler.removeCallbacks(s.tick);
+            s.handler.post(s.tick);
+        } catch (Throwable ignored) {
+        }
     }
 
     // ---- 状态机 ----
@@ -624,7 +711,10 @@ public class BurnInMaskService extends AccessibilityService {
                 reportCallbackCrash("step", t);
             }
             try {
-                handler.postDelayed(this, Math.max(200L, next));
+                // v3.2.3 功耗：灭屏停车后不再自我排队 —— 靠亮屏广播唤醒。
+                if (!idleParked) {
+                    handler.postDelayed(this, Math.max(200L, next));
+                }
             } catch (Throwable t) {
                 reportCallbackCrash("tick.postDelayed", t);
             }
@@ -638,11 +728,36 @@ public class BurnInMaskService extends AccessibilityService {
      * 灭屏、锁屏、总开关关闭、当前引擎不是遮盖（例如 root 用户选了 LSPosed）时，
      * 遮盖层根本不需要存在，每秒醒 5 次纯属白烧电。</p>
      */
+    /** v3.2.3 功耗：诊断串的「变化键」。每帧只算这一小串，状态没变就不构造完整句子。 */
+    private String lastDiagKey = "";
+    private long lastDiagKeyAt = 0L;
+
+    /** v3.2.5：钥匙锁状态的 3 秒缓存 —— 灭屏/解锁广播都会重置它。 */
+    private boolean lockedCached = false;
+    private long lockedAt = 0L;
+
+    private boolean isLockedCached(long now) {
+        if (now - lockedAt < 3000L) {
+            return lockedCached;
+        }
+        lockedAt = now;
+        try {
+            lockedCached = keyguard != null && keyguard.isKeyguardLocked();
+        } catch (Throwable t) {
+            lockedCached = false;
+        }
+        return lockedCached;
+    }
+
     private long step() {
+        idleParked = false;   // v3.2.3：走到这里说明有人叫醒了我们，先解除停车
         long now = SystemClock.uptimeMillis();
         boolean preview = previewUntil > now;
         boolean screenOn = power == null || power.isInteractive();
-        boolean locked = keyguard != null && keyguard.isKeyguardLocked();
+        // v3.2.5 功耗：KeyguardManager 是**跨进程调用**。旧版每帧查一次，
+        // 1Hz 常驻等于每秒一次 binder 往返，屏亮着的时候它几乎永远是 false，
+        // 却为此付出了整天的 IPC 与唤醒开销。改成 3 秒缓存 + 灭屏直接短路。
+        boolean locked = screenOn && isLockedCached(now);
         Cfg c = config(now);
         resolveApp(c, foregroundPkg);
 
@@ -659,22 +774,38 @@ public class BurnInMaskService extends AccessibilityService {
                 && (c.appRight || c.appTop || c.appBottom || c.appCorner);
         boolean mayDraw = screenOn && !locked && c.masterOn && intervene
                 && (sysBar || appArea);
+        // v3.2.3：让开状态只取一次时间，诊断键与正文共用同一个值（避免两处相差几毫秒）
+        boolean yld = c.yieldNotify && SystemClock.uptimeMillis() < yieldUntil;
         // v2.7.9：一条日志说清「为什么没盖」——是没开无障碍、引擎没切、
         // 总闸关着、名单没命中，还是覆盖层被系统拒了。
-        maskDiag("screen=" + screenOn + " lock=" + locked
-                + " master=" + c.masterOn + " eng=" + c.engineName
-                + " mode=" + c.mode + " fg=" + foregroundPkg
-                + " hit=" + intervene + " mayDraw=" + mayDraw
-                + " win=" + windowAttached + " masking=" + masking
-                + " sb=" + c.statusBarOn + " nav=" + c.navOn
-                + " sys=" + sysBar + " app=" + VideoApps.label(c.appKind)
-                + " appOn=" + c.appAreaOn
-                + " yield=" + (SystemClock.uptimeMillis() < yieldUntil)
-                + " areas=" + (c.appRight ? "R" : "-") + (c.appTop ? "T" : "-")
-                + (c.appBottom ? "B" : "-") + (c.appCorner ? "C" : "-")
-                + " fallback=" + (appArea && !sysBar)
-                + (lastError.isEmpty() ? "" : " err=" + lastError)
-                + (lastRegions.isEmpty() ? "" : " rects=" + lastRegions));
+        //
+        // v3.2.3 功耗：旧版这段长串是**每帧无条件构造**的（拼接十几个字段），
+        // 进 maskDiag 之后还要跑一次 replaceAll 正则归一化 fg 段。1Hz 常驻、
+        // 灭屏 5 秒一帧，昼夜不停，纯属把电烧在字符串上。现在先算一个便宜的
+        // 「变化键」，只有键变了或满 30 秒才构造完整诊断串。
+        String diagKey = c.engineName + '|' + c.masterOn + '|' + intervene + '|' + mayDraw
+                + '|' + masking + '|' + windowAttached + '|' + c.appKind
+                + '|' + c.appAreaOn + '|' + appArea + '|' + yld
+                + '|' + c.appRight + c.appTop + c.appBottom + c.appCorner
+                + '|' + lastError.isEmpty();
+        if (!diagKey.equals(lastDiagKey) || now - lastDiagKeyAt >= 30000L) {
+            lastDiagKey = diagKey;
+            lastDiagKeyAt = now;
+            maskDiag("screen=" + screenOn + " lock=" + locked
+                    + " master=" + c.masterOn + " eng=" + c.engineName
+                    + " mode=" + c.mode + " fg=" + foregroundPkg
+                    + " hit=" + intervene + " mayDraw=" + mayDraw
+                    + " win=" + windowAttached + " masking=" + masking
+                    + " sb=" + c.statusBarOn + " nav=" + c.navOn
+                    + " sys=" + sysBar + " app=" + VideoApps.label(c.appKind)
+                    + " appOn=" + c.appAreaOn
+                    + " yield=" + yld
+                    + " areas=" + (c.appRight ? "R" : "-") + (c.appTop ? "T" : "-")
+                    + (c.appBottom ? "B" : "-") + (c.appCorner ? "C" : "-")
+                    + " fallback=" + (appArea && !sysBar)
+                    + (lastError.isEmpty() ? "" : " err=" + lastError)
+                    + (lastRegions.isEmpty() ? "" : " rects=" + lastRegions));
+        }
         if (preview || mayDraw) {
             // v2.7.4：覆盖层可能被系统撤掉（旋转 / 低内存 / 开机早期 addView 被拒）。
             // 旧版一辈子只 addView 一次，失败后 connected=true 但永远盖不上，
@@ -700,6 +831,8 @@ public class BurnInMaskService extends AccessibilityService {
             }
             phaseStart = now;
             applyMask();
+            // v3.2.3 功耗：这里不再 5 秒一醒，直接停车。亮屏 / 解锁广播会把 tick 叫回来。
+            idleParked = true;
             return IDLE_TICK_MS;
         }
 
@@ -830,6 +963,26 @@ public class BurnInMaskService extends AccessibilityService {
         if (metricsDirty) {
             refreshMetrics();
         }
+        long nowMs = SystemClock.uptimeMillis();
+        int mask = AppRegions.mask(c.appRight, c.appTop, c.appBottom, c.appCorner);
+        // v3.2.2：通知横幅期间让开顶部区（右侧列 / 底部 / 角落照旧遮）
+        boolean yld = c.yieldNotify && nowMs < yieldUntil;
+        if (yld) {
+            mask &= ~AppRegions.T;
+        }
+        boolean topOn = c.maskAllowed && c.masterOn && c.statusBarOn;
+        boolean navOn = c.maskAllowed && c.masterOn && c.navOn;
+        // v3.2.5 功耗：**这一帧与上一帧完全一样就什么都不做**。
+        // 旧版每秒都重建一个 ArrayList + 5 个 Rect，再交给 setRects 自己比对；
+        // 相位内（隐藏 30 秒 / 显示 30 秒）这些值一个字都不会变，纯属每秒白算一遍。
+        if (masking
+                && drawW == screenW && drawH == screenH
+                && drawSb == statusBarH && drawNav == navBarSize && drawSide == navSide
+                && drawMask == mask && drawYld == yld
+                && drawTopOn == topOn && drawNavOn == navOn
+                && drawAppOn == c.appAreaOn && drawKind == c.appKind) {
+            return;
+        }
         // 注意：这里不做「系统栏当前是否可见」的判定。AccessibilityWindowInfo 只暴露
         // bounds / layer / isActive，没有任何可见性 API，靠 bounds 猜会把全屏视频里
         // 真实存在但透明显示的状态栏判成「不可见」而漏遮。宁可多遮一条，也不要
@@ -837,17 +990,18 @@ public class BurnInMaskService extends AccessibilityService {
         // 顶部有黑边，且用户可以自己关掉状态栏那一项。
         // v2.8.2：系统栏两条只在 overlay 引擎下画。LSPosed 引擎的系统栏由 SystemUI
         // 真隐藏负责，这里再画一条黑边就是重影；应用内区域则与引擎无关，照常画。
-        if (c.maskAllowed && c.masterOn && c.statusBarOn) {
+        if (topOn) {
             top = OverlayGeometry.statusBar(screenW, screenH, statusBarH);
         }
-        if (c.maskAllowed && c.navOn) {
+        if (navOn) {
             bottom = OverlayGeometry.navigationBar(screenW, screenH, navBarSize, navSide);
         }
-        java.util.List<OverlayGeometry.Rect> areas = appRects(c);
+        java.util.List<OverlayGeometry.Rect> areas = appRects(c, mask);
         if (top == null && bottom == null && areas.isEmpty()) {
             // 一个区域都没算出来（尺寸异常 / 全都判为不可见）：不画，并记下原因
             // v2.8.6：连旧矩形一起清掉。只 setMasked(false) 时 appRects 字段还留着
             // 上一帧的五个黑块，下一次 setMasked(true) 会把它们原样复活。
+            recordDrawState(mask, yld, topOn, navOn, c);
             maskView.setRects(null, null, java.util.Collections.emptyList());
             maskView.setMasked(false);
             masking = false;
@@ -855,6 +1009,7 @@ public class BurnInMaskService extends AccessibilityService {
                     + navBarSize + "px，屏幕 " + screenW + "x" + screenH + "）";
             return;
         }
+        recordDrawState(mask, yld, topOn, navOn, c);
         maskView.setRects(top, bottom, areas);
         maskView.setMasked(true);
         masking = true;
@@ -885,15 +1040,29 @@ public class BurnInMaskService extends AccessibilityService {
      * 又需要同一套数字。两处各写一份的结果必然是「这个 App 有效那个无效」，
      * 所以这里不再自己算，只做类型转换。</p>
      */
-    private java.util.List<OverlayGeometry.Rect> appRects(Cfg c) {
+    /** v3.2.5：记录「上一帧画了什么」，供 {@link #applyMask()} 做无变化短路。 */
+    private int drawW = -1, drawH = -1, drawSb = -1, drawNav = -1, drawSide = -1, drawMask = -1;
+    private boolean drawYld, drawTopOn, drawNavOn, drawAppOn;
+    private VideoApps.Kind drawKind = VideoApps.Kind.NONE;
+
+    private void recordDrawState(int mask, boolean yld, boolean topOn, boolean navOn, Cfg c) {
+        drawW = screenW;
+        drawH = screenH;
+        drawSb = statusBarH;
+        drawNav = navBarSize;
+        drawSide = navSide;
+        drawMask = mask;
+        drawYld = yld;
+        drawTopOn = topOn;
+        drawNavOn = navOn;
+        drawAppOn = c.appAreaOn;
+        drawKind = c.appKind;
+    }
+
+    private java.util.List<OverlayGeometry.Rect> appRects(Cfg c, int mask) {
         java.util.List<OverlayGeometry.Rect> out = new java.util.ArrayList<>();
         if (!c.appAreaOn || c.appKind == VideoApps.Kind.NONE || screenW <= 0 || screenH <= 0) {
             return out;
-        }
-        int mask = AppRegions.mask(c.appRight, c.appTop, c.appBottom, c.appCorner);
-        // v3.2.2：通知横幅期间让开顶部区（右侧列 / 底部 / 角落照旧遮）
-        if (c.yieldNotify && SystemClock.uptimeMillis() < yieldUntil) {
-            mask &= ~AppRegions.T;
         }
         for (int[] r : AppRegions.rects(screenW, screenH, Math.max(0, statusBarH), mask)) {
             addRect(out, r[0], r[1], r[2], r[3]);

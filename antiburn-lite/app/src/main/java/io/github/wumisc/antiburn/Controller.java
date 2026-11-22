@@ -1050,7 +1050,14 @@ public final class Controller {
         // v2.7.2：直播间暂停与灭屏 / 名单豁免同级 —— 命中即恢复系统栏并停掉像素偏移。
         // 灭屏已在上面提前返回，这里只剩「名单豁免」与「直播暂停」两种。
         if (!intervene || livePause) {
-            if (hidden) {
+            // v3.2.4 修复（真机：微信放进白名单后仍停在「只遮左半」）：
+            // `hidden` 只记录全局 hide/show 相位，压根不覆盖三班倒 ——
+            // 三班倒由 applyStatusRound 独立推进，不设 hidden。切进豁免应用那一轮
+            // 若恰好处于全局显示相位（hidden=false），applyShow() 根本不会被调用，
+            // statusRound 与 dimmed 原样留着，状态栏就卡在「留右」：
+            // 右侧信号电量还亮着、时间不显示，直到下一个相位边界才可能自愈。
+            // 因此恢复条件必须把「三班倒在跑」「仍有子容器被透明化」一并算进来。
+            if (hidden || statusRound >= 0 || statusChildrenHidden()) {
                 applyShow();
                 hidden = false;
             }
@@ -1264,7 +1271,10 @@ public final class Controller {
      * 没有轮流的意义，交回旧路径。</p>
      */
     private static void applyStatusRound(long now, boolean cfgChanged) {
+        // v3.2.4：新增「取消三班倒」总闸。关掉即回到常规 hide/show 两段周期，
+        // 不再有「只留一边」的中间态 —— 这也是「时间时有时无」观感的直接出口。
         boolean wantRotate = Config.enableStatus && Config.enableStatusBar
+                && Config.enableStatusRound
                 && Config.statusClockOn && Config.statusIconsOn;
         if (!wantRotate) {
             if (statusRound >= 0) {
@@ -2084,8 +2094,11 @@ public final class Controller {
 
     private static String currentTopPackage() {
         long now = SystemClock.elapsedRealtime();
-        // 1 秒内直接复用：同一轮 tick 里 isScreenOn / 名单判定 / 日志都要用，只查一次。
-        if (now - lastTopAt < 1000L && !lastTopCache.isEmpty()) {
+        // 同一轮 tick 里 isScreenOn / 名单判定 / 日志都要用，只查一次。
+        // v3.2.5 功耗：缓存 1 秒 → 3 秒，与 MIN_TICK_MS 对齐。1 秒缓存意味着
+        // 每 3 秒的 tick 里至少有 1 次必然穿透到 ATMS（一次跨进程 binder），
+        // 而前台包切换本来就要靠窗口事件/下一轮感知，3 秒完全够用。
+        if (now - lastTopAt < 3000L && !lastTopCache.isEmpty()) {
             return lastTopCache;
         }
         String pkg = queryTopPackage();

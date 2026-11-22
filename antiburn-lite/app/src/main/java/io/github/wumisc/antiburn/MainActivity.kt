@@ -201,6 +201,13 @@ data class AbState(
     val enableAppOverlay: Boolean = true,
     /** v3.2.2：无障碍模式下通知弹出时顶部区让开（默认开）。 */
     val enableA11yYieldNotify: Boolean = true,
+    /**
+     * v3.2.5：状态栏三班倒开关（开 = 左亮 / 右亮 / 全灭三段轮换）。
+     *
+     * <p>默认开，与 v3.0.30 起的观感一致。关掉后状态栏回到常规「整条黑 → 整条亮」
+     * 两段周期 —— 给「时间时有时无更难受」和「轮着亮反而晃眼」的用户一个出口。</p>
+     */
+    val enableStatusRound: Boolean = true,
     /** v2.8.6：SystemUI 覆盖层同上，恒 false。 */
     val enableSysOverlay: Boolean = false,
     val enableDouyinTop: Boolean = false,
@@ -307,6 +314,8 @@ private val AbStateSaver = listSaver(
             s.statusClockOn, s.statusIconsOn,
             // v3.2.2：索引 49，无障碍通知让开（旧存档缺项时 restore 取默认 true）
             s.enableA11yYieldNotify,
+            // v3.2.4：索引 50，取消三班倒（缺项取默认 true = 三班倒保持开启）
+            s.enableStatusRound,
         )
     },
     restore = { l: List<Any> ->
@@ -382,6 +391,8 @@ private val AbStateSaver = listSaver(
                 statusIconsOn = Bool(48, true),
                 // v3.2.2：无障碍通知让开，缺键按开（否则老用户升级后横幅继续被盖）
                 enableA11yYieldNotify = Bool(49, true),
+                // v3.2.4：三班倒开关，缺键按开（保持 v3.0.30 起的既有观感）
+                enableStatusRound = Bool(50, true),
             )
         }
     },
@@ -450,6 +461,7 @@ object AbConf {
             enableAppOverlay = b(map["enable_app_overlay"], true),
             // v3.2.2：缺键默认开
             enableA11yYieldNotify = b(map["enable_a11y_yield_notify"], true),
+            enableStatusRound = b(map["enable_status_round"], true),
             enableSysOverlay = false,
             enableDouyinTop = b(map["enable_douyin_top"]),
             enableDouyinBottom = b(map["enable_douyin_bottom"]),
@@ -541,6 +553,7 @@ object AbConf {
         // AbState 默认 false、Saver 默认 false 三条路都是 false），所以这里恒写 0。
         lines["enable_app_overlay"] = if (s.enableAppOverlay) "1" else "0"
         lines["enable_a11y_yield_notify"] = if (s.enableA11yYieldNotify) "1" else "0"
+        lines["enable_status_round"] = if (s.enableStatusRound) "1" else "0"
         lines["enable_sys_overlay"] = if (s.enableSysOverlay) "1" else "0"
         lines["enable_douyin_top"] = if (s.enableDouyinTop) "1" else "0"
         lines["enable_douyin_bottom"] = if (s.enableDouyinBottom) "1" else "0"
@@ -626,6 +639,7 @@ object AbConf {
         putB("enable_log", old.enableLog, new.enableLog)
         putB("enable_app_overlay", old.enableAppOverlay, new.enableAppOverlay)
         putB("enable_a11y_yield_notify", old.enableA11yYieldNotify, new.enableA11yYieldNotify)
+        putB("enable_status_round", old.enableStatusRound, new.enableStatusRound)
         putB("enable_sys_overlay", old.enableSysOverlay, new.enableSysOverlay)
         putB("enable_douyin_top", old.enableDouyinTop, new.enableDouyinTop)
         putB("enable_douyin_bottom", old.enableDouyinBottom, new.enableDouyinBottom)
@@ -693,7 +707,13 @@ object AbConf {
         // 走 default 分支丢弃，不影响向下兼容。
         val withVer = LinkedHashMap(m)
         withVer["app_ver"] = BuildConfig.VERSION_NAME
-        return ConfStore.updateEx(withVer)
+        val r = ConfStore.updateEx(withVer)
+        // v3.2.3 功耗：配置缓存从 3 秒放宽到 8 秒，靠这一句把「保存即生效」补回来。
+        // 无障碍服务与界面同进程，静态直达，不走广播。
+        if (r != ConfStore.WRITE_FAILED) {
+            BurnInMaskService.invalidateConfig()
+        }
+        return r
     }
 }
 
@@ -2719,6 +2739,13 @@ private fun GeneralFeaturePage(
     GroupTitle("系统栏与通用")
     OptionRow("状态栏", "顶部图标周期性隐藏", checked = state.enableStatusBar, dark = dark,
         onCheckedChange = { on -> onStateChange { s -> s.copy(enableStatusBar = on) } })
+    // v3.2.4：三班倒的明确出口。用户要求「排在通用里边靠前」，所以紧跟「状态栏」。
+    // 注意这里的语义是「取消」：勾上 = 关掉三班倒（enableStatusRound = false）。
+    OptionRow("三班倒",
+        "开＝左亮 / 右亮 / 全灭三段轮换；关＝状态栏整条一起黑、一起亮，不会再出现「时间没了、右侧图标还亮着」的中间态",
+        checked = state.enableStatusRound, dark = dark,
+        enabled = state.enableStatusBar,
+        onCheckedChange = { on -> onStateChange { s -> s.copy(enableStatusRound = on) } })
     // v3.0.20：状态栏细分为「左侧时间」与「右侧图标」两个独立开关。
     OptionRow("隐藏时间", "左侧时钟；关掉就只清右侧图标", checked = state.statusClockOn, dark = dark,
         enabled = state.enableStatusBar,

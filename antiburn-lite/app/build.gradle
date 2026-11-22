@@ -12,8 +12,8 @@ android {
         applicationId "io.github.wumisc.antiburn"
         minSdk 33
         targetSdk 37
-        versionCode 101
-        versionName "3.2.2"
+        versionCode 104
+        versionName "3.2.5"
     }
 
     compileOptions {
@@ -26,9 +26,31 @@ android {
         compose true
     }
 
+    signingConfigs {
+        /**
+         * 历史发布包一直用 debug.keystore 签（模块本身不要求上架商店）。
+         * 这里显式声明成 shared，release 与 debug 共用同一把，用户升级不用卸载。
+         */
+        shared {
+            storeFile file('../debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+    }
+
     buildTypes {
         release {
-            minifyEnabled false
+            // v3.2.3 体积治理：34 MB 的 dex 不是「代码多」，是 debug 变体从不做
+            // 压缩/裁剪 —— Compose + Miuix 液态玻璃 + backdrop 三层库里大量用不到
+            // 的类全被原样打进包。开 R8 后只裁第三方，模块自身整包 keep（见
+            // proguard-rules.pro），所以 Hook 逻辑与反射字符串不受影响。
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'),
+                    'proguard-rules.pro'
+            // 与历史发布包同一把钥匙（指纹 761ef2ac…），保证可覆盖安装
+            signingConfig signingConfigs.shared
         }
     }
 }
