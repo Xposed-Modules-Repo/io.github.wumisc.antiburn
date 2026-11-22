@@ -858,6 +858,9 @@ public final class ConfStore {
                     // v2.8.7 之前读的是镜像文件里的历史值，于是日志出现 app_overlay=1
                     // 而实际生效的 ao=false，两者互相矛盾，把排查带偏过一轮。
                     + " app_overlay=0"
+                    // v3.0.28：enter= 是历史累计，看不出一件事 —— 本轮到底注入了没有。
+                    // injAge 直接给「最后一次注入距今多久」，覆盖安装/杀进程后立刻能判。
+                    + " injAge=" + enterAges(all)
                     + " enter=" + enter
                     + " lsp=" + lsp
                     + " " + hint;
@@ -1096,6 +1099,42 @@ public final class ConfStore {
     /** v2.8.8：作用域自检复用同一份 ENTER 摘要。 */
     static String enterHits() {
         return enterSummary(readAllLogs());
+    }
+
+    /**
+     * v3.0.28：各视频 App「最后一次 ENTER」距今多久。
+     *
+     * <p>enter= 是历史累计，哪怕这轮进程压根没注入也照样显示 OK —— 真机上就出现过
+     * 「SELF 说注入 18 次、实际本轮一条 HOOK 都没有」。这里按日志行首毫秒时间戳
+     * 找最后一次命中，写成 douyin=3m / kuaishou=27m / never。</p>
+     */
+    static String enterAges(String all) {
+        long now = System.currentTimeMillis();
+        String[] names = {"douyin", "drama", "kuaishou", "bili"};
+        String[] pkgs = {"com.ss.android.ugc.aweme", "com.phoenix.read",
+                "com.smile.gifmaker", "com.bilibili"};
+        StringBuilder sb = new StringBuilder();
+        for (int k = 0; k < pkgs.length; k++) {
+            int at = all == null ? -1 : all.lastIndexOf("ENTER pkg=" + pkgs[k]);
+            long age = -1L;
+            if (at >= 0) {
+                int ls = all.lastIndexOf('\n', at) + 1;
+                int sp = all.indexOf(' ', ls);
+                if (sp > ls) {
+                    try {
+                        age = now - Long.parseLong(all.substring(ls, sp));
+                    } catch (Throwable ignored) {
+                        age = -1L;
+                    }
+                }
+            }
+            if (k > 0) {
+                sb.append('/');
+            }
+            sb.append(names[k]).append('=')
+                    .append(age < 0 ? "never" : (age / 60_000L) + "m");
+        }
+        return sb.toString();
     }
 
     /**

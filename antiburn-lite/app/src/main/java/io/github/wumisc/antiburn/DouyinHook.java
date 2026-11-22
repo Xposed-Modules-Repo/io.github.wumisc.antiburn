@@ -147,6 +147,10 @@ public final class DouyinHook {
      * 这个标记只用于「直播固定条补扫」，不替代 livePaused / liveDetected 的历史判定。</p>
      */
     private static volatile boolean liveFixedPage = false;
+    /** v3.0.28：页面类型判定（主页/直播页）的节流时间戳，避免每帧全树扫描。 */
+    private static long lastPageKindAt = 0L;
+    /** v3.0.28：直播固定条补扫节流。 */
+    private static long lastBandsAt = 0L;
     /** v3.0.26：最近一次 rescan 的根视图，hideEnabled 复用它做主页判断，避免每 tick 全树扫。 */
     private static volatile View lastRoot;
     /** v2.6.9：宿主进程自身包名，供 shouldIntervene 判定白名单豁免。 */
@@ -563,12 +567,18 @@ public final class DouyinHook {
         try {
             // v3.0.26：主页判定随布局变化重算一次（hideEnabled 每 tick 只读结果）
             lastRoot = root;
-            profilePage = !isVideoApp && isProfilePage(root);
-            // 只认直播间独有的三个词，绝不拿「说点什么」当判据 —— 合集页 / 单视频页
-            // 底部也有评论输入条，一旦误判成直播间就会跳过右侧按钮列。
-            liveFixedPage = !isVideoApp && !profilePage
-                    && findBottomDock(root, 0) == null
-                    && hasAnyText(root, 0, "本场点赞", "直播广场", "小时榜");
+            // v3.0.28：页面类型判定节流 1.2 秒一次。onGlobalLayout 在高刷机上一帧能来好几趟，
+            // 每趟都全树扫文本会把主线程拖住（真机表现就是「越用越卡、最后闪退」）。
+            long nowKind = SystemClock.elapsedRealtime();
+            if (nowKind - lastPageKindAt >= 1200L) {
+                lastPageKindAt = nowKind;
+                profilePage = !isVideoApp && isProfilePage(root);
+                // 只认直播间独有的三个词，绝不拿「说点什么」当判据 —— 合集页 / 单视频页
+                // 底部也有评论输入条，一旦误判成直播间就会跳过右侧按钮列。
+                liveFixedPage = !isVideoApp && !profilePage
+                        && hasAnyText(root, 0, "本场点赞", "直播广场", "小时榜")
+                        && findBottomDock(root, 0) == null;
+            }
             List<View> rights = collectRight(root, 4);
             // 补充兜底：贴右缘竖列（不限 childCount，防止个别视频把点赞列分组成小容器而漏藏）
             for (View e : collectRightEdge(root, 4)) {
@@ -2486,6 +2496,12 @@ public final class DouyinHook {
         if (!(lastRoot instanceof ViewGroup)) {
             return;
         }
+        // v3.0.28：每秒（tick）都会走到这里，全树挑候选必须节流，1.5 秒一次足够。
+        long nowBands = SystemClock.elapsedRealtime();
+        if (nowBands - lastBandsAt < 1500L) {
+            return;
+        }
+        lastBandsAt = nowBands;
         ViewGroup root = (ViewGroup) lastRoot;
         List<View> tops = new ArrayList<>();
         collectLiveTopBand(root, tops, 0);
@@ -3470,9 +3486,18 @@ public final class DouyinHook {
 
     /** v3.0.26：子树里是否有任一文案命中（深度 12 与 MAX_DEPTH 取小，避免深树过大开销）。 */
     private static boolean hasAnyText(View v, int depth, String... keys) {
-        if (v == null || depth > 12 || depth > MAX_DEPTH || v.getVisibility() == View.GONE) {
+        // v3.0.28：给扫描加节点预算 —— 抖音首页/直播间一棵树能到上万节点，
+        // 每帧全树扫会把主线程拖到掉帧甚至 ANR。
+        return hasAnyText(v, depth, new int[]{1600}, keys);
+    }
+
+    /** v3.0.28：带节点预算的版本。budget 是单元素数组，跨递归共享。 */
+    private static boolean hasAnyText(View v, int depth, int[] budget, String... keys) {
+        if (v == null || depth > 12 || depth > MAX_DEPTH || budget[0] <= 0
+                || v.getVisibility() == View.GONE) {
             return false;
         }
+        budget[0]--;
         if (v instanceof TextView) {
             CharSequence t = ((TextView) v).getText();
             CharSequence d = v.getContentDescription();
@@ -3487,7 +3512,7 @@ public final class DouyinHook {
         if (v instanceof ViewGroup) {
             ViewGroup g = (ViewGroup) v;
             for (int i = 0; i < g.getChildCount(); i++) {
-                if (hasAnyText(g.getChildAt(i), depth + 1, keys)) {
+                if (hasAnyText(g.getChildAt(i), depth + 1, budget, keys)) {
                     return true;
                 }
             }
@@ -3510,13 +3535,15 @@ public final class DouyinHook {
         if (root == null) {
             return false;
         }
-        if (containsVideoSurface(root, 0)) {
+        // v3.0.28：先做便宜的文本判断，命中后才跑全树的「找视频画面」。
+        // 旧顺序在每一页都先全树扫 Surface，抖音首页一棵树上万节点，成本太高。
+        if (hasAnyText(root, 0, "搜索TA", "搜索他的作品", "编辑资料")) {
+            return !containsVideoSurface(root, 0);
+        }
+        if (!hasAnyText(root, 0, "作品") || !hasAnyText(root, 0, "粉丝", "获赞", "私密")) {
             return false;
         }
-        if (hasAnyText(root, 0, "搜索TA", "搜索他的作品", "编辑资料")) {
-            return true;
-        }
-        return hasAnyText(root, 0, "作品") && hasAnyText(root, 0, "粉丝", "获赞", "私密");
+        return !containsVideoSurface(root, 0);
     }
 
     // ---------- v2.6.9：底部中央独立圆形「+」发布按钮 ----------
