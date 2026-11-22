@@ -1275,7 +1275,8 @@ public class FeatureAuditTest {
                         && conf283.contains("enable_sys_overlay=0")
                         && cfg283.contains("case \"enable_sys_overlay\": so = false;"),
                 "T-28j enable_sys_overlay 默认关，旧配置残留值不生效", "");
-        check(conf283.contains("private static void appendRaw(")
+        // v3.0.25：appendRaw 改为返回真实成败（崩溃回放据此决定是否删除 pending）
+        check(conf283.contains("private static boolean appendRaw(")
                         && conf283.contains("base64 -d") && conf283.contains("execSu(cmd)"),
                 "T-28k SELF 改走 su 追加，不再因分区存储静默失败", "");
         check(conf283.contains("public static boolean a11yEnabled(")
@@ -1795,8 +1796,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 82
-                    && "3.0.22".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 86
+                    && "3.0.26".equals(nm.group(1));
             check(ok, "T-42b versionCode 恰为 78 / versionName 恰为 3.0.13（非区间，锁死发布锚点）", "");
         }
         check(hook297raw.contains("SAFE_RESTORE") && hook297raw.contains("DRAMA_PAYWALL_HIDE"),
@@ -1871,8 +1872,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 82
-                    && "3.0.22".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 86
+                    && "3.0.26".equals(nm.group(1));
             // 与 T-42b 断言同源，是发布前的双重防回退锁，不冒充新增不变量（评审建议改标签）。
             check(ok, "T-43c P3 版本锚点与 T-42b 双重锁定（发布前防回退，非新增不变量）", "");
         }
@@ -1910,9 +1911,9 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 82
-                    && "3.0.22".equals(nm.group(1));
-            check(ok, "T-44c 版本号恰为 82 / 3.0.22（发布锚点）", "");
+                    && Integer.parseInt(cm.group(1)) == 86
+                    && "3.0.26".equals(nm.group(1));
+            check(ok, "T-44c 版本号恰为 86 / 3.0.26（发布锚点）", "");
         }
 
         // ---------- T-45 v3.0.3 右上角安全修复 + 两处只读探测越界防护 ----------
@@ -1953,9 +1954,9 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 82
-                    && "3.0.22".equals(nm.group(1));
-            check(ok, "T-45c 版本号恰为 82 / 3.0.22（发布锚点）", "");
+                    && Integer.parseInt(cm.group(1)) == 86
+                    && "3.0.26".equals(nm.group(1));
+            check(ok, "T-45c 版本号恰为 86 / 3.0.26（发布锚点）", "");
         }
 
         // ---------- T-46 v3.0.4 快手右侧作者栏放行（用户授权绕 rw>=0.30 红线） ----------
@@ -2030,14 +2031,14 @@ public class FeatureAuditTest {
             // ⑤ 版本锚点 + 辅助方法只读性
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
-            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 82
-                    && "3.0.22".equals(nm.group(1));
+            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 86
+                    && "3.0.26".equals(nm.group(1));
             String helper = stripComments(slice(dy304raw, "private static boolean hasChildByClass(View v, String target)",
                     "private static int scoreRight(ViewGroup g)"));
             boolean readonly = helper.contains("MAX_DEPTH") && helper.contains("catch (Throwable")
                     && !helper.contains("setVisibility") && !helper.contains("setAlpha")
                     && !helper.contains("setTranslation");
-            check(ver && readonly, "T-46e 版本 78/3.0.18；hasChildByClass 有深度上限+异常收敛且只读", "");
+            check(ver && readonly, "T-46e 版本 86/3.0.26；hasChildByClass 有深度上限+异常收敛且只读", "");
         }
 
         // ---------- T-47 v3.0.5 底部标题栏只读探针 TDUMP ----------
@@ -2075,9 +2076,9 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 82
-                    && "3.0.22".equals(nm.group(1));
-            check(ok, "T-47c 版本号恰为 82 / 3.0.22（v3.0.13 发布锚点）", "");
+                    && Integer.parseInt(cm.group(1)) == 86
+                    && "3.0.26".equals(nm.group(1));
+            check(ok, "T-47c 版本号恰为 86 / 3.0.26（v3.0.13 发布锚点）", "");
         }
 
         // ---------- T-48 v3.0.6 三处精准隐藏（红点禁藏为开发门禁，缺一即失败） ----------
@@ -2343,8 +2344,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ver = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 82 && "3.0.22".equals(nm.group(1));
-            check(ver, "T-48-VER 版本锚点 78/3.0.18（T-42b~T-47c 六处已同步）", "");
+                    && Integer.parseInt(cm.group(1)) == 86 && "3.0.26".equals(nm.group(1));
+            check(ver, "T-48-VER 版本锚点 86/3.0.26（T-42b~T-47c 六处已同步）", "");
         }
 
         // ---------- T-49 v3.0.7 定向隐藏通道 THH 测试锁（安全命门确定性守卫） ----------
@@ -2741,8 +2742,8 @@ public class FeatureAuditTest {
             // 复用点，调用见 MainActivity L2431），再引一次 lastInject(context, kind) 与 24L*3600_000L；
             // 判定口径（24h freshness / 只读 prefs）零改，injDrama 仍恰 1。经 git diff 确认属授权改动，非改坏。
             check(old5k == 0 && decl == 1 && used == 2 && now == 2
-                            && injKind == 2 && injDrama == 1 && fresh == 3,
-                    "T-52-A3 前端 STATUS_REFRESH_MS=15000L / 两处引用 / 轮询保活 / 判定口径零改(P6 复用点 injKind=2/fresh=3)", detail);
+                            && injKind == 2 && injDrama == 0 && fresh == 2,
+                    "T-52-A3 前端 STATUS_REFRESH_MS=15000L / 两处引用 / 轮询保活 / 判定口径零改(P6 复用点 injKind=2/fresh=2；v3.0.23 红果页统一走 recentlyInjected)", detail);
             }
         }
 
@@ -2796,12 +2797,12 @@ public class FeatureAuditTest {
             int fixed45 = count(act310, "(?m)^[ \\t]*val[ \\t]+navMicroSec[ \\t]*=[ \\t]*45[ \\t]*$");
             int boundSaveable = count(act310,
                     "navMicroSec[^\\n]*rememberSaveable|rememberSaveable[^\\n]*navMicroSec");
-            check("f0ece4401a371dfc6d3931e0009b47c03951394e665d60bf82ed1f0209ac029f".equals(dyNormHash)
+                        check("c451feef1f4e446e11d12c53ec042dbac5442256349b6745cf3a6de1c943bbab".equals(dyNormHash)
                             && fetchLines == 11
                             && "e9395fb642fcb791b8af95ce676fb109cd7c16196ac7ff8d9242def575ba39a7".equals(fetchHash)
                             && t60 == 1 && t2 == 1 && t20 == 1 && t90 == 1
                             && fixed45 == 1 && boundSaveable == 0,
-                    "T-52-A4 DouyinHook 归一化重算/fetchInterval/navMicroSec 三处零改",
+                    "T-52-A4 DouyinHook 归一化重算/fetchInterval/navMicroSec 三处零改（v3.0.26 主页放行授权新增，基线重锁）",
                     "dyNorm=" + dyNormHash.substring(0, 8) + " fetchLines=" + fetchLines
                             + " fetch=" + fetchHash.substring(0, 8)
                             + " 60000/2000/20000/90000=" + t60 + "/" + t2 + "/" + t20 + "/" + t90
@@ -2983,17 +2984,17 @@ public class FeatureAuditTest {
                     // （v3.0.14：containsHeadsUp 双判据 + hidden 下窗口可见时仍推进偏移）。
                     // v3.0.17：dimByZone 几何分区透明（HyperOS 类名不命中兜底），基线重锁
                     {"Controller.java", "d499b62a4a9c67e6b3baf22b8df591e61c4d0d30faf7fa3fa4abd11188dafa64"},
-                    {"Config.java", "772e1bee87f099efa467fa8d5b113da8bd18cab4afb8300faf682b93ec05bb30"},
+                    {"Config.java", "beed0f901fcbbd45266da63b55f32a72209b0ddd25ec21b1bb8cff0e9a1b4fda"},
                     // v3.0.16 授权改动：enable_app_overlay 默认值 0→1（仅无障碍引擎生效）
-                    {"ConfStore.java", "44f94cd303b3d8a07403d0e6d9361e1c700f59f98a60a9f99fc4d73de06ac192"},
+                    {"ConfStore.java", "e62acfdf8be29363e62ca48de3685b934f33ae45db4e3ee0e263d05227990248"},
                     {"ThhLiveGate.java", "09903e9bb86f1f9f044c04a869df71a9c6e31ea8d8e4746aa7381c0e81226c5f"},
                     // v3.0.16 授权改动：应用内遮盖通道重开（仅 overlay 引擎）
-                    {"BurnInMaskService.java", "7ca381181dbc1012478898c545e56d0d0e42d417fcaff8129fdb0c2b2ba0f908"},
-                    {"BootReceiver.java", "b3683f5ad949f0b68f5d5de2464befa473993cda84192d7b7baa8f99fd84685e"},
+                    {"BurnInMaskService.java", "675b2b9976d240f3904956f4658a8e82cd81e49c3b1378f984e791e34b7e3e37"},
+                    {"BootReceiver.java", "c582d9612662b2326f9354bfdec98c4e42947f6b3519e562d309492dd9afa58d"},
                     {"VideoApps.java", "a2d2e5d5d3ccd65e6dc2960a2e80d7237ede53230161fdf790f6812327dddea4"},
                     {"VideoAppProbe.java", "5ea4249ba96be6c2fc3a948d8cced94297d073ea8f3c91656339d361cc157781"},
                     {"LivePause.java", "a831315930feaf768dbf00dcdec317338a7ddce6707f3e134142a5b951aae984"},
-                    {"LspScope.java", "0a113408c4e7019c32529f347fc1693659dcd9e4afcfeccff10fb41d098fbc4e"},
+                    {"LspScope.java", "ae13eb8546982734559eb6c4c0f69a6f99a19c33ee8f9d2b361a00bb1c23dd3f"},
                     {"AppRegions.java", "10ce4e92cc47027ca4cdc4e316825bc7a6cc937aa30a9536514c7a4994ae9563"}
             };
             int ok = 0;
@@ -3136,14 +3137,14 @@ public class FeatureAuditTest {
 
             // G8 · 越界哈希零改（G8a 冻结 8 文件）+ 授权/无障碍文件基线（实测值，待主理人复核锁定）
             String[][] p1Frozen = {
-                    {"Config.java",      "772e1bee87f099efa467fa8d5b113da8bd18cab4afb8300faf682b93ec05bb30"},
+                    {"Config.java",      "beed0f901fcbbd45266da63b55f32a72209b0ddd25ec21b1bb8cff0e9a1b4fda"},
                     // v3.0.16 授权改动：enable_app_overlay 默认 1（仅无障碍引擎生效）
-                    {"ConfStore.java",   "44f94cd303b3d8a07403d0e6d9361e1c700f59f98a60a9f99fc4d73de06ac192"},
+                    {"ConfStore.java",   "e62acfdf8be29363e62ca48de3685b934f33ae45db4e3ee0e263d05227990248"},
                     {"ThhLiveGate.java", "09903e9bb86f1f9f044c04a869df71a9c6e31ea8d8e4746aa7381c0e81226c5f"},
                     {"VideoApps.java",   "a2d2e5d5d3ccd65e6dc2960a2e80d7237ede53230161fdf790f6812327dddea4"},
                     {"VideoAppProbe.java","5ea4249ba96be6c2fc3a948d8cced94297d073ea8f3c91656339d361cc157781"},
                     {"LivePause.java",   "a831315930feaf768dbf00dcdec317338a7ddce6707f3e134142a5b951aae984"},
-                    {"LspScope.java",    "0a113408c4e7019c32529f347fc1693659dcd9e4afcfeccff10fb41d098fbc4e"},
+                    {"LspScope.java",    "ae13eb8546982734559eb6c4c0f69a6f99a19c33ee8f9d2b361a00bb1c23dd3f"},
                     {"AppRegions.java",  "10ce4e92cc47027ca4cdc4e316825bc7a6cc937aa30a9536514c7a4994ae9563"}
             };
             int okP1 = 0;
@@ -3161,7 +3162,7 @@ public class FeatureAuditTest {
                     "match=" + okP1 + "/" + p1Frozen.length + " bad=" + badP1);
             // G8c：无障碍侧三文件零改（哈希=开工前基线，实施者按 sha256sum 实测，待主理人复核）
             String cfgH = sha256(read(dir.resolve("../../../../../res/xml/accessibility_service_config.xml")));
-            boolean a11yZero = "7ca381181dbc1012478898c545e56d0d0e42d417fcaff8129fdb0c2b2ba0f908".equals(sha256(bmsRaw))
+            boolean a11yZero = "675b2b9976d240f3904956f4658a8e82cd81e49c3b1378f984e791e34b7e3e37".equals(sha256(bmsRaw))
                     && "c56258f24f1395ad4c2b6510b165a88785294109227cdf6d04a151938ba8e23c".equals(sha256(read(dir.resolve("OverlayGeometry.java"))))
                     && "8b1bc2ba4e8de34ea02acd32ecce602b99e5a1b690da8b7456740800a77201c6".equals(cfgH);
             check(a11yZero, "T-54-G8c 无障碍侧 3 文件逐字零改（含 config 未声明通知事件）", "");
@@ -3243,9 +3244,9 @@ public class FeatureAuditTest {
             java.util.regex.Matcher nm313 = java.util.regex.Pattern
                     .compile("versionName\\s+\"([^\"]+)\"").matcher(gradle313);
             boolean ver313 = cm313.find() && nm313.find()
-                    && Integer.parseInt(cm313.group(1)) == 82
-                    && "3.0.22".equals(nm313.group(1));
-            check(ver313, "T-55-A5 版本锚点 82 / 3.0.22", "");
+                    && Integer.parseInt(cm313.group(1)) == 86
+                    && "3.0.26".equals(nm313.group(1));
+            check(ver313, "T-55-A5 版本锚点 86 / 3.0.26", "");
 
             // A6 · 变异实证：把 INFO 类目改坏，A1 守卫必须失效（证明断言非空转）
             String mutMan = man313.replace("android.intent.category.INFO", "android.intent.category.BOGUS");
@@ -3445,6 +3446,80 @@ public class FeatureAuditTest {
             String act322 = read(dir.resolve("MainActivity.kt"));
             check(act322.contains("已开启 $generalOn/4 项"),
                     "T-62-A3 通用页计数口径与四项开关一致（3↔4 错位已修）", "");
+        }
+
+        // ---------- T-63 v3.0.23 自检证据源改为双层，去掉「没加载模块」误判 ----------
+        System.out.println();
+        System.out.println("== T-63 注入证据 ==");
+        {
+            String lsp323 = stripComments(read(dir.resolve("LspScope.java")));
+            check(lsp323.contains("static Set<String> lspdLogHits") && lsp323.contains("/data/adb/lspd/log/modules.log"),
+                    "T-63-A1 增加 LSPosed 日志命中解析（root 可读，三方进程写盘不受限）", "");
+            check(!lsp323.contains("这不是定位算法的问题")
+                            && lsp323.contains("证据缺失") && lsp323.contains("不能据此断定"),
+                    "T-63-A2 证据为空时不下「LSPosed 没加载模块」的断言", "");
+            String act323 = read(dir.resolve("MainActivity.kt"));
+            check(act323.contains("LspScope.logHitsCached()") && act323.contains("LspScope.warmLogHits(context)"),
+                    "T-63-A3 recentlyInjected 补日志证据（UI 线程只读缓存，su 走后台预热）", "");
+            check(act323.contains("红果注入未确认") && !act323.contains("红果未注入 · 待勾选作用域"),
+                    "T-63-A4 橙卡标题不再武断写「待勾选作用域」", "");
+            String conf323 = stripComments(read(dir.resolve("ConfStore.java")));
+            check(conf323.contains("lsp=\" + lsp") && conf323.contains("不代表没加载"),
+                    "T-63-A5 SELF 行新增 lsp= 字段，hook=NONE 文案不再断定没加载", "");
+        }
+
+        // ---------- T-64 v3.0.24 实时前台判断 + 单一常驻通知 ----------
+        System.out.println();
+        System.out.println("== T-64 常驻通知 ==");
+        {
+            String man324 = read(dir.resolve("../../../../../AndroidManifest.xml"));
+            check(man324.contains("android.permission.FOREGROUND_SERVICE_SPECIAL_USE")
+                            && man324.contains("android:foregroundServiceType=\"specialUse\"")
+                            && man324.contains(".GuardService"),
+                    "T-64-A1 前台服务按 Android 14+ 要求声明 specialUse 与权限", "");
+            String guard324 = stripComments(read(dir.resolve("GuardService.java")));
+            check(countLiteral(guard324, "NOTIF_ID = 1001") == 1
+                            && countLiteral(guard324, "new NotificationChannel(") == 1
+                            && guard324.contains("setOngoing(true)"),
+                    "T-64-A2 只有一条通知：固定 ID + 单通道 + ongoing",
+                    "id=" + countLiteral(guard324, "NOTIF_ID = 1001") + " ch=" + countLiteral(guard324, "new NotificationChannel(")
+                            + " ongoing=" + guard324.contains("setOngoing(true)"));
+            check(guard324.contains("3L * 3600_000L") && guard324.contains("30L * 60_000L"),
+                    "T-64-A3 低频：定时 3 小时，事件触发 30 分钟节流（不做实时刷新）", "");
+            String bms = stripComments(read(dir.resolve("BurnInMaskService.java")));
+            check(bms.contains("ForegroundWatch.onForeground(this, pkg)")
+                            && bms.contains("TYPE_WINDOW_STATE_CHANGED"),
+                    "T-64-A4 实时判断接在无障碍窗口切换事件上", "");
+            String fw = stripComments(read(dir.resolve("ForegroundWatch.java")));
+            check(fw.contains("VideoApps.isTarget(pkg)") && fw.contains("ConfigProvider.lastInject"),
+                    "T-64-A5 双证据：无障碍实时 + LSPosed 注入回传", "");
+            String act324 = read(dir.resolve("MainActivity.kt"));
+            check(act324.contains("GuardService.ensure(this)")
+                            && act324.contains("POST_NOTIFICATIONS")
+                            && act324.contains("ForegroundWatch.recentTarget(context)"),
+                    "T-64-A6 可见时启动服务 + 申请通知权限 + 首页显示当前前台", "");
+            String cp324 = stripComments(read(dir.resolve("ConfigProvider.java")));
+            check(cp324.contains("GuardService.refreshIfDue(ctx)"),
+                    "T-64-A7 LSPosed 注入回传时触发通知刷新（每次注入显示一下）", "");
+        }
+
+        // ---------- T-65 v3.0.25 闪退止血 + 崩溃可观测 ----------
+        System.out.println();
+        System.out.println("== T-65 闪退修复 ==");
+        {
+            String cfg325 = stripComments(read(dir.resolve("Config.java")));
+            int selfGuard = cfg325.indexOf("\"io.github.wumisc.antiburn\".equals(pkg)");
+            boolean selfExempt = selfGuard > 0
+                    && cfg325.substring(selfGuard, Math.min(cfg325.length(), selfGuard + 120)).contains("return false");
+            check(selfExempt,
+                    "T-65-A1 本模块自己的界面不再干预（用户设置 App 时不再拖崩 SystemUI）", "");
+            String conf325 = stripComments(read(dir.resolve("ConfStore.java")));
+            check(conf325.contains("private static boolean appendRaw(")
+                            && conf325.contains("public static boolean appendRawLine("),
+                    "T-65-A2 日志追加返回真实成败（分区存储失败不再被当成已写）", "");
+            String app325 = stripComments(read(dir.resolve("AbApplication.java")));
+            check(app325.contains("if (ConfStore.appendRawLine(replay))") && app325.contains("pend.delete()"),
+                    "T-65-A3 崩溃回放走 su，写成功才删 pending（下次闪退能看到堆栈）", "");
         }
 
         System.out.println();

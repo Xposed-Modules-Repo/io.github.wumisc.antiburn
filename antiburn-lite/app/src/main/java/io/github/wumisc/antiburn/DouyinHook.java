@@ -131,6 +131,16 @@ public final class DouyinHook {
     private static final String[] DRAMA_NAV_KEYS = {"首页", "剧场", "我的"};
     /** v2.6.9：当前页命中直播文本特征。命中则视频 App 整页跳过 App 内区域隐藏，避免误伤弹幕 / 礼物栏。 */
     private static volatile boolean videoLivePage = false;
+    /**
+     * v3.0.26：当前页面是个人主页 / 作品列表页（整页放行）。
+     *
+     * <p>真机反馈：在他人主页往下翻作品时连续出现白屏，三块白正对应三个作品。
+     * 主页不是全屏播放页，作品封面是普通 ImageView，被几何规则当成「固定控件」
+     * 透明化后会露出页面白底 —— 模块的防烧屏收益在这个页面接近于零，直接放行最稳。</p>
+     */
+    private static volatile boolean profilePage = false;
+    /** v3.0.26：最近一次 rescan 的根视图，hideEnabled 复用它做主页判断，避免每 tick 全树扫。 */
+    private static volatile View lastRoot;
     /** v2.6.9：宿主进程自身包名，供 shouldIntervene 判定白名单豁免。 */
     private static volatile String selfPkg = "";
     private static volatile View topBar;       // 顶部导航
@@ -543,6 +553,9 @@ public final class DouyinHook {
 
     private static void rescan(ViewGroup root) {
         try {
+            // v3.0.26：主页判定随布局变化重算一次（hideEnabled 每 tick 只读结果）
+            lastRoot = root;
+            profilePage = !isVideoApp && isProfilePage(root);
             List<View> rights = collectRight(root, 4);
             // 补充兜底：贴右缘竖列（不限 childCount，防止个别视频把点赞列分组成小容器而漏藏）
             for (View e : collectRightEdge(root, 4)) {
@@ -2103,7 +2116,12 @@ public final class DouyinHook {
             // 直接否决，表现就是「快手没反应、B站还是老样子」，而日志里看不出任何
             // 异常（because 根本不进隐藏分支）。App 内区域是用户按 App 单独打开的，
             // 不该再被系统栏的名单二次过滤，统一为只看本页是否直播。
-            boolean allowed = !videoLivePage;
+            // v3.0.26：快手 / B站 直播间也要隐藏固定控件。旧版 `!videoLivePage` 把两者
+            // 的四个区域开关整体否决，用户真机反馈「直播顶部头像/在线人数、右侧礼物列、
+            // 底部输入条一个都没藏」。抖音 / 红果仍保留「进直播还原」的历史约定，
+            // 只对 isVideoApp（快手 / B站）放开；视频画面保护仍由 safeToHide 的
+            // containsVideoSurface / tooBigToHide 兜底。
+            boolean allowed = !videoLivePage || isVideoApp;
             boolean mR = isKuaishou ? Config.enableKsRight : Config.enableBiliRight;
             // v2.9.2：B站只保留「右侧点赞/收藏/评论」一个区域。真机反复验证的结论是
             // 顶部 / 底部 / 角落三项在 B站 8.9x 上识别不到稳定容器，开关打开也没有效果，
@@ -2198,6 +2216,12 @@ public final class DouyinHook {
             showAll();
             return;
         }
+        // v3.0.26：个人主页 / 作品列表页整页放行，否则作品封面会被当固定控件透明化 → 白屏。
+        // 只在抖音 / 红果生效，快手 / B站 的 isVideoApp 分支不参与。
+        if (profilePage && !isVideoApp) {
+            showAll();
+            return;
+        }
         // v2.9.2：直播间通道断开时，直播页只做恢复，绝不隐藏任何普通区域。
         // 布局监听在直播页仍会调用本方法，这里必须挡住，否则「判定是直播、却按普通页藏」
         // 会把弹幕输入框与礼物栏一起抹掉。
@@ -2233,7 +2257,7 @@ public final class DouyinHook {
         if (isVideoApp) {
             boolean on = (isKuaishou ? Config.enableKuaishou : Config.enableBilibili)
                     && !ConfStore.ENGINE_OVERLAY.equals(Config.engine)
-                    && !videoLivePage;
+                    && (!videoLivePage || isVideoApp);
             dLike = on && (isKuaishou ? Config.enableKsRight : Config.enableBiliRight);
             // v2.9.2：B站只剩右侧一项，其余三项恒 false（开关已从 UI 删除）
             dTop = on && isKuaishou && Config.enableKsTop;
@@ -3334,6 +3358,57 @@ public final class DouyinHook {
             }
         }
         return false;
+    }
+
+    /** v3.0.26：子树里是否有任一文案命中（深度 12 与 MAX_DEPTH 取小，避免深树过大开销）。 */
+    private static boolean hasAnyText(View v, int depth, String... keys) {
+        if (v == null || depth > 12 || depth > MAX_DEPTH || v.getVisibility() == View.GONE) {
+            return false;
+        }
+        if (v instanceof TextView) {
+            CharSequence t = ((TextView) v).getText();
+            CharSequence d = v.getContentDescription();
+            String ts = t == null ? "" : t.toString();
+            String ds = d == null ? "" : d.toString();
+            for (String k : keys) {
+                if (ts.contains(k) || ds.contains(k)) {
+                    return true;
+                }
+            }
+        }
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) {
+                if (hasAnyText(g.getChildAt(i), depth + 1, keys)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * v3.0.26：个人主页 / 作品列表页判定。
+     *
+     * <p>三类证据任一成立即可，前提是整页没有视频画面（视频页的播放器一旦命中就否决，
+     * 不给「主页豁免」误伤视频页的机会）：</p>
+     * <ol>
+     *   <li>「搜索TA的作品」搜索框 —— 他人主页独有；</li>
+     *   <li>「作品」+ 「粉丝 / 获赞 / 私密」 —— 主页统计区；</li>
+     *   <li>「编辑资料」 —— 自己主页。</li>
+     * </ol>
+     */
+    private static boolean isProfilePage(View root) {
+        if (root == null) {
+            return false;
+        }
+        if (containsVideoSurface(root, 0)) {
+            return false;
+        }
+        if (hasAnyText(root, 0, "搜索TA", "搜索他的作品", "编辑资料")) {
+            return true;
+        }
+        return hasAnyText(root, 0, "作品") && hasAnyText(root, 0, "粉丝", "获赞", "私密");
     }
 
     // ---------- v2.6.9：底部中央独立圆形「+」发布按钮 ----------
