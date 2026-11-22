@@ -106,6 +106,14 @@ public final class Config {
      */
     public static volatile boolean enableAppOverlay = false;
     /**
+     * v3.2.2：无障碍模式下通知弹出时顶部区让开（enable_a11y_yield_notify，默认开）。
+     *
+     * <p>无障碍通道是「盖黑」：顶部那块黑矩形的 z-order 高于 heads-up 横幅，
+     * 通知弹在状态栏下方时会被整块盖住。这里给用户一个关掉的余地，
+     * 真正的消费方是 {@link BurnInMaskService}（收到通知事件后临时撤掉顶部区）。</p>
+     */
+    public static volatile boolean enableA11yYieldNotify = true;
+    /**
      * v2.8.3：SystemUI 进程内的覆盖层兜底。
      *
      * <p>与 {@link #enableAppOverlay} 的区别是「谁来画」：无障碍通道要用户开服务，
@@ -765,6 +773,7 @@ public final class Config {
         boolean ic = enableIcon, lg = enableLog;
         boolean ao = enableAppOverlay;
         boolean so = enableSysOverlay;
+        boolean ayn = enableA11yYieldNotify;
         boolean sb = enableStatusBar;
         boolean scl = statusClockOn, sic = statusIconsOn;
         String style = uiStyle;
@@ -873,6 +882,7 @@ public final class Config {
                 // v2.8.4：暂停生效。配置里即使还是 1（v2.8.2/2.8.3 写进去的），
                 // 也不再生效 —— 否则用户升级后照样被黑块盖住。
                 case "enable_app_overlay": ao = false; break;
+                case "enable_a11y_yield_notify": ayn = "1".equals(v); break;
                 case "enable_sys_overlay": so = false; break;
                 case "custom_poems":
                     customDecoded = ConfStore.decodeValue(v);
@@ -966,6 +976,7 @@ public final class Config {
         enableStatusBar = sb;
         enableLog = lg;
         enableAppOverlay = ao;
+        enableA11yYieldNotify = ayn;
         enableSysOverlay = so;
         uiStyle = style;
         customPoems = custom;

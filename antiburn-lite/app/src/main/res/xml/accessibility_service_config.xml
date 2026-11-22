@@ -2,7 +2,9 @@
 <!--
   无障碍服务声明。
 
-  - accessibilityEventTypes 只要 typeWindowStateChanged：遮盖引擎靠它跟踪前台包名做名单判定，
+  - accessibilityEventTypes 收 typeWindowStateChanged + typeNotificationStateChanged：
+    前者用来跟踪前台包名做名单判定；后者在 v3.2.2 新增，专为「通知弹出时让开顶部区」——
+    无障碍是盖黑，顶部黑块会挡住悬浮通知横幅，收不到通知事件就无从避让。
     其它事件（点击、滚动）一律不收，减少对系统的事件分发负担。
   - canRetrieveWindowContent 必须为 true：要读系统栏窗口的真实 bounds（刘海、横屏侧边三键
     靠它才能盖准）。代价是设置页会显示「可读取屏幕内容」的提示，属这一能力的固有说明。
@@ -11,7 +13,7 @@
   - notificationTimeout 给 100ms：窗口切换事件本身不密集，100ms 合并足够且更省电。
 -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-    android:accessibilityEventTypes="typeWindowStateChanged"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeNotificationStateChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagDefault|flagRetrieveInteractiveWindows|flagReportViewIds"
     android:canRetrieveWindowContent="true"

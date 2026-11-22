@@ -226,6 +226,7 @@ public final class ConfStore {
         // 免 root 没有位置微移，这是保护抖音/红果/快手/B站固定区域的唯一通道；
         // LSPosed 引擎下 Hook 侧仍强制不铺黑（Config.ao=false），两套互不干扰。
         sb.append("enable_app_overlay=1\n");
+        sb.append("enable_a11y_yield_notify=1\n");
         sb.append("enable_sys_overlay=0\n");
         return sb.toString();
     }

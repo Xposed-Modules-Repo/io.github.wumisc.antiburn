@@ -70,6 +70,15 @@ public class BurnInMaskService extends AccessibilityService {
     /** 预览遮盖时长：给用户验证「到底盖没盖住」用 */
     public static final long PREVIEW_MS = 5000L;
     /**
+     * v3.2.2：收到通知后顶部区让开时长。
+     *
+     * <p>无障碍通道是「盖黑」：顶部那块不透明黑矩形 z-order 高于 heads-up 横幅，
+     * 横幅弹在状态栏下方时正好被它盖住，用户看不到消息。无障碍服务原先只监听
+     * typeWindowStateChanged，根本不知道有通知弹出；这里收到通知事件就让开 10 秒，
+     * 横幅收起后再恢复遮盖。开关是通用页「通知弹出时让开」（默认开）。</p>
+     */
+    private static final long YIELD_NOTIFY_MS = 10_000L;
+    /**
      * 应用内遮盖通道（v3.0.16 重新启用）。
      *
      * <p>v2.8.6 曾在 LSPosed 引擎下硬关这条通道（黑块压画面、退出后残留）。
@@ -256,6 +265,8 @@ public class BurnInMaskService extends AccessibilityService {
     private int statusBarH;
     private int navBarSize;
     private int navSide = OverlayGeometry.NAV_BOTTOM;
+    /** v3.2.2：通知让开的截止时刻（uptimeMillis）；0 = 无。 */
+    private long yieldUntil = 0L;
 
 
     /** 一份配置快照，避免每帧反复读盘 */
@@ -297,6 +308,8 @@ public class BurnInMaskService extends AccessibilityService {
         // v3.0.16：默认开。免 root 的 overlay 引擎没有位置微移，应用内遮盖是唯一防护；
         // LSPosed 引擎由 step() 里的 c.maskAllowed 拦掉，不会被铺黑。
         boolean appAreaOn = true;
+        /** v3.2.2：通知弹出时顶部区让开（默认取 {@link Config#enableA11yYieldNotify}）。 */
+        boolean yieldNotify = Config.enableA11yYieldNotify;
         /** 当前前台应用归属；NONE 表示不是四个目标视频 App，不画应用内区域。 */
         VideoApps.Kind appKind = VideoApps.Kind.NONE;
         /** 用户是否显式配置过该 App 的区域开关；没配过就按默认三区全画，保证开箱可用。 */
@@ -409,6 +422,16 @@ public class BurnInMaskService extends AccessibilityService {
     public void onAccessibilityEvent(AccessibilityEvent event) {
         try {
             if (event == null) {
+                return;
+            }
+            if (event.getEventType() == AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED) {
+                // v3.2.2：无障碍是「盖黑」——顶部那块黑矩形会连悬浮通知横幅一起盖住。
+                // 原先只监听窗口切换，收到通知事件就临时撤掉顶部区 10 秒，横幅消失后再盖上。
+                if (cfg.yieldNotify) {
+                    yieldUntil = SystemClock.uptimeMillis() + YIELD_NOTIFY_MS;
+                    handler.removeCallbacks(tick);
+                    handler.post(tick);
+                }
                 return;
             }
             if (event.getEventType() != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
@@ -646,6 +669,7 @@ public class BurnInMaskService extends AccessibilityService {
                 + " sb=" + c.statusBarOn + " nav=" + c.navOn
                 + " sys=" + sysBar + " app=" + VideoApps.label(c.appKind)
                 + " appOn=" + c.appAreaOn
+                + " yield=" + (SystemClock.uptimeMillis() < yieldUntil)
                 + " areas=" + (c.appRight ? "R" : "-") + (c.appTop ? "T" : "-")
                 + (c.appBottom ? "B" : "-") + (c.appCorner ? "C" : "-")
                 + " fallback=" + (appArea && !sysBar)
@@ -739,6 +763,8 @@ public class BurnInMaskService extends AccessibilityService {
                         c.hideSec = clampDur(v, c.hideSec, 5);
                     } else if ("show_duration".equals(k)) {
                         c.showSec = clampDur(v, c.showSec, 1);
+                    } else if ("enable_a11y_yield_notify".equals(k)) {
+                        c.yieldNotify = "1".equals(v);
                     } else if ("enable_app_overlay".equals(k)) {
                         // v3.0.16：读取真实开关。仅 overlay 引擎下由 step() 放行，
                         // LSPosed 引擎仍不铺黑（尊重 v2.8.6 的「黑块压画面」反馈）。
@@ -865,6 +891,10 @@ public class BurnInMaskService extends AccessibilityService {
             return out;
         }
         int mask = AppRegions.mask(c.appRight, c.appTop, c.appBottom, c.appCorner);
+        // v3.2.2：通知横幅期间让开顶部区（右侧列 / 底部 / 角落照旧遮）
+        if (c.yieldNotify && SystemClock.uptimeMillis() < yieldUntil) {
+            mask &= ~AppRegions.T;
+        }
         for (int[] r : AppRegions.rects(screenW, screenH, Math.max(0, statusBarH), mask)) {
             addRect(out, r[0], r[1], r[2], r[3]);
         }

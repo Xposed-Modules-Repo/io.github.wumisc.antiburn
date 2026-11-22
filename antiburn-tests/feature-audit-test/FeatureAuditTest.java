@@ -40,7 +40,9 @@ public class FeatureAuditTest {
             "Controller.java", "DouyinHook.java", "AntiburnTile.java",
             "XposedInit.java", "FeatureGuard.java", "ConfStore.java",
             // v2.8.3：SystemUI 进程内的应用内区域覆盖层，同样在 Hook 侧消费 Config
-            "SysOverlay.java", "AppRegions.java");
+            "SysOverlay.java", "AppRegions.java",
+            // v3.2.2：无障碍遮罩服务在 Hook 侧消费 Config（通知让开开关）
+            "BurnInMaskService.java");
 
     /**
      * 已知「有 Hook 实现但无界面入口」的字段。
@@ -1801,8 +1803,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 100
-                    && "3.2.1".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 101
+                    && "3.2.2".equals(nm.group(1));
             check(ok, "T-42b 版本锚点恰为 99 / 3.2（非区间，锁死发布锚点）", "");
         }
         check(hook297raw.contains("SAFE_RESTORE") && hook297raw.contains("DRAMA_PAYWALL_HIDE"),
@@ -1877,8 +1879,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 100
-                    && "3.2.1".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 101
+                    && "3.2.2".equals(nm.group(1));
             // 与 T-42b 断言同源，是发布前的双重防回退锁，不冒充新增不变量（评审建议改标签）。
             check(ok, "T-43c P3 版本锚点与 T-42b 双重锁定（99/3.2）（发布前防回退，非新增不变量）", "");
         }
@@ -1916,8 +1918,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 100
-                    && "3.2.1".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 101
+                    && "3.2.2".equals(nm.group(1));
             check(ok, "T-44c 版本号恰为 99 / 3.2（发布锚点）", "");
         }
 
@@ -1959,8 +1961,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 100
-                    && "3.2.1".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 101
+                    && "3.2.2".equals(nm.group(1));
             check(ok, "T-45c 版本号恰为 99 / 3.2（发布锚点）", "");
         }
 
@@ -2036,8 +2038,8 @@ public class FeatureAuditTest {
             // ⑤ 版本锚点 + 辅助方法只读性
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
-            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 100
-                    && "3.2.1".equals(nm.group(1));
+            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 101
+                    && "3.2.2".equals(nm.group(1));
             String helper = stripComments(slice(dy304raw, "private static boolean hasChildByClass(View v, String target)",
                     "private static int scoreRight(ViewGroup g)"));
             boolean readonly = helper.contains("MAX_DEPTH") && helper.contains("catch (Throwable")
@@ -2081,8 +2083,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 100
-                    && "3.2.1".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 101
+                    && "3.2.2".equals(nm.group(1));
             check(ok, "T-47c 版本号恰为 99 / 3.2（v3.0.13 发布锚点）", "");
         }
 
@@ -2349,7 +2351,7 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ver = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 100 && "3.2.1".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 101 && "3.2.2".equals(nm.group(1));
             check(ver, "T-48-VER 版本锚点 99/3.2（T-42b~T-47c 六处已同步）", "");
         }
 
@@ -3001,12 +3003,12 @@ public class FeatureAuditTest {
                     // v3.0.31：分区能力探测 probeLeaves + 不可分区降级，基线重锁
                     // v3.0.35：AOSP/Pixel 薄命中补遮，基线重锁
                     {"Controller.java", "0f5e18c212d8981c96a584368951330f5959c3ad186fed2704e138bb66eb1a49"},
-                    {"Config.java", "927b52ac1ac2cd743f3b8fbdd848b385bbff1fe3083729ec597cc5a178b3384f"},
+                    {"Config.java", "3de37d43e53da0c205fa9df955cfcb6de5ccaa934fe1ada6d69668ef492bc796"},
                     // v3.0.16 授权改动：enable_app_overlay 默认值 0→1（仅无障碍引擎生效）
-                    {"ConfStore.java", "65ff3d76f6ef05140d238cb53a9430757bce340079eb754d10a20cdd35b14a7b"},
+                    {"ConfStore.java", "abe7b6034db15577b1b89c49007ebd78db12347fedaa99af9e3465c986ee73cb"},
                     {"ThhLiveGate.java", "09903e9bb86f1f9f044c04a869df71a9c6e31ea8d8e4746aa7381c0e81226c5f"},
                     // v3.0.16 授权改动：应用内遮盖通道重开（仅 overlay 引擎）
-                    {"BurnInMaskService.java", "d3171b16e2ea36bc1891e57ee6eacb88f8132b9eaa154197d834f94eea4a0557"},
+                    {"BurnInMaskService.java", "013c9a3e8ba412179a359d3b2228025ae64f1169a059cd8972ccb04c77206761"},
                     {"BootReceiver.java", "8383a771e4ce1e3fc9d9fa7da4b6e00f66740a901a3a56ca8041b3c10ba2aeea"},
                     {"VideoApps.java", "a2d2e5d5d3ccd65e6dc2960a2e80d7237ede53230161fdf790f6812327dddea4"},
                     {"VideoAppProbe.java", "a3367842f05930d3698ac90f87325a910ce5d76eed2d06644d64f56155b49bb9"},
@@ -3132,12 +3134,19 @@ public class FeatureAuditTest {
             String sb = slice(ogo, "public static Rect statusBar", "\n    }");
             check(sb.contains("Math.min(statusBarHeight") && sb.contains("screenH / 4"),
                     "T-54-G6a statusBar 几何上限 h=min(statusBarHeight,..) 未改（INV-4）", "");
-            check(!bmsRaw.contains("TYPE_NOTIFICATION_STATE_CHANGED")
-                            && !bmsRaw.contains("HEADS_UP_GRACE_MS") && !bmsRaw.contains("topForHeadsUp")
-                            && !bmsRaw.contains("inHeadsUpGrace"),
-                    "T-54-G6b 无障碍侧零通知事件/零 grace（安全 A2）", "");
-            check(!cfg.contains("typeNotificationStateChanged"),
-                    "T-54-G6c config 未声明通知事件（安全 A2）", "");
+            // v3.2.2 授权变更：无障碍侧新增「通知事件 → 顶部区让开」。
+            // 约束不放松：只能用于让开（YIELD_NOTIFY_MS），不得引入任何 heads-up grace /
+            // topForHeadsUp 之类的改动路径；开关必须存在（c.yieldNotify）。
+            check(!bmsRaw.contains("HEADS_UP_GRACE_MS") && !bmsRaw.contains("topForHeadsUp")
+                            && !bmsRaw.contains("inHeadsUpGrace")
+                            && bmsRaw.contains("TYPE_NOTIFICATION_STATE_CHANGED")
+                            && bmsRaw.contains("YIELD_NOTIFY_MS")
+                            && bmsRaw.contains("c.yieldNotify"),
+                    "T-54-G6b 无障碍通知事件仅用于顶部让开（无 grace / 无 topForHeadsUp）", "");
+            check(cfg.contains("typeNotificationStateChanged")
+                            && cfg.contains("typeWindowStateChanged")
+                            && !cfg.contains("typeAllMask"),
+                    "T-54-G6c config 只多声明通知事件一种（仍不含 typeAllMask）", "");
 
             // G7 · 纯几何行为断言（反射真实 OverlayGeometry.statusBar）
             Class<?> ogeh = Class.forName("io.github.wumisc.antiburn.OverlayGeometry");
@@ -3155,9 +3164,9 @@ public class FeatureAuditTest {
 
             // G8 · 越界哈希零改（G8a 冻结 8 文件）+ 授权/无障碍文件基线（实测值，待主理人复核锁定）
             String[][] p1Frozen = {
-                    {"Config.java",      "927b52ac1ac2cd743f3b8fbdd848b385bbff1fe3083729ec597cc5a178b3384f"},
+                    {"Config.java",      "3de37d43e53da0c205fa9df955cfcb6de5ccaa934fe1ada6d69668ef492bc796"},
                     // v3.0.16 授权改动：enable_app_overlay 默认 1（仅无障碍引擎生效）
-                    {"ConfStore.java",   "65ff3d76f6ef05140d238cb53a9430757bce340079eb754d10a20cdd35b14a7b"},
+                    {"ConfStore.java",   "abe7b6034db15577b1b89c49007ebd78db12347fedaa99af9e3465c986ee73cb"},
                     {"ThhLiveGate.java", "09903e9bb86f1f9f044c04a869df71a9c6e31ea8d8e4746aa7381c0e81226c5f"},
                     {"VideoApps.java",   "a2d2e5d5d3ccd65e6dc2960a2e80d7237ede53230161fdf790f6812327dddea4"},
                     {"VideoAppProbe.java","a3367842f05930d3698ac90f87325a910ce5d76eed2d06644d64f56155b49bb9"},
@@ -3181,10 +3190,10 @@ public class FeatureAuditTest {
             // G8c：无障碍侧三文件零改（哈希=开工前基线，实施者按 sha256sum 实测，待主理人复核）
             String cfgH = sha256(read(dir.resolve("../../../../../res/xml/accessibility_service_config.xml")));
             boolean a11yZero = // v3.2 授权：MASK 日志签名对 fg 去抖（前台插件进程抖动不再每次写盘）
-                    "d3171b16e2ea36bc1891e57ee6eacb88f8132b9eaa154197d834f94eea4a0557".equals(sha256(bmsRaw))
+                    "013c9a3e8ba412179a359d3b2228025ae64f1169a059cd8972ccb04c77206761".equals(sha256(bmsRaw))
                     && "c56258f24f1395ad4c2b6510b165a88785294109227cdf6d04a151938ba8e23c".equals(sha256(read(dir.resolve("OverlayGeometry.java"))))
-                    && "8b1bc2ba4e8de34ea02acd32ecce602b99e5a1b690da8b7456740800a77201c6".equals(cfgH);
-            check(a11yZero, "T-54-G8c 无障碍侧 3 文件逐字零改（含 config 未声明通知事件）", "");
+                    && "9026c696e17c9f16dff35e1146a59117c81a680342a337ce8cf02dcb6a5488bb".equals(cfgH);
+            check(a11yZero, "T-54-G8c 无障碍侧 3 文件哈希==v3.2.2 基线（BMS/config 已授权变更）", "");
             // G8b：授权文件修复后基线（v3.0.14 偏移推进修复后实测，已按 sha256sum 重采；v3.0.30 三班倒重锁）
             // 注意：必须读原始文件（含注释），与 sha256sum 采集口径一致，不能用 stripComments 后的串。
             boolean authZero = "0f5e18c212d8981c96a584368951330f5959c3ad186fed2704e138bb66eb1a49"
@@ -3263,8 +3272,8 @@ public class FeatureAuditTest {
             java.util.regex.Matcher nm313 = java.util.regex.Pattern
                     .compile("versionName\\s+\"([^\"]+)\"").matcher(gradle313);
             boolean ver313 = cm313.find() && nm313.find()
-                    && Integer.parseInt(cm313.group(1)) == 100
-                    && "3.2.1".equals(nm313.group(1));
+                    && Integer.parseInt(cm313.group(1)) == 101
+                    && "3.2.2".equals(nm313.group(1));
             check(ver313, "T-55-A5 版本锚点 99 / 3.2", "");
 
             // A6 · 变异实证：把 INFO 类目改坏，A1 守卫必须失效（证明断言非空转）
@@ -3571,6 +3580,30 @@ public class FeatureAuditTest {
             check(c661.contains("\"nav_bar\"") && c661.contains("NavBarView")
                             && count(c661, "findNavById\\(root\\)") == 1,
                     "T-66-A6 导航栏：nav_bar 资源名 + NavBarView 类名 + rescan 按 id 兜底", "");
+        }
+
+        // ---------- T-67 v3.2.2 无障碍盖黑不再吞悬浮通知 ----------
+        {
+            String bms = read(dir.resolve("BurnInMaskService.java"));
+            String cfgx = read(dir.resolve("../../../../../res/xml/accessibility_service_config.xml"));
+            String act = read(dir.resolve("MainActivity.kt"));
+            String cf = read(dir.resolve("Config.java"));
+            String cs = read(dir.resolve("ConfStore.java"));
+
+            check(cfgx.contains("typeNotificationStateChanged") && cfgx.contains("typeWindowStateChanged"),
+                    "T-67-A1 config 同时声明窗口切换与通知事件", "");
+            check(bms.contains("TYPE_NOTIFICATION_STATE_CHANGED")
+                            && bms.contains("yieldUntil = SystemClock.uptimeMillis() + YIELD_NOTIFY_MS"),
+                    "T-67-A2 收到通知事件写入让开截止时刻", "");
+            check(bms.contains("mask &= ~AppRegions.T"),
+                    "T-67-A3 让开期间只撤顶部区（右侧/底部/角落照旧）", "");
+            check(bms.contains("c.yieldNotify") && bms.contains("if (cfg.yieldNotify)"),
+                    "T-67-A4 让开受开关门控（关掉后行为完全回到旧版）", "");
+            check(cf.contains("enableA11yYieldNotify") && cs.contains("enable_a11y_yield_notify=1")
+                            && act.contains("enableA11yYieldNotify") && act.contains("enable_a11y_yield_notify"),
+                    "T-67-A5 开关三层齐备：Config 字段 / 默认值 / App 读写", "");
+            check(act.contains("悬浮通知") && act.contains("通知弹出时让开"),
+                    "T-67-A6 首页与通用页都对用户明示这件事", "");
         }
 
         System.out.println();

@@ -199,6 +199,8 @@ data class AbState(
      * 所以这里默认 true 不会让 LSPosed 用户看到黑块。</p>
      */
     val enableAppOverlay: Boolean = true,
+    /** v3.2.2：无障碍模式下通知弹出时顶部区让开（默认开）。 */
+    val enableA11yYieldNotify: Boolean = true,
     /** v2.8.6：SystemUI 覆盖层同上，恒 false。 */
     val enableSysOverlay: Boolean = false,
     val enableDouyinTop: Boolean = false,
@@ -303,6 +305,8 @@ private val AbStateSaver = listSaver(
             s.enableKsFeedHits, s.enableDramaInfoHits,
             // v3.0.20：索引 47/48，状态栏左右两侧独立开关。
             s.statusClockOn, s.statusIconsOn,
+            // v3.2.2：索引 49，无障碍通知让开（旧存档缺项时 restore 取默认 true）
+            s.enableA11yYieldNotify,
         )
     },
     restore = { l: List<Any> ->
@@ -376,6 +380,8 @@ private val AbStateSaver = listSaver(
                 enableDramaInfoHits = Bool(46),
                 statusClockOn = Bool(47, true),
                 statusIconsOn = Bool(48, true),
+                // v3.2.2：无障碍通知让开，缺键按开（否则老用户升级后横幅继续被盖）
+                enableA11yYieldNotify = Bool(49, true),
             )
         }
     },
@@ -442,6 +448,8 @@ object AbConf {
             enableLog = b(map["enable_log"]),
             // v3.0.16：缺键默认开（免 root 开箱可用）；LSPosed 引擎由服务端拦掉，不铺黑
             enableAppOverlay = b(map["enable_app_overlay"], true),
+            // v3.2.2：缺键默认开
+            enableA11yYieldNotify = b(map["enable_a11y_yield_notify"], true),
             enableSysOverlay = false,
             enableDouyinTop = b(map["enable_douyin_top"]),
             enableDouyinBottom = b(map["enable_douyin_bottom"]),
@@ -532,6 +540,7 @@ object AbConf {
         // 能一眼看出「通道已废弃」而不是「漏写了」。字段本身恒 false（fromMap 强制、
         // AbState 默认 false、Saver 默认 false 三条路都是 false），所以这里恒写 0。
         lines["enable_app_overlay"] = if (s.enableAppOverlay) "1" else "0"
+        lines["enable_a11y_yield_notify"] = if (s.enableA11yYieldNotify) "1" else "0"
         lines["enable_sys_overlay"] = if (s.enableSysOverlay) "1" else "0"
         lines["enable_douyin_top"] = if (s.enableDouyinTop) "1" else "0"
         lines["enable_douyin_bottom"] = if (s.enableDouyinBottom) "1" else "0"
@@ -616,6 +625,7 @@ object AbConf {
         putB("enable_ball", old.enableBall, new.enableBall)
         putB("enable_log", old.enableLog, new.enableLog)
         putB("enable_app_overlay", old.enableAppOverlay, new.enableAppOverlay)
+        putB("enable_a11y_yield_notify", old.enableA11yYieldNotify, new.enableA11yYieldNotify)
         putB("enable_sys_overlay", old.enableSysOverlay, new.enableSysOverlay)
         putB("enable_douyin_top", old.enableDouyinTop, new.enableDouyinTop)
         putB("enable_douyin_bottom", old.enableDouyinBottom, new.enableDouyinBottom)
@@ -1504,6 +1514,18 @@ private fun EngineCard(
                 color = sub,
                 modifier = Modifier.padding(top = 6.dp),
             )
+
+            // v3.2.2：把无障碍引擎的固有缺陷直接写在卡片上，不让用户自己撞出来。
+            if (overlay) {
+                Text(
+                    "⚠ 免 root 是「盖黑」不是真隐藏：顶部那块黑矩形会连悬浮通知横幅一起盖住。" +
+                            "本版收到通知会自动让开顶部区 10 秒（通用页「通知弹出时让开」可关）。" +
+                            "你要是看不到微信/QQ 弹出的横幅，先确认那个开关是开的。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = UiPalette.accent(dark),
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+            }
 
             if (!hookUsable && !overlay) {
                 // 关键提示：新用户（无 root）第一次打开时，默认引擎是 lsposed，跑不起来。
@@ -2714,6 +2736,10 @@ private fun GeneralFeaturePage(
     OptionRow("无障碍应用内遮盖", "免 root：周期遮盖抖音/红果/快手/B站固定区域（会短暂出现黑块）",
         checked = state.enableAppOverlay, dark = dark,
         onCheckedChange = { on -> onStateChange { s -> s.copy(enableAppOverlay = on) } })
+    // v3.2.2：无障碍是「盖黑」，顶部黑块会挡住悬浮通知横幅。这条开关决定通知弹出时是否让开顶部区。
+    OptionRow("通知弹出时让开", "无障碍遮盖会盖住悬浮通知；开启后收到通知先撤掉顶部区 10 秒",
+        checked = state.enableA11yYieldNotify, dark = dark,
+        onCheckedChange = { on -> onStateChange { s -> s.copy(enableA11yYieldNotify = on) } })
     HintText("App 内固定控件按周期真隐藏：藏 ${state.hideSec} 秒（像素不发光）→ 显示 ${state.showSec} 秒。隐藏的是叠加在画面上的按钮/栏，不影响视频与弹幕本身。")
     HintText("隐藏期间这些控件不显示也不响应点击；需要操作时点悬浮球或等显示窗口。只在模块注入对应 App 进程时生效，首页「注入状态」可直接看有没有注入。")
     HintText("各 App 的区域开关决定哪几块参与隐藏；四个都关时按「右侧按钮列 + 顶部标题 + 底部导航」三区执行。")
