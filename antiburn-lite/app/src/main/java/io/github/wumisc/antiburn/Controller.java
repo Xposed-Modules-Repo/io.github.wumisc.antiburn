@@ -648,14 +648,25 @@ public final class Controller {
         return null;
     }
 
-    /** 按类名/id 判断是否为导航栏视图（排除状态栏相关类） */
+    /** 按类名/id 判断是否为导航栏视图（排除状态栏相关类）。
+     *  v3.2.1：Pixel 真机 nv=none —— AOSP 16 的导航栏可能挂在别的类名下，
+     *  只认 "NavigationBar" 会全落空。补 NavBar 类名与资源名（navigation_bar /
+     *  nav_bar / navigation_bar_container）两条识别，仍是精确词、不做模糊匹配。 */
     private static boolean isNavView(View v) {
         String n = v.getClass().getName();
-        if (n.contains("NavigationBar")) {
-            // 排除状态栏窗口类（不含 NavigationBar 字样，双保险）
+        if ((n.contains("NavigationBar") || n.contains("NavBarView"))
+                && !n.contains("StatusBar")) {
             return true;
         }
         try {
+            int id = v.getId();
+            if (id != View.NO_ID) {
+                String e = v.getResources().getResourceEntryName(id);
+                if (e != null && (e.equals("navigation_bar") || e.equals("nav_bar")
+                        || e.equals("navigation_bar_container"))) {
+                    return true;
+                }
+            }
             int rid = idOf(v, "navigation_bar");
             if (rid != 0 && v.getId() == rid) {
                 return true;
@@ -834,6 +845,7 @@ public final class Controller {
             statusView = null;
             notifyArea = null;
             dimmed.clear();
+            zoneReady = 0;          // v3.0.31：换了新的状态栏窗口，分区能力要重测
             hidden = false;
         }
         if (statusView != null && !statusView.isAttachedToWindow()) {
@@ -841,6 +853,7 @@ public final class Controller {
             statusView = null;
             notifyArea = null;
             dimmed.clear();
+            zoneReady = 0;          // v3.0.31：新窗口重新测分区
             // 新窗口是可见的，旧 hidden=true 会让下一轮跳过 applyHide，
             // 表现为「重抓到了但一直不隐藏」。复位后按当前相位重新施加。
             hidden = false;
@@ -898,10 +911,20 @@ public final class Controller {
                         startCycle();
                     }
                 }
-                if (navView == null && n.contains("NavigationBar")) {
-                    navView = root;
-                    XposedInit.diagForce("SYS rescan nav=" + desc(root));
-                    startCycle();
+                if (navView == null) {
+                    // v3.2.1：先把窗口根当容器按 id 找 navigation_bar。
+                    // Pixel 的导航栏窗口根叫 DecorView，类名里根本没有 NavigationBar，
+                    // 旧写法在 AOSP 上永远抓不到（真机 nv=none）。
+                    View nb = findNavById(root);
+                    if (nb != null) {
+                        navView = nb;
+                        XposedInit.diagForce("SYS rescan nav=" + desc(nb));
+                        startCycle();
+                    } else if (n.contains("NavigationBar") || n.contains("NavBar")) {
+                        navView = root;
+                        XposedInit.diagForce("SYS rescan nav=" + desc(root));
+                        startCycle();
+                    }
                 }
             }
         } catch (Throwable t) {
@@ -988,9 +1011,19 @@ public final class Controller {
         String diagSig = top + "|" + Config.listMode + "|" + intervene + "|" + inList
                 + "|" + Config.enableStatus + Config.enableNav + Config.enableShift
                 + Config.enableStatusBar + "|" + Config.uiStyle + "|" + Config.lastRev
-                + "|" + livePause + hideDiag();
+                + "|" + livePause;
+        // v3.2：**把易变字段从「变化签名」里摘出去**（原先签名里带着 hideDiag()）。
+        //
+        // hideDiag 里有 hidden / statusRound / dimmed.size() / nv@alpha / zone ——
+        // 这几项在正常相位里每一轮都在变，于是「状态一变就记一条」退化成
+        // **每秒一条 SYS**。真机日志 89 行跨 7 分钟，其中 32 条是 SYS，
+        // 一天下来八万行：写盘、刷盘、wakeup 全是白耗的电。
+        //
+        // 现在签名只留「需要人看一眼才知道」的配置 / 前台 / 开关维度：
+        // 前台换 App、改名单、改开关、切引擎各记一条，其余静默。
+        // 相位与 dim 的变化由 SYS-ROUND（相位切换时打）和 MASK 事件负责，一条不少。
         boolean diagChanged = !diagSig.equals(lastDiagSig);
-        if (diagChanged || nowWl - lastWlDiag >= 30000) {
+        if (diagChanged || nowWl - lastWlDiag >= 60000) {
             lastWlDiag = nowWl;
             lastDiagSig = diagSig;
             XposedInit.diag("SYS top=" + top + " mode=" + Config.listMode
@@ -1176,6 +1209,20 @@ public final class Controller {
     private static String lastMaskSig = "";
 
     /**
+     * v3.0.31：本机能不能真的按左右分区遮。
+     *
+     * <p>0 = 还没测；1 = 能；2 = 不能。</p>
+     *
+     * <p>为什么必须测：v3.0.30 的真机日志里出现过
+     * {@code rot=0 zone=w1280/n0} —— 几何分区一个叶子都没命中，只剩第三级兜底遮了 5 个，
+     * 于是「只留左边」这个相位压根没按边界执行，状态栏变成忽隐忽现、该亮的暗、该暗的亮。
+     * 用户看到的就是「状态栏崩了」。分区测不出来时必须降级，绝不能硬演。</p>
+     */
+    private static int zoneReady = 0;
+    /** 上一次分区分组探测的结果（左/右可见叶子数），写进 SYS-ROUND 日志 */
+    private static String lastProbe = "";
+
+    /**
      * v2.7.7：把「周期相位 / 视图 / alpha / 已透明子视图数」压成一段可落盘的状态串。
      *
      * <p>旧版这些结论只走 Log.i(logcat)，用户导出的 antiburn.log 里一条都没有，
@@ -1227,9 +1274,54 @@ public final class Controller {
             }
             return;
         }
+        // v3.0.31：先确认本机能不能按左右分区遮。测不出来就永久降级 ——
+        // 单侧相位一律不遮（等价于整条亮），只有全灭相位才动手，
+        // 宁可退回两态，也不让状态栏乱跳。
+        if (zoneReady == 0) {
+            restoreStatusChildren();
+            int[] cnt = {0, 0};
+            if (statusView instanceof android.view.ViewGroup) {
+                android.view.ViewGroup g = (android.view.ViewGroup) statusView;
+                int w = g.getWidth();
+                if (w > 0) {
+                    probeLeaves(g, 0, w, 0,
+                            (int) (w * 0.34f), (int) (w * 0.62f), cnt);
+                    zoneReady = (cnt[0] >= 1 && cnt[1] >= 1) ? 1 : 2;
+                    lastProbe = "L" + cnt[0] + "/R" + cnt[1] + "/w" + w;
+                    XposedInit.diag("SYS-ROUND zone=" + (zoneReady == 1 ? "ok" : "no")
+                            + " " + lastProbe);
+                } else {
+                    zoneReady = 2;
+                    lastProbe = "w0";
+                }
+            } else {
+                zoneReady = 2;
+                lastProbe = "nosb";
+            }
+        }
         String sig = Config.showSec + "/" + Config.hideSec;
         long seg = Math.max(1, Config.showSec) * 1000L;
         long off = Math.max(1, Config.hideSec) * 1000L;
+        // v3.2：**不可分区的机器直接退出三班倒**。
+        //
+        // 真机日志（HyperOS 4 / K90）摊开是这样的：zone=no，rot 在 2 和 3 之间
+        // 每 20 / 40 秒翻一次，dim 在 19 和 0 之间跟着翻。观感就是状态栏整条
+        // 黑一阵、亮一下，用户原话「状态栏都崩了」。
+        //
+        // 根因在三段周期本身：三段是给「能分区」的机器设计的（左亮 / 右亮 / 全灭）。
+        // 一旦分不了区，第三段「全灭」就直接等于整条状态栏消失，而且它占整个周期
+        // 的 off 段（用户配 40 秒），比两态方案激进得多。
+        // 这里不再硬演：分不了区就交回常规 hide/show 相位（applyHide 统一管），
+        // 宁可状态栏整条跟着周期走，也不要半残的三段循环。
+        if (zoneReady == 2) {
+            if (statusRound >= 0) {
+                statusRound = -1;
+                lastMaskSig = "";
+                restoreStatusChildren();
+                XposedInit.diag("SYS-ROUND off 本机不可分区，三班倒退出 " + lastProbe);
+            }
+            return;
+        }
         long p = now % (seg * 2 + off);
         int r = p < seg ? 0 : (p < seg * 2 ? 1 : 2);
         if (r == statusRound && !cfgChanged && sig.equals(lastMaskSig)) {
@@ -1240,9 +1332,52 @@ public final class Controller {
         // 先整条恢复再按新相位重遮：从「留左」切到「留右」时，
         // 上一轮被透明的时间区必须点亮，否则两边会越轮越黑。
         restoreStatusChildren();
-        hideStatusKeepNotify();
+        if (r != 3) {
+            hideStatusKeepNotify();
+        }
         XposedInit.diag("SYS-ROUND rot=" + r + " seg=" + Config.showSec
-                + "s off=" + Config.hideSec + "s");
+                + "s off=" + Config.hideSec + "s zone=" + (zoneReady == 1 ? "ok" : "no")
+                + " " + lastProbe + " dim=" + dimmed.size());
+    }
+
+    /**
+     * v3.0.31：只统计、不动手 —— 数出状态栏里落在左区 / 右区的可见叶子各有多少。
+     *
+     * <p>和 {@link #dimLeaves} 走同一套坐标累加规则，但不改 alpha，
+     * 所以可以在「探测」阶段安全调用，不会把状态栏先遮一遍再判断。</p>
+     */
+    private static void probeLeaves(View v, int left, int right, int depth,
+                                    int leftLimit, int rightLimit, int[] out) {
+        if (v == null || depth > ICON_SCAN_MAX_DEPTH) {
+            return;
+        }
+        if (v.getVisibility() != View.VISIBLE || v.getAlpha() <= 0.01f) {
+            return;
+        }
+        if (v instanceof android.view.ViewGroup) {
+            android.view.ViewGroup g = (android.view.ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) {
+                View c = g.getChildAt(i);
+                if (c == null || c.getVisibility() == View.GONE) {
+                    continue;
+                }
+                if (isHeadsUpBanner(c) && isHeadsUpVisible(c)) {
+                    continue;
+                }
+                probeLeaves(c, left + c.getLeft(), left + c.getRight(), depth + 1,
+                        leftLimit, rightLimit, out);
+            }
+            return;
+        }
+        if (isNotifyish(v)) {
+            return;
+        }
+        int cx = (left + right) / 2;
+        if (cx < leftLimit) {
+            out[0]++;
+        } else if (cx > rightLimit) {
+            out[1]++;
+        }
     }
 
     /** 全局显示相位只恢复导航栏，状态栏留给三班倒相位决定 */
@@ -1352,6 +1487,8 @@ public final class Controller {
     /** v3.0.18：最近一次几何分区的诊断（宽/命中/被横幅跳过数），写进 SYS 行 */
     private static String lastZone = "";
     private static int lastZoneH = 0;
+    /** v3.0.36：最近一次几何分区「实际遮掉的横向像素宽度」，用于判定命中是否真的有效 */
+    private static int lastDimW = 0;
 
     private static int dimByZone(android.view.ViewGroup root) {
         int w = root.getWidth();
@@ -1359,9 +1496,10 @@ public final class Controller {
             return 0;
         }
         lastZoneH = 0;
+        lastDimW = 0;
         int n = dimLeaves(root, 0, w, 0,
                 (int) (w * 0.34f), (int) (w * 0.62f), w);
-        lastZone = "w" + w + "/n" + n + "/h" + lastZoneH;
+        lastZone = "w" + w + "/n" + n + "/h" + lastZoneH + "/aw" + lastDimW;
         return n;
     }
 
@@ -1373,7 +1511,10 @@ public final class Controller {
         if (v.getVisibility() != View.VISIBLE || v.getAlpha() <= 0.01f) {
             return 0;
         }
-        if (v instanceof android.view.ViewGroup) {
+        // v3.2.1：无子 ViewGroup（ComposeView / 自绘容器）当叶子处理。
+        // AOSP 16 的时钟与系统图标由 Compose 直接绘制，没有子 View，
+        // 旧口径一律 return 0 —— 三级链全跑完也遮不到它们（Pixel 真机 dim=3 却无变化）。
+        if (v instanceof android.view.ViewGroup && ((android.view.ViewGroup) v).getChildCount() > 0) {
             android.view.ViewGroup g = (android.view.ViewGroup) v;
             int n = 0;
             for (int i = 0; i < g.getChildCount(); i++) {
@@ -1403,6 +1544,15 @@ public final class Controller {
                 return 0;      // 该侧开关关掉：保留
             }
             setAlphaTracked(v, 0f, true);
+            // v3.0.36：记下实际遮掉的横向像素宽度。判定成败要靠「盖住多宽」，
+            // 不能靠「遮了几个」——一个占满整条的时钟只算 1 个，两个装饰小球算 2 个。
+            // v3.2：真机日志里 aw 恒为 0（叠算出来的 right-left 在某些 ROM 上是 0），
+            // 导致「宽度够不够」永远判失败、每轮都多跑一遍兜底。这里用 View 自身宽度兜底。
+            int aw = right - left;
+            if (aw <= 0) {
+                aw = v.getWidth();
+            }
+            lastDimW += Math.max(0, aw);
             return 1;
         }
         return 0;
@@ -1424,7 +1574,8 @@ public final class Controller {
             if (c == null || c.getVisibility() == View.GONE) {
                 continue;
             }
-            if (c instanceof android.view.ViewGroup) {
+            if (c instanceof android.view.ViewGroup
+                    && ((android.view.ViewGroup) c).getChildCount() > 0) {
                 if (isHeadsUpBanner(c) && isHeadsUpVisible(c)) {
                     lastZoneH++;
                     continue;          // 只跳过真正显示中的横幅容器本身
@@ -1455,7 +1606,8 @@ public final class Controller {
             }
             int cl = left + c.getLeft();
             int cr = left + c.getRight();
-            if (c instanceof android.view.ViewGroup) {
+            if (c instanceof android.view.ViewGroup
+                    && ((android.view.ViewGroup) c).getChildCount() > 0) {
                 if (isHeadsUpBanner(c) && isHeadsUpVisible(c)) {
                     lastZoneH++;
                     continue;
@@ -1520,6 +1672,9 @@ public final class Controller {
         if (statusRound == 2) {
             return true;
         }
+        if (statusRound == 3) {
+            return false;      // v3.0.31：本机分不了区，单侧相位整条不动，绝不乱遮
+        }
         if (Config.statusClockOn && Config.statusIconsOn) {
             return true;
         }
@@ -1546,7 +1701,8 @@ public final class Controller {
             if (isHeadsUpBanner(c) && isHeadsUpVisible(c)) {
                 continue;
             }
-            if (c instanceof android.view.ViewGroup) {
+            if (c instanceof android.view.ViewGroup
+                    && ((android.view.ViewGroup) c).getChildCount() > 0) {
                 n += dimTreeAllExceptBanner((android.view.ViewGroup) c,
                         c.getLeft(), c.getRight(), w);
             } else {
@@ -1573,7 +1729,8 @@ public final class Controller {
             if (isHeadsUpBanner(c) && isHeadsUpVisible(c)) {
                 continue;
             }
-            if (c instanceof android.view.ViewGroup) {
+            if (c instanceof android.view.ViewGroup
+                    && ((android.view.ViewGroup) c).getChildCount() > 0) {
                 n += dimTreeAllExceptBanner((android.view.ViewGroup) c, cl, cr, w);
             } else {
                 if (!sideAllowed((cl + cr) / 2, w)) {
@@ -1596,19 +1753,38 @@ public final class Controller {
      * 三级都为 0 才回退旧类名方案（不放弃旧 ROM）。命中数与层级写进 SYS 行的 zone=。
      */
     private static int dimFallbackChain(View sv, android.view.ViewGroup svg) {
+        // v3.0.36：整条链的成败判据从「遮了几个」换成「遮了多宽」。
+        //
+        // 旧版是 `if (z >= 2) return z;` —— 只要碰到 2 个节点就当分区成功、提前收工。
+        // Pixel 真机 zone=w1080/n1/f2=3 就是被这条判死的：遮掉 3 个装饰节点算成功，
+        // 而时钟（Clock）、电池（BatteryMeterView）一个没碰，用户看到「状态栏没反应」。
+        // 快手那边同理：遮住一条细边就被判成功，正是「半拉隐藏、就显示一两个」。
+        //
+        // 现在的规则：
+        //   1. 几何分区遮掉的横向像素 ≥ 55% 才算真成功，直接返回；
+        //   2. 否则一律往下走到「除通知外全遮」，不够再走「除横幅外全遮」（必胜）；
+        //   3. 只要几何路线没成功，最后**无条件**补一遍类名兜底。
+        //      Pixel 的 Clock / BatteryMeterView / ModernStatusBarMobileView、
+        //      小米的 MiuiClock 都在关键词表里，这一遍基本能扫干净。
+        int w = svg.getWidth();
         int z = dimByZone(svg);
-        if (z >= 2) {
+        if (z >= 2 && w > 0 && lastDimW >= w * 0.55f) {
             return z;
         }
         z = dimAllExceptNotify(svg);
         lastZone += "/f2=" + z;
-        if (z >= 2) {
-            return z;
+        if (z < 2) {
+            z = dimAllExceptBanner(svg);
+            lastZone += "/f3=" + z;
         }
-        z = dimAllExceptBanner(svg);
-        lastZone += "/f3=" + z;
-        if (z == 0) {
-            hideKnownStaticIconsOnly(sv, 0);
+        hideKnownStaticIconsOnly(sv, 0);
+        // v3.2.1：上面几段都只作用在「能遍历到的节点」上。AOSP 16 的时钟与系统图标
+        // 若由 Compose 直接绘制（无子 View），或 alpha 被 SystemUI 每帧重置，
+        // 全部落空 —— 真机 v3.0.27 的 dim=3 / zone=w1080/n1/h0/f2=3 正是这个现场。
+        // 这里补「整层透明」必胜项：v2.5.2 就靠这一招在 Pixel 10 Pro XL 上一直有效。
+        if (dimWholeBarIfSafe(sv, svg)) {
+            lastZone += "/f4=1";
+            return 1;
         }
         return z;
     }
@@ -1714,6 +1890,65 @@ public final class Controller {
         if (track && !dimmed.contains(v)) {
             dimmed.add(v);
         }
+    }
+
+    /**
+     * v3.2.1：整层透明兜底 —— AOSP / Pixel / Compose 自绘状态栏的「必胜项」。
+     *
+     * <p>为什么必须补回来：v2.5.2 及更早的做法是「按 id 找到整条栏 → setAlpha(0)
+     * 整层消失」，不看内部结构，所以在 Pixel 10 Pro XL（AOSP 16）上一直有效。
+     * v3.x 为了不误伤通知图标与横幅，把「整窗透明」封死，改成逐叶 / 沿通知区
+     * 路径只遮兄弟；遇上 Compose 自绘或属性被每帧重置的栏，三级链全跑完也只遮到
+     * 几个不承载图标的节点（真机 v3.0.27：sv=FrameLayout@1.0 dim=3
+     * zone=w1080/n1/h0/f2=3），用户看到的就是「开了跟没开一样」。</p>
+     *
+     * <p>安全边界（用户硬约束：不影响悬浮通知）：
+     * <ol>
+     * <li>栏内若存在「正在显示的 heads-up 横幅」子树，放弃整层（宁可不遮也不误伤）；</li>
+     * <li>heads-up 在 AOSP / HyperOS 上都是独立窗口，本就不在 statusView 子树内；</li>
+     * <li>下拉通知面板与锁屏通知同样是独立窗口，不受整层 alpha 影响；</li>
+     * <li>只有前面几段「遮得不够宽」时才走到这里，能正常遮的机型不会被它接管；</li>
+     * <li>「隐藏时间 / 隐藏右侧图标」只开一侧时不做整层，避免清掉用户想留的那一侧。</li>
+     * </ol>
+     * 代价：状态栏内的通知图标会跟着消失 —— 与 v2.5.2 的既有行为一致。</p>
+     */
+    private static boolean dimWholeBarIfSafe(View sv, android.view.ViewGroup svg) {
+        if (sv == null || svg == null) {
+            return false;
+        }
+        if (!Config.statusClockOn || !Config.statusIconsOn) {
+            return false;
+        }
+        if (hasLiveHeadsUp(svg, 0)) {
+            return false;
+        }
+        if (sv.getAlpha() <= 0.01f) {
+            return true;
+        }
+        setAlphaTracked(sv, 0f, true);
+        Log.i(TAG, "whole bar transparent (f4 fallback): " + desc(sv));
+        return true;
+    }
+
+    /** 栏内是否存在「真正显示中」的 heads-up 横幅（整层透明前必须确认）。 */
+    private static boolean hasLiveHeadsUp(android.view.ViewGroup g, int depth) {
+        if (depth > HEADS_UP_SCAN_MAX_DEPTH) {
+            return false;
+        }
+        for (int i = 0; i < g.getChildCount(); i++) {
+            View c = g.getChildAt(i);
+            if (c == null || c.getVisibility() == View.GONE) {
+                continue;
+            }
+            if (isHeadsUpBanner(c) && isHeadsUpVisible(c)) {
+                return true;
+            }
+            if (c instanceof android.view.ViewGroup
+                    && hasLiveHeadsUp((android.view.ViewGroup) c, depth + 1)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static void applyShow() {

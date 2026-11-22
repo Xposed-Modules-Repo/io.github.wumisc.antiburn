@@ -37,6 +37,60 @@ public final class AbApplication extends Application {
             AppVisibilityStore.syncOnStartup(this);
         } catch (Throwable ignored) {
         }
+        // v3.0.33：装完新版自动把四个视频 App 杀掉，逼 LSPosed 重新注入新 dex。
+        try {
+            restartTargetAppsOnce();
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /**
+     * v3.0.33：每个版本只做一次 —— 用 root 把抖音 / 红果 / 快手 / B站的进程杀掉。
+     *
+     * <p><b>这是「改了十几个版本，快手还是老样子」的真正解法。</b>
+     * LSPosed 只在进程启动时注入一次：用户覆盖安装 APK 后，快手后台进程一直活着，
+     * 里面跑的还是上一个版本的 dex。真机日志实锤 —— {@code injAge=kuaishou=68m}、
+     * {@code HOOK-STALE app_ver=3.0.17}，也就是 3.0.18 到 3.0.32 的所有改动
+     * 对快手一次都没生效过。用户被要求「重启手机」，但没人会为一个模块天天重启。</p>
+     *
+     * <p>这里改成：打开模块 App 就自动杀一次（按 versionName 判重，同版本不重复杀）。
+     * 用户装完点开模块 → 后台已杀干净 → 再打开快手就是新代码，不需要重启手机。</p>
+     *
+     * <p>非 root / 未授权时 execSu 返回 false，静默跳过，不影响任何主流程。</p>
+     */
+    private void restartTargetAppsOnce() {
+        final String ver = BuildConfig.VERSION_NAME;
+        android.content.SharedPreferences sp =
+                getSharedPreferences("antiburn_app", MODE_PRIVATE);
+        if (ver.equals(sp.getString("killed_for", ""))) {
+            return;      // 这个版本已经杀过，别每次启动都打断用户
+        }
+        sp.edit().putString("killed_for", ver).apply();
+        new Thread(() -> {
+            try {
+                String list = ConfStore.execSuCapture("pm list packages", 8_000L);
+                if (list == null) {
+                    Diag.force("KILL ver=" + ver + " 跳过：无 root 或授权被拒");
+                    return;
+                }
+                StringBuilder killed = new StringBuilder();
+                for (String line : list.split("\n")) {
+                    String p = line.trim();
+                    if (!p.startsWith("package:")) {
+                        continue;
+                    }
+                    p = p.substring("package:".length()).trim();
+                    if (VideoApps.of(p) == VideoApps.Kind.NONE) {
+                        continue;
+                    }
+                    if (ConfStore.execSu("am force-stop " + p)) {
+                        killed.append(p).append(' ');
+                    }
+                }
+                Diag.force("KILL ver=" + ver + " " + killed);
+            } catch (Throwable ignored) {
+            }
+        }, "ab-restart-targets").start();
     }
 
     private void installCrashHandler() {

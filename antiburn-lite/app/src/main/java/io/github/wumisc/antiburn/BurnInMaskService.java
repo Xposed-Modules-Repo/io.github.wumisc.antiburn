@@ -124,6 +124,8 @@ public class BurnInMaskService extends AccessibilityService {
      */
     private static volatile long lastMaskDiagAt = 0L;
     private static volatile String lastMaskSig = "";
+    /** v3.2：去抖用的比较签名（把前台包名归一化，避免系统插件进程把写盘频率拉满）。 */
+    private static volatile String lastMaskCmp = "";
 
     /**
      * v2.8.1：su 兜底必须离开主线程。
@@ -153,11 +155,23 @@ public class BurnInMaskService extends AccessibilityService {
 
     private static void maskDiag(String s, boolean force) {
         long now = System.currentTimeMillis();
+        // v3.2：**前台包名不参与「是否写盘」的判定**。
+        //
+        // 真机日志里 MASK 行每 2~3 秒一条，原因不是心跳太密，而是签名里的 fg 在抖：
+        // com.smile.gifmaker → com.miui.securitycenter → miui.systemui.plugin →
+        // com.tencent.wetype 之间来回跳。系统插件窗口一冒头就被当成「前台变了」，
+        // 于是每次都老老实实写一行 —— 这是纯粹的白耗电，排障价值几乎为零。
+        //
+        // 现在比较时把 fg 段归一化成 fg=*：只有 eng / master / areas / masking
+        // 这些**真正影响遮盖行为**的维度变化才落盘；fg 仍会出现在 30 秒心跳里，
+        // 需要看的时候一条不少。
+        String cmp = s.replaceAll("fg=\\S+", "fg=*");
         if (!force) {
-            if (s.equals(lastMaskSig) && now - lastMaskDiagAt < 30000L) {
+            if (cmp.equals(lastMaskCmp) && now - lastMaskDiagAt < 30000L) {
                 return; // 状态没变：30 秒一条心跳，避免每帧写盘
             }
         }
+        lastMaskCmp = cmp;
         lastMaskSig = s;
         lastMaskDiagAt = now;
         String line = now + " [mask/" + android.os.Process.myPid() + "] MASK " + s + "\n";

@@ -132,7 +132,6 @@ private const val STATUS_REFRESH_MS = 15_000L
 // 避免拼写漂移，也便于静态审计按标识符计数。
 private const val PAGE_HOME_ENGINE = "home-engine"
 private const val PAGE_HOME_INJECT = "home-inject"
-private const val PAGE_HOME_UISTYLE = "home-uistyle"
 private const val PAGE_HOME_LIST = "home-list"
 
 /**
@@ -1125,6 +1124,8 @@ private fun BurnInProtectApp() {
                         0 -> HomeTilePage(
                             enabled = state.enableStatus,
                             onToggle = { on -> onStateChange { s -> s.copy(enableStatus = on) } },
+                            engineState = state,
+                            onStateChange = onStateChange,
                             onOpen = openSub,
                             saveBar = saveBar,
                         )
@@ -1917,15 +1918,223 @@ private fun A11yRequiredNotice(dark: Boolean) {
 }
 
 // ---- 首页 ----
+
+/**
+ * v3.1：运行方式 + 界面适配「合并卡」。
+ *
+ * <p>取代原来「运行方式」「界面适配」两个 ListRow。两个功能都是「选一个芯片就完事」，
+ * 藏在二级页里反而让人找不到，尤其运行方式还带着「切完要重启系统界面」这条关键提示——
+ * 放在一级页面上，用户打开 App 第一眼就能看到并调。</p>
+ *
+ * <p>卡片内分两个区块，各两行（标题行 + 芯片行），中间一条细分隔线。真正的重操作
+ * （root / LSPosed 检测、Hook 版本、重启系统界面）仍留在运行方式二级页，右上角
+ * 「详情 ›」进去，不丢能力。</p>
+ */
+@Composable
+private fun EngineStyleCard(
+    state: AbState,
+    onStateChange: ((AbState) -> AbState) -> Unit,
+    onOpenDetail: () -> Unit,
+    dark: Boolean,
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var cap by remember { mutableStateOf<Capability?>(null) }
+    var hook by remember { mutableStateOf<HookState?>(null) }
+    var busy by remember { mutableStateOf("") }
+    var refreshTick by remember { mutableIntStateOf(0) }
+
+    fun toast(msg: String) {
+        Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+    }
+
+    // 能力探测要 fork su，必须离开主线程；refreshTick 变化即重探（切完引擎 / 授权完成 / 重启完系统界面）
+    LaunchedEffect(refreshTick) {
+        val probed = withContext(Dispatchers.IO) { Capability.probe(context) }
+        cap = probed
+        // Hook 版本探测同样要 root（读别人的 /proc），root 没授权时直接跳过，
+        // 否则会白等 8 秒 su 超时，首屏一直空着。
+        hook = withContext(Dispatchers.IO) {
+            if (probed.rootState == Capability.ROOT_GRANTED) HookState.probe(context) else null
+        }
+    }
+    val owner = LocalLifecycleOwner.current
+    DisposableEffect(owner) {
+        val obs = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) refreshTick++
+        }
+        owner.lifecycle.addObserver(obs)
+        onDispose { owner.lifecycle.removeObserver(obs) }
+    }
+
+    val ink = UiPalette.ink(dark)
+    val sub = MaterialTheme.colorScheme.onSurfaceVariant
+    val engine = ConfStore.normEngine(state.engine)
+    val overlay = engine == ConfStore.ENGINE_OVERLAY
+    val hookUsable = cap?.hookUsable() == true
+    val a11yOn = cap?.a11yEnabled == true
+    val styleLabel = UI_STYLE_LABELS.firstOrNull { it.first == state.uiStyle }?.second ?: "原生 AOSP"
+
+    Card(
+        Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = UiPalette.surface(dark)),
+    ) {
+        Column(Modifier.padding(14.dp)) {
+
+            // ---------- 系统界面旧版提示（一级页面，必须第一眼看到） ----------
+            //
+            // 这是本卡片最重要的一块，所以放在最上面、在「运行方式」标题之前。
+            // 机制：隐藏逻辑注入在系统界面进程里，而它是常驻进程 —— 装包不会让它重启。
+            // 用户装完新版、点开 App 发现「怎么没反应」，几乎全是卡在这里。
+            // 旧版这个提示只在二级页里，等于让人先点进去才知道自己白点了。
+            // 不 stale 时整块不渲染，平时不占任何空间。
+            HookStaleNotice(
+                hook = hook,
+                dark = dark,
+                busy = busy,
+                onRestart = {
+                    if (busy.isNotEmpty()) return@HookStaleNotice
+                    scope.launch {
+                        busy = "restart"
+                        try {
+                            val out = withContext(Dispatchers.IO) { HookState.restartSystemUi() }
+                            if (out != null && out.contains("ab-restart-ok")) {
+                                HookState.invalidate()
+                                toast(
+                                    "已发出重启指令。屏幕会黑一下、通知栏消失几秒，系统界面会自动恢复；" +
+                                            "等通知栏回来后这里是新版状态才算真正加载。"
+                                )
+                                delay(5000)
+                                refreshTick++
+                            } else {
+                                toast("重启失败，可在终端执行：su -c \"killall com.android.systemui\"")
+                            }
+                        } finally {
+                            busy = ""
+                        }
+                    }
+                },
+            )
+
+            // ---------- 运行方式 ----------
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("运行方式", style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold, color = ink, modifier = Modifier.weight(1f))
+                Text(if (overlay) "无障碍遮盖" else "LSPosed",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold, color = UiPalette.accent(dark))
+                Text("详情 ›", style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline,
+                    modifier = Modifier
+                        .padding(start = 8.dp)
+                        .clickable { onOpenDetail() })
+            }
+            Row(
+                Modifier.fillMaxWidth().padding(top = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                FilterChip(
+                    selected = !overlay,
+                    onClick = {
+                        if (!hookUsable) {
+                            toast("没检测到 root + LSPosed，这条引擎跑不起来。没有 root 请选「无障碍遮盖」。")
+                        } else {
+                            onStateChange { it.copy(engine = ConfStore.ENGINE_LSPOSED) }
+                            toast(
+                                "已切换到 LSPosed 引擎。还要确认两件事：" +
+                                        "① LSPosed 里已勾选本应用（作用域含「系统界面」）；" +
+                                        "② 重启一次系统界面。" +
+                                        (if (state.enableStatus) ""
+                                        else "另外，防烧屏保护总开关现在是关着的，不打开不会有任何效果。")
+                            )
+                        }
+                    },
+                    label = { Text("LSPosed 模块", style = MaterialTheme.typography.bodySmall) },
+                )
+                FilterChip(
+                    selected = overlay,
+                    onClick = {
+                        onStateChange { it.copy(engine = ConfStore.ENGINE_OVERLAY) }
+                        if (ShizukuBridge.hasPermission()) {
+                            scope.launch { withContext(Dispatchers.IO) { ShizukuBridge.restoreStatusBar() } }
+                        }
+                        toast(
+                            when {
+                                !state.enableStatus ->
+                                    "已切换到无障碍遮盖引擎。注意：防烧屏保护总开关还关着，打开才会生效。"
+                                !a11yOn ->
+                                    "已切换到无障碍遮盖引擎。下一步：去系统设置的无障碍里打开本应用的服务，才会真正开始遮盖。"
+                                else -> "已切换到无障碍遮盖引擎，无障碍服务已经开着，立即生效。"
+                            }
+                        )
+                    },
+                    label = { Text("无障碍遮盖", style = MaterialTheme.typography.bodySmall) },
+                )
+            }
+            // 只留一行真正要紧的提示：用户最常卡住的就是「切完不知道要重启 / 不知道去开无障碍」。
+            Text(
+                when {
+                    overlay && !a11yOn -> "还差一步：设置 → 无障碍 → 打开本应用的服务"
+                    overlay -> "遮盖中：只盖系统栏，触摸完全穿透"
+                    !hookUsable -> "没检测到 root + LSPosed，这条引擎跑不起来，选右边那条"
+                    else -> "切换引擎或勾选作用域后，要重启一次系统界面才生效"
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = if (overlay && a11yOn || hookUsable && !overlay) sub else UiPalette.warn(dark),
+                modifier = Modifier.padding(top = 6.dp),
+            )
+
+            // 细分隔线：两个功能同处一张卡，但语义上互不相关，必须隔开
+            Box(
+                Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 10.dp).height(1.dp)
+                    .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.16f)),
+            )
+
+            // ---------- 界面适配 ----------
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("界面适配", style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold, color = ink, modifier = Modifier.weight(1f))
+                Text(styleLabel, style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold, color = UiPalette.accent(dark))
+            }
+            Row(
+                Modifier.fillMaxWidth().padding(top = 8.dp)
+                    .horizontalScroll(rememberScrollState())
+                    .padding(vertical = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                for ((id, label) in UI_STYLE_LABELS) {
+                    FilterChip(
+                        selected = state.uiStyle == id,
+                        onClick = { onStateChange { it.copy(uiStyle = id) } },
+                        label = { Text(label, style = MaterialTheme.typography.bodySmall) },
+                    )
+                }
+            }
+            // 「试错了能不能手动改」——能，而且随时能改，一句话讲清。
+            Text("识别错了不要紧，点一下随时改，不会影响其他设置",
+                style = MaterialTheme.typography.labelSmall,
+                color = sub,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+        }
+    }
+}
+
 /**
  * v3.0.12 P1/P3：首页只保留入口与两个可见性开关，四张详情大卡片下沉到二级菜单。
- * 可见元素顺序（G1）：标题区 → saveBar → 防烧屏总开关 → 四入口 → 隐藏桌面图标 → 从最近任务隐藏。
+ * 可见元素顺序（v3.1）：标题区 → saveBar → 防烧屏总开关 → 运行方式·界面适配合并卡
+ * → 注入状态 / 白名单 → 本应用隐身。
  * 四入口副标题采用 PRD G3 短版（设计评审 S1 拍板）。
  */
 @Composable
 private fun HomeTilePage(
     enabled: Boolean,
     onToggle: (Boolean) -> Unit,
+    // v3.1：运行方式与界面适配合到一张一级卡片，所以首页需要整份 state 与写入口。
+    engineState: AbState,
+    onStateChange: ((AbState) -> AbState) -> Unit,
     onOpen: (String) -> Unit,
     saveBar: @Composable () -> Unit,
 ) {
@@ -1982,61 +2191,97 @@ private fun HomeTilePage(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 4.dp))
-                    Text(if (enabled) "已开启" else "已关闭",
-                        style = MaterialTheme.typography.bodySmall,
-                        // 「已关闭」用警示橙：它是「所有功能都不生效」的唯一开关，
-                        // 与强调色同色时，视线扫过去和「已开启」没有区别。
-                        color = if (enabled) UiPalette.accent(dark) else UiPalette.warn(dark),
-                        modifier = Modifier.padding(top = 6.dp))
                 }
+                // v3.1：状态从单独一行挪到开关左侧同一行，省掉一整行高度。
+                // 颜色语义不变：已关闭用警示橙，它是「所有功能都不生效」的唯一开关。
+                Text(if (enabled) "已开启" else "已关闭",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = if (enabled) UiPalette.accent(dark) else UiPalette.warn(dark),
+                    modifier = Modifier.padding(end = 10.dp))
                 LiquidToggle(checked = enabled, onCheckedChange = onToggle)
             }
         }
 
         Spacer(Modifier.height(12.dp))
 
-        // v3.0.12 P1：四张详情卡改为四个 ListRow 入口，点击进各自二级页（G3 短版副标题）
-        ListRow("运行方式", "Hook / 无障碍双引擎", { onOpen(PAGE_HOME_ENGINE) }, dark)
+        // v3.1：运行方式 + 界面适配合并成一张一级卡片，两个功能都能直接调，不用点进二级页。
+        // 运行方式的「详情」（root / LSPosed 检测、Hook 版本、重启系统界面）仍在二级页，
+        // 从卡片右上角「详情 ›」进。
+        EngineStyleCard(
+            state = engineState,
+            onStateChange = onStateChange,
+            onOpenDetail = { onOpen(PAGE_HOME_ENGINE) },
+            dark = dark,
+        )
+
+        Spacer(Modifier.height(10.dp))
+
         ListRow("注入状态", "四个 App 注入情况", { onOpen(PAGE_HOME_INJECT) }, dark)
-        ListRow("界面适配", "按系统界面避让", { onOpen(PAGE_HOME_UISTYLE) }, dark)
         ListRow("白名单", "名单内应用不干预", { onOpen(PAGE_HOME_LIST) }, dark)
 
         Spacer(Modifier.height(12.dp))
 
-        // ===== v3.0.12 P3：本 App 自身可见性（四入口之后，逐字迁入，逻辑不变） =====
-        // P1 桌面图标隐藏：OptionRow 内嵌 Material3 Switch（整行可点），切换即落盘 + 组件别名生效。
-        OptionRow(
-            title = "隐藏桌面图标",
-            subtitle = "开后桌面无图标，可从 LSPosed 或系统设置打开",
-            checked = hideLauncher,
-            dark = dark,
-            onCheckedChange = { on ->
-                // 内部已含 applyLauncherVisibility(DONT_KILL_APP)：写 prefs + 切组件别名，App 不重启
-                AppVisibilityStore.setHideLauncherIcon(context, on)
-                hideLauncher = on // 更新本地镜像，图标即时消失
-            },
-        )
-        // 恢复提示：常驻可见（开/关都显示），口径与 PRD §一 / design-backend §5.3 一致，
-        // 避免用户自锁后无措；不承诺备用图标/通知/磁贴，adb 兜底不塞进 UI。
-        Text(
-            "隐藏后桌面不再显示本应用；需要恢复时，从 LSPosed 模块管理器或「设置→应用管理→防烧屏」打开本应用，回到此处关闭开关即可。",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.fillMaxWidth().padding(start = 4.dp, top = 4.dp),
-        )
-
-        // P2 最近任务隐藏：setHideRecents 只写 prefs，生效由顶层 applyRecentsVisibility 立即触发。
-        OptionRow(
-            title = "从最近任务隐藏",
-            subtitle = "开后按 Home，本应用不出现在最近任务列表",
-            checked = hideRecents,
-            dark = dark,
-            onCheckedChange = { on ->
-                AppVisibilityStore.setHideRecents(context, on) // 仅写 prefs（后端 §8 锁定签名）
-                applyRecentsVisibility(context)               // 立即对本任务栈生效，不等 onResume
-                hideRecents = on                              // 更新本地镜像
-            },
-        )
+        // ===== v3.1：两个可见性开关合并成一张「本应用隐身」卡 =====
+        //
+        // 原来「隐藏桌面图标」「从最近任务隐藏」是两个独立 OptionRow，各占一行 + 一大段说明，
+        // 首页本来就很挤。合并成一个开关，一次把两处都处理掉：要隐藏就彻底隐藏，
+        // 只藏一半反而让人以为没生效。
+        // 状态文字也挪到开关左侧，与上方总开关保持同一种排版语言。
+        val bothHidden = hideLauncher && hideRecents
+        val partialHidden = hideLauncher != hideRecents
+        Card(
+            Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = UiPalette.surface(dark)),
+        ) {
+            Column(Modifier.padding(16.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("本应用隐身", style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold, color = UiPalette.ink(dark))
+                        Text("桌面图标与最近任务里都不出现",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 4.dp))
+                    }
+                    // 「部分隐藏」是旧版本留下的状态（只开过一个开关）：不假装它是关的，
+                    // 直接说清楚，用户点一下就会补齐。
+                    Text(
+                        when {
+                            bothHidden -> "已隐藏"
+                            partialHidden -> "部分隐藏"
+                            else -> "正常显示"
+                        },
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = if (bothHidden) UiPalette.accent(dark) else UiPalette.warn(dark),
+                        modifier = Modifier.padding(end = 10.dp),
+                    )
+                    LiquidToggle(
+                        checked = bothHidden,
+                        onCheckedChange = { on ->
+                            // setHideLauncherIcon 内部已含 applyLauncherVisibility(DONT_KILL_APP)：
+                            // 写 prefs + 切组件别名，App 不重启；setHideRecents 只写 prefs，
+                            // 生效由 applyRecentsVisibility 立即触发，不等 onResume。
+                            AppVisibilityStore.setHideLauncherIcon(context, on)
+                            AppVisibilityStore.setHideRecents(context, on)
+                            applyRecentsVisibility(context)
+                            hideLauncher = on
+                            hideRecents = on
+                        },
+                    )
+                }
+                // 恢复提示：常驻可见（开 / 关都显示），口径与 PRD §一 / design-backend §5.3 一致，
+                // 避免用户自锁后无措；不承诺备用图标 / 通知 / 磁贴，adb 兜底不塞进 UI。
+                Text(
+                    "需要恢复时，从 LSPosed 模块管理器或「设置→应用管理→防烧屏」打开本应用，回到这里关掉开关即可。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+            }
+        }
     }
 }
 
@@ -2059,44 +2304,6 @@ private fun InjectStatusPage(
     onEnableAll: () -> Unit,
 ) {
     InjectStatusCard(dark = dark, onEnableAll = onEnableAll)
-}
-
-/** 界面适配二级页（home-uistyle）：原首页内联 Card 原样搬入，7 厂商 chips 一项不删（G5）。 */
-@Composable
-private fun UiStylePage(
-    uiStyle: String,
-    onUiStyleChange: (String) -> Unit,
-    dark: Boolean,
-) {
-    Card(
-        Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = UiPalette.surface(dark)),
-    ) {
-        Column(Modifier.padding(16.dp)) {
-            Text("界面适配", style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold, color = UiPalette.ink(dark))
-            Text("选择你手机的系统界面，模块按它的胶囊 / 导航栏结构避让，不会误隐藏灵动岛、原子岛。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 4.dp))
-            Spacer(Modifier.height(12.dp))
-            Row(
-                Modifier.fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(vertical = 2.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                for ((id, label) in UI_STYLE_LABELS) {
-                    FilterChip(
-                        selected = uiStyle == id,
-                        onClick = { onUiStyleChange(id) },
-                        label = { Text(label, style = MaterialTheme.typography.bodySmall) },
-                    )
-                }
-            }
-        }
-    }
 }
 
 /** 白名单二级页（home-list）：原首页内联 Card 原样搬入，模式 chips + 包名输入 + 自检一项不删（G5）。 */
@@ -2984,6 +3191,8 @@ private val THANKS = listOf(
     Thanks("心之所及", "心", "支持与建议"),
     // v2.9.4 新增：帮忙在 ColorOS 15 环境做真机测试
     Thanks("酷安@bzm123123", "B", "帮忙测试 ColorOS 15 环境"),
+    // v3.0.36 新增：Pixel 10 Pro XL 状态栏适配（日志与真机验证）
+    Thanks("酷安@大侠史塔克1", "侠", "帮忙适配谷歌 Pixel 10 Pro XL"),
 )
 
 /** 项目仓库地址（GitHub）——关于页「项目地址」点击跳转。 */
@@ -3092,7 +3301,6 @@ private fun SubPageHost(
         "suggest" -> "功能建议"
         PAGE_HOME_ENGINE -> "运行方式"
         PAGE_HOME_INJECT -> "注入状态"
-        PAGE_HOME_UISTYLE -> "界面适配"
         PAGE_HOME_LIST -> "白名单"
         "feat-general" -> "通用"
         "feat-douyin" -> "抖音"
@@ -3137,11 +3345,6 @@ private fun SubPageHost(
                 "suggest" -> SuggestPage(dark, onOpenUrl)
                 PAGE_HOME_ENGINE -> EnginePage(state = state, onStateChange = onStateChange, dark = dark)
                 PAGE_HOME_INJECT -> InjectStatusPage(dark = dark, onEnableAll = onEnableAll)
-                PAGE_HOME_UISTYLE -> UiStylePage(
-                    uiStyle = state.uiStyle,
-                    onUiStyleChange = { id -> onStateChange { s -> s.copy(uiStyle = id) } },
-                    dark = dark,
-                )
                 PAGE_HOME_LIST -> WhitelistPage(
                     listMode = state.listMode,
                     activeList = state.activeList,

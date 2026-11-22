@@ -101,6 +101,35 @@ public final class DouyinHook {
     private static final List<View> ksFeedTargetList = new ArrayList<>();   // P3 快手普通刷视频
     private static final List<View> dramaTargetList = new ArrayList<>();    // P4 红果信息区 + 底部导航
     // THH slot 常量（禁止魔法值）
+    /**
+     * v3.0.36 稳定器：识别结果「记忆宽限期」。
+     *
+     * <p>真机症状是「一会儿藏、一会儿又冒出两个」。根因不在识别算法，而在
+     * <b>列表每轮整体替换</b>：滚动 / 弹层 / Compose 重绘会让某一轮的 collector
+     * 少收到几个（甚至一个都收不到），而 {@code commitTargeted} 与 rightList
+     * 的「本轮没命中 → showDeep 恢复」把上一轮已经藏好的那几个当场放了出来。
+     * 下一秒重绘完又收得到，于是再藏一次 —— 用户看到的就是抽搐。</p>
+     *
+     * <p>这里给每个 View 记「连续未命中轮数」，未命中但窗口仍存活时继续保留在
+     * 列表里（继续藏），累计超过 {@link #MISS_GRACE_ROUNDS} 轮或窗口已失效才
+     * 真正释放。重新命中即清零。WeakHashMap 不持有 View，换页后自然回收。</p>
+     */
+    private static final java.util.Map<View, Integer> missRounds =
+            new java.util.WeakHashMap<>();
+    /** v3.0.36：宽限轮数。tick 约 1 秒一轮，3 轮 = 3 秒，足够跨过一次滚动/重绘抖动。 */
+    private static final int MISS_GRACE_ROUNDS = 3;
+
+    /**
+     * v3.0.36 保底台账：**本模块动过的每一个 View**（弱引用集合，不持有对象）。
+     *
+     * <p>用户定的底线是「藏不干净可以，但绝不能还原不回来」。旧的 showAll 只遍历
+     * 「当前各列表里的那几个」，可是列表每轮整体替换 —— 某轮漏收的 View 就再没有
+     * 任何引用，alpha 永远停在 0，用户看到的就是「那块东西再也不出现了」。
+     * 这张台账按 View 记账，showAll / 开关关闭 / 退出页面时全量撤销，保证没有孤儿。</p>
+     */
+    private static final java.util.Set<View> touched =
+            java.util.Collections.newSetFromMap(new java.util.WeakHashMap<View, Boolean>());
+
     private static final int SLOT_KS_LIVE = 0;
     private static final int SLOT_DY_LIVE = 1;
     private static final int SLOT_KS_FEED = 2;
@@ -151,6 +180,15 @@ public final class DouyinHook {
     private static long lastPageKindAt = 0L;
     /** v3.0.28：直播固定条补扫节流。 */
     private static long lastBandsAt = 0L;
+    /**
+     * v3.0.32：本进程是否已经做过一次视图树采样。
+     *
+     * <p>为什么要有这个：快手的那几个区域（右侧按钮列 / 底部作者文案 / 顶部作者栏）
+     * 到底有没有独立 View、类名和资源 id 是什么，靠猜阈值猜了十几个版本都没猜准。
+     * 与其让用户反复装包试，不如让模块自己在真实界面上采一次样，把结构写进日志，
+     * 之后按真实类名与坐标写规则 —— 一次采样，永久准确。</p>
+     */
+    private static boolean treeDumped = false;
     /** v3.0.26：最近一次 rescan 的根视图，hideEnabled 复用它做主页判断，避免每 tick 全树扫。 */
     private static volatile View lastRoot;
     /** v2.6.9：宿主进程自身包名，供 shouldIntervene 判定白名单豁免。 */
@@ -563,10 +601,87 @@ public final class DouyinHook {
         }
     }
 
+    /**
+     * v3.0.32：把当前界面最外三层 View 的类名 / 资源 id / 绝对坐标 / 透明度 / 文本，
+     * 压成一条 {@code TREE ...} 日志落盘。
+     *
+     * <p>目的不是给用户看，是给下一轮改动提供「真实结构」。快手右侧按钮列和底部文案块
+     * 到底是独立 View 还是一整块自绘容器、容器 id 叫什么，靠猜阈值猜不出来，
+     * 但这条日志能一次性说清楚。整棵树只采一次，每个进程一次，不会滚日志。</p>
+     */
+    private static void dumpTreeOnce(ViewGroup root) {
+        try {
+            String pkg = "";
+            try {
+                pkg = root.getContext().getPackageName();
+            } catch (Throwable ignored) {
+            }
+            StringBuilder sb = new StringBuilder("TREE pkg=" + pkg
+                    + " size=" + root.getWidth() + "x" + root.getHeight());
+            int[] budget = {42};
+            dumpNode(root, 0, 0, 0, sb, budget);
+            XposedInit.diagForce(sb.toString());
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** dumpTreeOnce 的递归体：深度上限 3、节点预算 42，超出即停。 */
+    private static void dumpNode(View v, int depth, int ox, int oy,
+                                 StringBuilder sb, int[] budget) {
+        if (v == null || budget[0] <= 0 || depth > 3) {
+            return;
+        }
+        budget[0]--;
+        int l = ox + v.getLeft();
+        int t = oy + v.getTop();
+        sb.append(" | d").append(depth).append(' ').append(v.getClass().getSimpleName())
+                .append(" [").append(l).append(',').append(t)
+                .append(',').append(ox + v.getRight()).append(',').append(oy + v.getBottom())
+                .append("] a=").append(Math.round(v.getAlpha() * 100) / 100.0);
+        if (v.getVisibility() != View.VISIBLE) {
+            sb.append(" inv");
+        }
+        int id = v.getId();
+        if (id != 0) {
+            try {
+                String n = v.getResources().getResourceName(id);
+                int slash = n.lastIndexOf('/');
+                sb.append(" id=").append(slash > 0 ? n.substring(slash + 1) : n);
+            } catch (Throwable ignored) {
+            }
+        }
+        if (v instanceof android.widget.TextView) {
+            CharSequence cs = ((android.widget.TextView) v).getText();
+            if (cs != null && cs.length() > 0) {
+                String s = cs.toString().replace('\n', ' ');
+                if (s.length() > 12) {
+                    s = s.substring(0, 12);
+                }
+                sb.append(" t=\"").append(s).append('"');
+            }
+        }
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) {
+                View c = g.getChildAt(i);
+                if (c == null || c.getVisibility() == View.GONE) {
+                    continue;
+                }
+                dumpNode(c, depth + 1, l, t, sb, budget);
+            }
+        }
+    }
+
     private static void rescan(ViewGroup root) {
         try {
             // v3.0.26：主页判定随布局变化重算一次（hideEnabled 每 tick 只读结果）
             lastRoot = root;
+            // v3.0.32：每个进程只采一次样，放在最前面（此时页面已布局完成）。
+            // 采样不依赖任何配置，用户什么都不用点，正常用一次快手就会落进日志。
+            if (!treeDumped) {
+                treeDumped = true;
+                dumpTreeOnce(root);
+            }
             // v3.0.28：页面类型判定节流 1.2 秒一次。onGlobalLayout 在高刷机上一帧能来好几趟，
             // 每趟都全树扫文本会把主线程拖住（真机表现就是「越用越卡、最后闪退」）。
             long nowKind = SystemClock.elapsedRealtime();
@@ -600,6 +715,26 @@ public final class DouyinHook {
                     if (!rights.contains(v)) {
                         rights.add(v);
                     }
+                }
+                // v3.0.36：**跨父容器全局兜底**（快手右侧「只藏一两个」的真凶）。
+                //
+                // 上面 collectRightIcons 的命中条件是「同一个父容器里 ≥2 个候选、且竖向排开」。
+                // 快手新版把点赞 / 评论 / 收藏 / 分享拆成了**各自独立的容器**（Compose
+                // 与自绘布局都这样），于是每个父容器里永远只有 1 个候选 → hits.size() < 2
+                // → 一列全都不收。真机看到的就是「右边藏了一个，剩下两个还在」。
+                //
+                // 这里换一个口径：不要求同父，全树扫一遍把「贴右缘的小控件」收进池子，
+                // 池子 ≥2 个且纵向铺开就整池收下。上限 10 个，防止把内容卡片扫进来。
+                List<View> pool = new ArrayList<>();
+                collectRightIconsWide(root, pool, 0);
+                int sh = screenH(root);
+                if (pool.size() >= 2 && sh > 0 && stackedVertically(pool, sh)) {
+                    for (View v : pool) {
+                        if (!rights.contains(v)) {
+                            rights.add(v);
+                        }
+                    }
+                    XposedInit.diag("RIGHT-WIDE x" + pool.size());
                 }
             }
             View t = scan(root, DouyinHook::scoreTop);
@@ -709,14 +844,16 @@ public final class DouyinHook {
                     }
                 }
             } else if (!rightList.isEmpty()) {
-                // v2.9.3：本轮一个右侧容器都没收到，说明当前页没有右侧列（换页 / 全屏
-                // 直播间 / 详情页）。旧版不处理，rightList 会留着上一页的 View，而
-                // tick 里的清理只看 isAttachedToWindow —— ViewPager 的邻页仍然 attached，
-                // 于是隐藏动作全部打在「看不见的邻页」上，真正的列表从头到尾没进过这里。
-                // 真机表现就是「日志里 R=x2、开关也开着，当前页右侧一动不动」。
-                releaseAll(rightList, null);
+                // v3.0.36：本轮一个右侧容器都没收到时**不再立即释放**。
+                // 旧版在这里 releaseAll → 用户看到的就是「藏了一会儿，忽然又冒出两个」；
+                // 一秒后重绘完 collectRight 又收得到，再藏一次，来回抽搐。
+                // 现在给 MISS_GRACE_ROUNDS 轮宽限：只要窗口还 attached 且可见就继续藏。
+                List<View> keep = new ArrayList<>();
+                mergeWithGrace(rightList, keep);
+                releaseAll(rightList, keep);
                 rightList.clear();
-                Log.i(TAG, "RIGHT cleared (none found this round)");
+                rightList.addAll(keep);
+                Log.i(TAG, "RIGHT miss -> kept x" + rightList.size());
             }
             if (t != null && t != topBar) {
                 // v2.9.3：同上，被替换掉的旧顶部栏先恢复再丢引用
@@ -1406,6 +1543,66 @@ public final class DouyinHook {
      *
      * <p>仅对快手 / B站 调用（见 rescan），抖音 / 红果 的识别路径不受影响。</p>
      */
+    /**
+     * v3.0.36：跨父容器的右缘小控件池（快手右侧「只藏一两个」的解药）。
+     *
+     * <p>与 {@link #collectRightIcons} 的区别只有一条：**不要求同一个父容器内 ≥2 个**。
+     * 快手新版把点赞 / 评论 / 收藏 / 分享拆成各自独立的容器，同一父容器里永远只有
+     * 1 个候选，旧口径直接把整列判空。这里全树收集，交给调用方按「池子 ≥2 且纵向
+     * 铺开」整体判定，既不漏也不至于把单个孤立图标当按钮列。</p>
+     */
+    private static void collectRightIconsWide(View v, List<View> out, int depth) {
+        if (v == null || depth > MAX_DEPTH || out.size() >= 10) {
+            return;
+        }
+        if (!(v instanceof ViewGroup)) {
+            return;
+        }
+        ViewGroup g = (ViewGroup) v;
+        int w = screenW(g);
+        int h = screenH(g);
+        if (w > 0 && h > 0) {
+            for (int i = 0; i < g.getChildCount(); i++) {
+                View c = g.getChildAt(i);
+                if (c == null || rightIconOkWide(c, w, h)) {
+                    // 命中：收进池子，且不再往下拆（避免把图标内部贴图当按钮）
+                    if (c != null && !out.contains(c)) {
+                        out.add(c);
+                    }
+                    continue;
+                }
+                collectRightIconsWide(c, out, depth + 1);
+            }
+        }
+    }
+
+    /** 比 {@link #rightIconOk} 宽松一档：右缘门槛 72%→68%，用于跨容器池。 */
+    private static boolean rightIconOkWide(View c, int w, int h) {
+        try {
+            if (c == null || c.getVisibility() != View.VISIBLE) {
+                return false;
+            }
+            int cw = c.getWidth();
+            int ch = c.getHeight();
+            if (cw <= 0 || ch <= 0 || cw > w * 0.30f || ch > h * 0.22f) {
+                return false;
+            }
+            int[] l = loc(c);
+            if (l == null || l[0] < w * 0.68f || l[0] >= w) {
+                return false;
+            }
+            if (l[1] < -h / 10 || l[1] >= h) {
+                return false;
+            }
+            if (isOwnOverlay(c) || containsVideoSurface(c, 0)) {
+                return false;
+            }
+            return c.isClickable() || hasIconSignal(c, 0) || c instanceof TextView;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
     private static void collectRightIcons(View v, List<View> out, int depth) {
         if (depth > MAX_DEPTH || !(v instanceof ViewGroup)) {
             return;
@@ -2152,11 +2349,18 @@ public final class DouyinHook {
             boolean mT = isKuaishou && Config.enableKsTop;
             boolean mB = isKuaishou && Config.enableKsBottom;
             boolean mC = isKuaishou && Config.enableKsCorner;
-            anyEnabled = !overlay && allowed && master && (
-                    (mR && !rightList.isEmpty())
-                    || (mT && topBar != null)
-                    || (mB && (!bottomList.isEmpty() || !centerPlusList.isEmpty()))
-                    || (mC && (rightTop != null || leftTop != null)));
+            // v3.0.36：**不再把「这一轮识别到几个」写进 anyEnabled**。
+            // 只要这个 App 的总开关 + 任一区域开关是开的，就维持隐藏窗口不变。
+            //
+            // 这是「半拉隐藏 / 一会儿又冒出两个」的第二条根因：旧判据要求
+            // rightList / topBar / bottomList 当前非空，可 collectors 在滚动、
+            // 弹层弹出、Compose 重绘时必然有落空的一两轮。那一两轮里 anyEnabled
+            // 变 false → 命中下方 `!anyEnabled` 分支 → showAll() 把整页恢复，
+            // 下一秒又收得到 → 再藏。用户看到的就是「藏了、又露了、又藏」。
+            //
+            // 识别为空本身不需要恢复任何东西：hideEnabled() 里每个区域都按各自
+            // 开关走，没收到目标的区域自然什么都不做，不会误伤。
+            anyEnabled = !overlay && allowed && master && (mR || mT || mB || mC);
         } else if (isDrama) {
             // v2.7：红果底部是「完整观看/选集」功能入口，hideEnabled 里强制常驻不隐藏，
             // enableDramaBottom 也没有可点开的 UI（恒 false）。旧版却把它算进 anyEnabled，
@@ -2211,15 +2415,18 @@ public final class DouyinHook {
         // 代价是识别错了会藏掉内容区（用户说的「容易产生 bug」正是这条），
         // 所以在 hideSafe() 里补了一道面积保险：超过屏幕 45%×45% 的一律不藏。
         long now = SystemClock.elapsedRealtime();
-        // v3.0.27：视频 App 内的固定控件改为常隐，不再周期性「放出来透口气」。
+        // v3.0.34：App 内恢复**周期性真隐藏**，不再常隐。
         //
-        // 真机反馈：40/10 周期里那 10 秒会把点赞列 / 底部条 / 作者栏整片恢复，
-        // 表现就是「好不容易藏干净，两秒后又变回原样」，用户截到的干净帧只是
-        // 隐藏相位的最后一小段。周期（hideSec / showSec）继续完整作用于
-        // SystemUI 状态栏 / 导航栏（Controller 独立实现，本改动不碰），
-        // App 内只用「进入页面立刻藏 + 之后每轮重新压制」。
-        long hideMs = Long.MAX_VALUE / 4;
-        long showMs = Long.MAX_VALUE / 4;
+        // v3.0.27 曾把固定控件改成常隐（hideMs/showMs = Long.MAX_VALUE/4），本意是修
+        // 「好不容易藏干净、两秒后又变回原样」。但真机反馈变成了另一个极端：
+        // 「正常（显示）相位根本不还原，还是那副隐藏效果，只回来零星几个」——
+        // 用户想正常看视频时点赞列 / 底部文案一直不回来，比闪回还难受。
+        //
+        // 真正该调的是周期长度，不是把「还原」这件事删掉：嫌 10 秒就闪回，
+        // 把「显示」调到 30~40 秒即可（功能页首屏就有这个参数）。
+        // 所以这里改回 v2.9.0 的周期性方案：hideSec 藏、showSec 显，两者都用配置值。
+        long hideMs = Math.max(1, Config.hideSec) * 1000L;
+        long showMs = Math.max(1, Config.showSec) * 1000L;
         if (!hidden) {
             // phaseAt==0 表示刚进页面，先立刻藏一轮，别让用户等一个 showSec
             if (phaseAt == 0L || now - phaseAt >= showMs) {
@@ -2231,11 +2438,6 @@ public final class DouyinHook {
             showAll();
             hidden = false;
             phaseAt = now;
-        } else if (!livePaused) {
-            // v3.0.27：常隐模式下每轮重新压制一次 —— App 自己把控件 setVisibility
-            // 回 VISIBLE（入场动画结束 / 切换面板）也能被按回去。
-            // 直播页不重跑：hideLiveAreas() 内部先 showAll() 再藏，每轮都跑会闪。
-            hideEnabled();
         }
 
         // 每 1 秒重扫一次：相位切换靠时间戳判定，tick 间隔必须小于最短相位，
@@ -2622,6 +2824,9 @@ public final class DouyinHook {
             if (v.getVisibility() != View.INVISIBLE && v.getVisibility() != View.GONE) {
                 v.setVisibility(View.INVISIBLE);
             }
+            // v3.0.36：写进保底台账。此后无论列表怎么抖、引用什么时候被丢，
+            // showAll / 关开关 / 退出页面都能按这张表把它点亮。
+            touched.add(v);
         } catch (Throwable t) {
             Log.e(TAG, "hide failed: " + what, t);
         }
@@ -2675,6 +2880,46 @@ public final class DouyinHook {
         }
         for (View v : captionList) {
             showDeep(v);
+        }
+        // v3.0.36：THH 四通道也接进恢复路径。
+        // 旧版刻意让 THH「不进 showAll」，靠 applyTargetedList 的门控自己恢复；
+        // 可一旦 showAll 由 tick 的 !anyEnabled / livePaused 分支触发，两个出口
+        // 的执行顺序就不确定了，中间那一两轮里 THH 藏掉的块是黑着的。
+        for (View v : ksLiveTargetList) {
+            showDeep(v);
+        }
+        for (View v : dyLiveTargetList) {
+            showDeep(v);
+        }
+        for (View v : ksFeedTargetList) {
+            showDeep(v);
+        }
+        for (View v : dramaTargetList) {
+            showDeep(v);
+        }
+        sweepTouched();
+    }
+
+    /**
+     * v3.0.36：按保底台账全量还原。
+     *
+     * <p>这是「正常显示」的最后一道保险 —— 前面所有列表都可以漏、可以抖，
+     * 只要动过就进台账，这里一定能点亮。台账是 WeakHashMap，Activity 销毁后
+     * 自然回收，不会泄漏也不会越积越多。</p>
+     */
+    private static void sweepTouched() {
+        try {
+            java.util.Iterator<View> it = touched.iterator();
+            while (it.hasNext()) {
+                View v = it.next();
+                if (v != null) {
+                    showDeep(v);
+                }
+            }
+        } catch (Throwable t) {
+            // 弱引用集合在 GC 与 layout 回调并发时可能抛 CME；宁可少还原一轮，
+            // 也绝不能让 tick 因此中断（下一轮还会再扫）。
+            Log.e(TAG, "sweepTouched failed", t);
         }
     }
 
@@ -4553,9 +4798,46 @@ public final class DouyinHook {
 
     /** v3.0.7 列表提交：先恢复本轮不再命中的 View，再整体替换（复用 v2.9.3 releaseAll）。 */
     private static void commitTargeted(List<View> old, List<View> next) {
+        mergeWithGrace(old, next);
         releaseAll(old, next);
         old.clear();
         old.addAll(next);
+    }
+
+    /**
+     * v3.0.36：把「上一轮还在藏、这一轮没被收到、但窗口仍然存活」的 View 并回列表。
+     *
+     * <p>这是消除「半拉隐藏 / 一会儿又冒出来」的唯一入口。只有三种情况才允许放行：
+     * 窗口已 detach、已不可见、或者连续 {@link #MISS_GRACE_ROUNDS} 轮都没再收到
+     * （那才是真的翻页了，不是抖动）。</p>
+     */
+    private static void mergeWithGrace(List<View> old, List<View> next) {
+        for (View v : next) {
+            missRounds.remove(v);          // 本轮重新命中：计数清零（先做，避免被下面并回时误加）
+        }
+        for (View v : old) {
+            if (v == null || next.contains(v)) {
+                continue;
+            }
+            boolean alive;
+            try {
+                alive = v.isAttachedToWindow() && v.isShown();
+            } catch (Throwable t) {
+                alive = false;
+            }
+            if (!alive) {
+                missRounds.remove(v);      // 窗口没了：下一轮立刻放行，不留僵尸引用
+                continue;
+            }
+            Integer prev = missRounds.get(v);
+            int miss = (prev == null ? 0 : prev) + 1;
+            if (miss < MISS_GRACE_ROUNDS) {
+                missRounds.put(v, miss);
+                next.add(v);               // 宽限期内：继续藏，绝不露出
+            } else {
+                missRounds.remove(v);
+            }
+        }
     }
 
     /**
