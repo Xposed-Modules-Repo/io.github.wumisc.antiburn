@@ -60,7 +60,7 @@ public final class VideoAppProbe {
      */
     static void init(XC_LoadPackage.LoadPackageParam lpparam, String label) {
         final String pkg = lpparam.packageName;
-        XposedInit.diagForce("PROBE ATTACH " + label + " pkg=" + pkg
+        Diag.force("PROBE ATTACH " + label + " pkg=" + pkg
                 + " process=" + lpparam.processName + " (stage1: dump only, no hide)");
         try {
             XposedHelpers.findAndHookMethod(Activity.class, "onResume",
@@ -72,14 +72,14 @@ public final class VideoAppProbe {
                             } catch (Throwable t) {
                                 // 绝不把异常抛回宿主主线程
                                 Log.e(TAG, "probe onResume failed", t);
-                                XposedInit.diagForce("PROBE FAIL " + label + " onResume: "
+                                Diag.force("PROBE FAIL " + label + " onResume: "
                                         + Log.getStackTraceString(t));
                             }
                         }
                     });
         } catch (Throwable t) {
             Log.e(TAG, "hook Activity.onResume failed", t);
-            XposedInit.diagForce("PROBE FAIL " + label + " attach: "
+            Diag.force("PROBE FAIL " + label + " attach: "
                     + Log.getStackTraceString(t));
         }
     }
@@ -117,7 +117,7 @@ public final class VideoAppProbe {
                         dump(label, root);
                     } catch (Throwable t) {
                         Log.e(TAG, "probe dump failed", t);
-                        XposedInit.diagForce("PROBE FAIL " + label + " dump: "
+                        Diag.force("PROBE FAIL " + label + " dump: "
                                 + Log.getStackTraceString(t));
                     }
                 }
@@ -157,7 +157,7 @@ public final class VideoAppProbe {
                 .append(" truncated=").append(counter[0] >= MAX_NODES).append('\n');
         String text = sb.toString();
         boolean ok = XposedInit.writeSharedFile("antiburn_probe_" + label + ".log", text);
-        XposedInit.diag("PROBE " + label + " dumped nodes=" + counter[0]
+        Diag.d("PROBE " + label + " dumped nodes=" + counter[0]
                 + " chars=" + text.length() + " written=" + ok);
         if (!ok) {
             Log.w(TAG, "probe file write failed (no writable path): " + label);

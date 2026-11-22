@@ -55,7 +55,7 @@ public final class BootReceiver extends BroadcastReceiver {
             // 磁贴刷新失败不影响其余幂等步骤
         }
         // 3) 可观测：强制落一条，证明广播确实到达（用户导出日志即可核对）。
-        XposedInit.diagForce("BOOT restore action=" + a + " attempt=1");
+        Diag.force("BOOT restore action=" + a + " attempt=1");
         // 4) v3.0.24：开机后拉起常驻运行通知，用户不打开 App 也能保后台。
         try {
             GuardService.ensure(c.getApplicationContext());

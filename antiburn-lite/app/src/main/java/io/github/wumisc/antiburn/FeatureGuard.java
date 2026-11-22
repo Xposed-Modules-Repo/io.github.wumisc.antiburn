@@ -52,12 +52,12 @@ public final class FeatureGuard {
             disabled.remove(id);
             fails.remove(id);
             disabledAt.remove(id);
-            XposedInit.diagForce("GUARD " + id + " 熔断冷却结束，重新尝试");
+            Diag.force("GUARD " + id + " 熔断冷却结束，重新尝试");
         }
         try {
             body.run();
             if (fails.remove(id) != null) {
-                XposedInit.diagForce("GUARD " + id + " 恢复正常（此前有失败记录）");
+                Diag.force("GUARD " + id + " 恢复正常（此前有失败记录）");
             }
             healthy.add(id);
             return true;
@@ -66,11 +66,11 @@ public final class FeatureGuard {
             String msg = t.getClass().getSimpleName()
                     + (t.getMessage() == null ? "" : ": " + t.getMessage());
             reasons.put(id, msg);
-            XposedInit.diagForce("GUARD " + id + " 失败(" + n + "/" + MAX_FAIL + ") " + msg);
+            Diag.force("GUARD " + id + " 失败(" + n + "/" + MAX_FAIL + ") " + msg);
             if (n >= MAX_FAIL) {
                 disabled.add(id);
                 disabledAt.put(id, System.currentTimeMillis());
-                XposedInit.diagForce("GUARD " + id + " 已熔断，60 秒后自动重试");
+                Diag.force("GUARD " + id + " 已熔断，60 秒后自动重试");
             }
             return false;
         }
@@ -87,7 +87,7 @@ public final class FeatureGuard {
         fails.remove(id);
         reasons.remove(id);
         disabledAt.remove(id);
-        XposedInit.diag("GUARD " + id + " 已重置");
+        Diag.d("GUARD " + id + " 已重置");
     }
 
     /** 全部重置，仅在配置整体重载时调用。 */

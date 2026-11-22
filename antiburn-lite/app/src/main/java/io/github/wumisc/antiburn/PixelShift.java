@@ -180,7 +180,7 @@ public final class PixelShift {
         // 导航栏只做横向：手势条下沿贴屏幕边缘，上下移动容易被裁切
         applyTo(navRoot, curX, 0);
         if (applied % 30 == 0) {
-            XposedInit.diag("SHIFT applied=" + applied + " offset=(" + curX + "," + curY + ")"
+            Diag.d("SHIFT applied=" + applied + " offset=(" + curX + "," + curY + ")"
                     + " max=(" + maxX + "," + maxY + ")");
         }
     }
@@ -261,7 +261,7 @@ public final class PixelShift {
             v.setTranslationX(x);
             v.setTranslationY(y);
         } catch (Throwable t) {
-            XposedInit.diag("SHIFT apply failed: " + t);
+            Diag.d("SHIFT apply failed: " + t);
         }
     }
 

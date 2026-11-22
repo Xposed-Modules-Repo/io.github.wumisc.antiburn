@@ -563,7 +563,7 @@ public final class Config {
             long t = System.currentTimeMillis();
             if (t - lastRejectLog > 30000L) {
                 lastRejectLog = t;
-                XposedInit.diagForce("CONF reject stale src=" + src + " rev=" + rev
+                Diag.force("CONF reject stale src=" + src + " rev=" + rev
                         + " applied=" + appliedRev + " fetch=" + fetchState);
             }
             return;
@@ -597,7 +597,7 @@ public final class Config {
         }
         // v2.6：带上三条通道各自的 rev，真机日志里能一眼看出「provider/cache 落后、
         // direct 领先」这类通道不同步，不用再靠猜。
-        XposedInit.diagForce("CONF apply src=" + src + " rev=" + rev
+        Diag.force("CONF apply src=" + src + " rev=" + rev
                 + " rp=" + ConfStore.revOf(provider)
                 + " rc=" + ConfStore.revOf(cache)
                 + " rd=" + ConfStore.revOf(direct)
@@ -1013,7 +1013,7 @@ public final class Config {
         }
         // 日志开关关闭时不输出（原来无条件 Log.i 会把白名单/前台包名写进 logcat）
         if (enableLog) {
-            Log.i(XposedInit.TAG, "config reloaded: status=" + es + " nav=" + en
+            Log.i("Antiburn", "config reloaded: status=" + es + " nav=" + en
                     + " dyTop=" + dtop + " dyBottom=" + dbot + " dyLike=" + dlike
                     + " live=" + live + " poem=" + poem + " ball=" + ball
                     + " hide=" + hideSec + "s show=" + showSec + "s mode=" + listMode
