@@ -139,6 +139,14 @@ public final class DouyinHook {
      * 透明化后会露出页面白底 —— 模块的防烧屏收益在这个页面接近于零，直接放行最稳。</p>
      */
     private static volatile boolean profilePage = false;
+    /**
+     * v3.0.27：抖音直播页（靠文案 + 无底部首页 Tab 判定）。
+     *
+     * <p>直播间是独立全屏 Activity，没有 MainBottomTabContainer；画面外还常年挂着
+     * 「本场点赞 / 直播广场 / 小时榜 / 说点什么」这类只有直播间才有的固定文案。
+     * 这个标记只用于「直播固定条补扫」，不替代 livePaused / liveDetected 的历史判定。</p>
+     */
+    private static volatile boolean liveFixedPage = false;
     /** v3.0.26：最近一次 rescan 的根视图，hideEnabled 复用它做主页判断，避免每 tick 全树扫。 */
     private static volatile View lastRoot;
     /** v2.6.9：宿主进程自身包名，供 shouldIntervene 判定白名单豁免。 */
@@ -556,6 +564,11 @@ public final class DouyinHook {
             // v3.0.26：主页判定随布局变化重算一次（hideEnabled 每 tick 只读结果）
             lastRoot = root;
             profilePage = !isVideoApp && isProfilePage(root);
+            // 只认直播间独有的三个词，绝不拿「说点什么」当判据 —— 合集页 / 单视频页
+            // 底部也有评论输入条，一旦误判成直播间就会跳过右侧按钮列。
+            liveFixedPage = !isVideoApp && !profilePage
+                    && findBottomDock(root, 0) == null
+                    && hasAnyText(root, 0, "本场点赞", "直播广场", "小时榜");
             List<View> rights = collectRight(root, 4);
             // 补充兜底：贴右缘竖列（不限 childCount，防止个别视频把点赞列分组成小容器而漏藏）
             for (View e : collectRightEdge(root, 4)) {
@@ -2188,8 +2201,15 @@ public final class DouyinHook {
         // 代价是识别错了会藏掉内容区（用户说的「容易产生 bug」正是这条），
         // 所以在 hideSafe() 里补了一道面积保险：超过屏幕 45%×45% 的一律不藏。
         long now = SystemClock.elapsedRealtime();
-        long hideMs = Math.max(1, Config.hideSec) * 1000L;
-        long showMs = Math.max(1, Config.showSec) * 1000L;
+        // v3.0.27：视频 App 内的固定控件改为常隐，不再周期性「放出来透口气」。
+        //
+        // 真机反馈：40/10 周期里那 10 秒会把点赞列 / 底部条 / 作者栏整片恢复，
+        // 表现就是「好不容易藏干净，两秒后又变回原样」，用户截到的干净帧只是
+        // 隐藏相位的最后一小段。周期（hideSec / showSec）继续完整作用于
+        // SystemUI 状态栏 / 导航栏（Controller 独立实现，本改动不碰），
+        // App 内只用「进入页面立刻藏 + 之后每轮重新压制」。
+        long hideMs = Long.MAX_VALUE / 4;
+        long showMs = Long.MAX_VALUE / 4;
         if (!hidden) {
             // phaseAt==0 表示刚进页面，先立刻藏一轮，别让用户等一个 showSec
             if (phaseAt == 0L || now - phaseAt >= showMs) {
@@ -2201,6 +2221,11 @@ public final class DouyinHook {
             showAll();
             hidden = false;
             phaseAt = now;
+        } else if (!livePaused) {
+            // v3.0.27：常隐模式下每轮重新压制一次 —— App 自己把控件 setVisibility
+            // 回 VISIBLE（入场动画结束 / 切换面板）也能被按回去。
+            // 直播页不重跑：hideLiveAreas() 内部先 showAll() 再藏，每轮都跑会闪。
+            hideEnabled();
         }
 
         // 每 1 秒重扫一次：相位切换靠时间戳判定，tick 间隔必须小于最短相位，
@@ -2231,6 +2256,15 @@ public final class DouyinHook {
             } else {
                 showAll();
             }
+            return;
+        }
+        // v3.0.27：直播页固定条补扫。
+        // liveDetected 依赖 collectLiveTop/Bottom/RightNode 收到节点，抖音新版直播间
+        // 这几块常被拆成多个平行容器、甚至一个都收不到，于是走普通页路径后
+        // 顶部作者栏 / 热度榜 / 活动 banner / 底部输入条整片留着。
+        // 这里按「几何 + 直播专属文案」直接补一遍，只藏矮横条，不碰评论列表。
+        if (liveFixedPage) {
+            hideLiveBands();
             return;
         }
         // v2.7：直播三区只受「直播间隐藏」开关控制，独立判断，不再短路掉普通区域。
@@ -2437,6 +2471,80 @@ public final class DouyinHook {
             }
         }
         liveHiddenCount = n;
+    }
+
+    /**
+     * v3.0.27：直播页固定条补扫。
+     *
+     * <p>不走 liveTopList / liveBottomList（那两套依赖 id/类名/文本收集，抖音新版直播间
+     * 常把这些块拆成多个平行容器，一个都收不到），直接按几何 + 直播专属文案扫：
+     * 顶部 20% 内的横向条、贴底矮横条，各过一道 {@link #hideLiveFixed}。</p>
+     *
+     * <p>不碰评论/弹幕列表：候选只有「矮横条」，且面积保险 tooBigToHide 仍在。</p>
+     */
+    private static void hideLiveBands() {
+        if (!(lastRoot instanceof ViewGroup)) {
+            return;
+        }
+        ViewGroup root = (ViewGroup) lastRoot;
+        List<View> tops = new ArrayList<>();
+        collectLiveTopBand(root, tops, 0);
+        for (View v : tops) {
+            hideLiveFixed(v, "top");
+        }
+        List<View> bots = new ArrayList<>();
+        collectBottomChrome(root, bots, 0);
+        for (View v : bots) {
+            hideLiveFixed(v, "bottom");
+        }
+    }
+
+    /**
+     * v3.0.27：直播顶部整片（作者栏 / 热度榜 / 活动 banner / 在线人数 / 直播广场）。
+     *
+     * <p>与 {@link #collectLiveTopNode} 的区别：这里不看能不能收到「直播专属节点」，
+     * 只要位置在屏上部、宽度够、厚度像横条，且子树里有直播专属文案就收。</p>
+     */
+    private static void collectLiveTopBand(View v, List<View> list, int depth) {
+        if (v == null || depth > MAX_DEPTH || v.getVisibility() == View.GONE
+                || !(v instanceof ViewGroup)) {
+            return;
+        }
+        ViewGroup g = (ViewGroup) v;
+        int[] loc = loc(g);
+        int sw = screenW(g);
+        int sh = screenH(g);
+        if (loc != null && sw > 0 && sh > 0 && g.getWidth() > 0 && g.getHeight() > 0
+                && loc[1] >= -sh / 5 && loc[1] < sh * 0.20f
+                && g.getHeight() >= 24 && g.getHeight() <= sh * 0.24f
+                && g.getWidth() >= sw * 0.40f
+                && hasAnyText(g, 0, "本场点赞", "直播广场", "小时榜", "年度",
+                        "可领取", "热度榜", "人观看")
+                && !list.contains(g)) {
+            list.add(g);
+        }
+        for (int i = 0; i < g.getChildCount(); i++) {
+            collectLiveTopBand(g.getChildAt(i), list, depth + 1);
+        }
+    }
+
+    /**
+     * v3.0.27：直播固定条专用隐藏闸。
+     *
+     * <p>与 {@link #hideLiveCandidate} 的唯一区别：**不跑 containsDynamicUi**。
+     * 底部输入条本身就是一个 EditText，旧版把它当「动态 UI」整棵跳过 —— 用户圈了
+     * 四张图的「说点什么」条，一条都没藏，就是这条挡的。候选已由 collectBottomChrome
+     * 的三道几何门槛（半屏宽 / ≤14% 高 / 贴底 86%）严格筛过，不是内容区。</p>
+     */
+    private static void hideLiveFixed(View v, String what) {
+        if (v == null || isOwnOverlay(v)) {
+            return;
+        }
+        if (containsVideoSurface(v, 0) || tooBigToHide(v) || !safeToHide(v, what)) {
+            showDeep(v);
+            return;
+        }
+        hideSafe(v, what);
     }
 
     /**
