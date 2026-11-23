@@ -1,6 +1,6 @@
 # 防止烧屏（Antiburn）
 
-防 OLED 烧屏工具，当前稳定版 **v3.2.5（versionCode 104）**，包名 `io.github.wumisc.antiburn`，签名不变，可直接覆盖安装。
+防 OLED 烧屏工具，当前稳定版 **v3.2.6（versionCode 105）**，包名 `io.github.wumisc.antiburn`，签名不变，可直接覆盖安装。
 
 OLED 像素会随点亮时长累积衰减。状态栏的时钟、信号、电量，导航栏的三个按键，短视频里固定不动的点赞、评论按钮，长期停在一处就会留下擦不掉的残影。模块让它们别一直亮在同一处：能透明化就透明化，不能就周期遮盖、像素微移，把曝光摊开。
 
@@ -44,7 +44,10 @@ v2.8.3 曾用覆盖层把这几块区域盖黑，真机反馈会连视频画面�
 - 无障碍模式可周期遮盖抖音 / 红果 / 快手 / B站 的右侧按钮列、顶部标题与底部导航（免 root，仅 overlay 引擎）
 - 感谢名单（酷安 / 心之所及等）与支持捐赠
 
-## 最近更新（v3.2.3 → v3.2.5）
+## 最近更新（v3.2.4 → v3.2.6）
+
+- **v3.2.6**：**整条移除状态栏「三班倒」**。真机日志 `zone=no L1/R0/w1280` 说明这台设备探不到左右分区，三班倒与主周期是两套独立时钟，降级只能保证「不硬演」不能保证「跟周期」，表现为图标不按 40/10 走。删除范围：`statusRound` / `applyStatusRound()` / 三段调度 / `applyHide` 让路分支 / `sideAllowed` 四相位分支 / `zoneReady`+`lastProbe`+`probeLeaves()` 分区探测 / `lastMaskSig` / `applyShowNavOnly()` / `Config.enableStatusRound` / conf 键 / 通用页开关行。状态栏回到单一时钟：隐藏相位 `hideStatusKeepNotify`（按「隐藏时间 / 隐藏右侧图标」分侧），显示相位 `applyShow`。白名单残留恢复条件保留 `hidden || statusChildrenHidden()`。测试 853 项全绿（新增 T-72 零残留八条）。
+
 
 - **v3.2.5**：开关翻正 + 再压一轮功耗 + 闭合覆盖缺口。① 「取消三班倒」改成**正向「三班倒」**：勾上=三档轮换（只遮右 / 只遮左 / 全遮），关掉=走原来的整条隐藏（`applyHide`，通知让开照旧），底层 `enable_status_round` 仍 `1=开`，老配置不用迁移；② 功耗四处：`applyMask()` 加同帧短路（相位内不再每秒重建 5 个 Rect）、`KeyguardManager` 3 秒缓存 + 灭屏短路、配置 TTL 8s→15s、前台包查询 1s→3s；③ 四区比例：R 右界左边界 84%→80%（907→864px）、B 底部起点 90%→86%（2160→2064px），把快手带货卡/评论区所在的 84%~86% 横带夹住；④ release 开 `minifyEnabled + shrinkResources`（`-dontobfuscate` + 全包 keep），APK 36.66MB→3.48MB，模块自身代码仅 0.46MB。测试 855 项全绿（新增 T-71）。
 

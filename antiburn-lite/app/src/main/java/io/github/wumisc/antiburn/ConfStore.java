@@ -175,7 +175,6 @@ public final class ConfStore {
         sb.append("enable_status=1\n");
         sb.append("enable_shift=1\n");
         sb.append("enable_navigation=0\n");
-        sb.append("enable_status_round=1\n");
         sb.append("enable_poem=0\n");
         sb.append("enable_ball=0\n");
         sb.append("enable_log=0\n");

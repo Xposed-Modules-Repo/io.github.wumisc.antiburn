@@ -845,7 +845,6 @@ public final class Controller {
             statusView = null;
             notifyArea = null;
             dimmed.clear();
-            zoneReady = 0;          // v3.0.31：换了新的状态栏窗口，分区能力要重测
             hidden = false;
         }
         if (statusView != null && !statusView.isAttachedToWindow()) {
@@ -853,7 +852,6 @@ public final class Controller {
             statusView = null;
             notifyArea = null;
             dimmed.clear();
-            zoneReady = 0;          // v3.0.31：新窗口重新测分区
             // 新窗口是可见的，旧 hidden=true 会让下一轮跳过 applyHide，
             // 表现为「重抓到了但一直不隐藏」。复位后按当前相位重新施加。
             hidden = false;
@@ -1014,7 +1012,7 @@ public final class Controller {
                 + "|" + livePause;
         // v3.2：**把易变字段从「变化签名」里摘出去**（原先签名里带着 hideDiag()）。
         //
-        // hideDiag 里有 hidden / statusRound / dimmed.size() / nv@alpha / zone ——
+        // hideDiag 里有 hidden / dimmed.size() / nv@alpha / zone ——
         // 这几项在正常相位里每一轮都在变，于是「状态一变就记一条」退化成
         // **每秒一条 SYS**。真机日志 89 行跨 7 分钟，其中 32 条是 SYS，
         // 一天下来八万行：写盘、刷盘、wakeup 全是白耗的电。
@@ -1050,14 +1048,12 @@ public final class Controller {
         // v2.7.2：直播间暂停与灭屏 / 名单豁免同级 —— 命中即恢复系统栏并停掉像素偏移。
         // 灭屏已在上面提前返回，这里只剩「名单豁免」与「直播暂停」两种。
         if (!intervene || livePause) {
-            // v3.2.4 修复（真机：微信放进白名单后仍停在「只遮左半」）：
-            // `hidden` 只记录全局 hide/show 相位，压根不覆盖三班倒 ——
-            // 三班倒由 applyStatusRound 独立推进，不设 hidden。切进豁免应用那一轮
-            // 若恰好处于全局显示相位（hidden=false），applyShow() 根本不会被调用，
-            // statusRound 与 dimmed 原样留着，状态栏就卡在「留右」：
-            // 右侧信号电量还亮着、时间不显示，直到下一个相位边界才可能自愈。
-            // 因此恢复条件必须把「三班倒在跑」「仍有子容器被透明化」一并算进来。
-            if (hidden || statusRound >= 0 || statusChildrenHidden()) {
+            // v3.2.6 修复（真机：微信放进白名单后仍停在「只遮一半」）：
+            // `hidden` 只记录全局 hide/show 相位，不覆盖「子容器已被逐个透明化」的残留。
+            // 切进豁免应用那一轮若恰好处于全局显示相位（hidden=false），applyShow()
+            // 根本不会被调用，dimmed 里的视图原样留着，状态栏就卡在残影上，
+            // 直到下一个相位边界才可能自愈。恢复条件必须把子容器残留一并算进来。
+            if (hidden || statusChildrenHidden()) {
                 applyShow();
                 hidden = false;
             }
@@ -1087,11 +1083,6 @@ public final class Controller {
         boolean cfgChanged = lastStatusBarSwitch != Config.enableStatusBar
                 || lastNavSwitch != Config.enableNav;
 
-        // v3.0.30：状态栏「三班倒」。它有自己的三段周期（左亮 / 右亮 / 全灭），
-        // 与导航栏、应用内覆盖层用的全局两段周期解耦 —— 用户只要求状态栏两边轮流，
-        // 导航栏跟着轮播闪没有意义，还会破坏「全灭时整屏干净」的观感。
-        applyStatusRound(now, cfgChanged);
-
         if (shouldHide) {
             if (!hidden || cfgChanged) {
                 applyHide();
@@ -1099,9 +1090,7 @@ public final class Controller {
             }
         } else {
             if (hidden) {
-                // 全局显示相位只恢复导航栏；状态栏归 applyStatusRound 管，
-                // 这里调 applyShow() 会把「只留右侧」相位里的时间区一起点亮。
-                applyShowNavOnly();
+                applyShow();
                 hidden = false;
             }
         }
@@ -1141,16 +1130,6 @@ public final class Controller {
         // v3.0.10：兜底重读 2s→3s 省空转唤醒；边界仍由 remain 精确调度，切换时刻不变。
         // 旧版直接等到相位边界（最长 hideSec 秒），导致改了开关要等几十秒才生效。
         long remain = shouldHide ? (hideMs - pos) : (hideMs + showMs - pos);
-        // v3.0.30：三班倒有自己的边界，只按全局两段周期算调度会让换班最多晚 3 秒
-        // （MIN_TICK_MS 兜底），真机上看着就是「亮了十几秒还没换」。这里取更近的边界。
-        if (statusRound >= 0) {
-            long seg = Math.max(1, Config.showSec) * 1000L;
-            long off = Math.max(1, Config.hideSec) * 1000L;
-            long stp = now % (seg * 2 + off);
-            long srem = stp < seg ? seg - stp
-                    : (stp < seg * 2 ? seg * 2 - stp : seg * 2 + off - stp);
-            remain = Math.min(remain, srem);
-        }
         scheduleCycle(Math.min(MIN_TICK_MS, Math.max(100L, remain)));
     }
 
@@ -1199,35 +1178,7 @@ public final class Controller {
     private static boolean lastStatusBarSwitch = true;
     private static boolean lastNavSwitch = false;
 
-    /**
-     * v3.0.30：状态栏「三班倒」相位。用户可把状态栏的时间区与信号/电量区轮流点亮，
-     * 让两边像素分摊点亮时间，而不是整条一起灭。
-     *
-     * <p>-1 = 未接管（沿用旧的「整条按周期全灭/全显」）；
-     * 0 = 只留左侧（时间），右侧图标透明；
-     * 1 = 只留右侧（信号/WiFi/电量），左侧时间透明；
-     * 2 = 两侧全透明（只剩通知图标）。</p>
-     *
-     * <p>只在「时间」「图标」两个开关都打开时启用 —— 只开一个时用户要的就是
-     * 另一侧常暗，没有轮流的意义。</p>
-     */
-    private static int statusRound = -1;
-    /** 轮播配置签名：开关或秒数变了要立刻按新配置重画，不能等相位边界 */
-    private static String lastMaskSig = "";
 
-    /**
-     * v3.0.31：本机能不能真的按左右分区遮。
-     *
-     * <p>0 = 还没测；1 = 能；2 = 不能。</p>
-     *
-     * <p>为什么必须测：v3.0.30 的真机日志里出现过
-     * {@code rot=0 zone=w1280/n0} —— 几何分区一个叶子都没命中，只剩第三级兜底遮了 5 个，
-     * 于是「只留左边」这个相位压根没按边界执行，状态栏变成忽隐忽现、该亮的暗、该暗的亮。
-     * 用户看到的就是「状态栏崩了」。分区测不出来时必须降级，绝不能硬演。</p>
-     */
-    private static int zoneReady = 0;
-    /** 上一次分区分组探测的结果（左/右可见叶子数），写进 SYS-ROUND 日志 */
-    private static String lastProbe = "";
 
     /**
      * v2.7.7：把「周期相位 / 视图 / alpha / 已透明子视图数」压成一段可落盘的状态串。
@@ -1249,154 +1200,11 @@ public final class Controller {
                 : navView.getClass().getSimpleName() + "@" + navView.getAlpha()
                 + (navView.isAttachedToWindow() ? "" : "(det)");
         return " hid=" + hidden + " cyc=" + Config.hideSec + "/" + Config.showSec
-                + " rot=" + statusRound
                 + " sv=" + s + " nv=" + n + " dim=" + dimmed.size()
                 + " zone=" + lastZone
                 + " svok=" + isPlausibleStatusBar(statusView);
     }
 
-    /**
-     * v3.0.30：状态栏三班倒 —— 左亮 / 右亮 / 全灭 三段循环。
-     *
-     * <p>为什么要有这套：OLED 状态栏最烧像素的恰恰是「永远亮着的同一批东西」。
-     * 旧策略是整条按 hideSec/showSec 一起灭、一起亮（用户真机感受是
-     * 「时间一下没了 40 秒」）。改成两边轮流亮，两块像素各自只承担
-     * 三分之一的总点亮时间，同时又保证任何时候用户都能看到一半信息，
-     * 不会出现「整条状态栏空着」的突兀感。</p>
-     *
-     * <p>段长直接复用界面首屏已有的两个周期参数（保留「周期在功能页首屏」的约定）：
-     * 每一班亮 {@link Config#showSec} 秒，全灭 {@link Config#hideSec} 秒。</p>
-     *
-     * <p>只在「时间」「图标」两个开关都打开时接管；只开一个说明用户要另一侧常暗，
-     * 没有轮流的意义，交回旧路径。</p>
-     */
-    private static void applyStatusRound(long now, boolean cfgChanged) {
-        // v3.2.4：新增「取消三班倒」总闸。关掉即回到常规 hide/show 两段周期，
-        // 不再有「只留一边」的中间态 —— 这也是「时间时有时无」观感的直接出口。
-        boolean wantRotate = Config.enableStatus && Config.enableStatusBar
-                && Config.enableStatusRound
-                && Config.statusClockOn && Config.statusIconsOn;
-        if (!wantRotate) {
-            if (statusRound >= 0) {
-                statusRound = -1;
-                lastMaskSig = "";
-                restoreStatusChildren();
-            }
-            return;
-        }
-        // v3.0.31：先确认本机能不能按左右分区遮。测不出来就永久降级 ——
-        // 单侧相位一律不遮（等价于整条亮），只有全灭相位才动手，
-        // 宁可退回两态，也不让状态栏乱跳。
-        if (zoneReady == 0) {
-            restoreStatusChildren();
-            int[] cnt = {0, 0};
-            if (statusView instanceof android.view.ViewGroup) {
-                android.view.ViewGroup g = (android.view.ViewGroup) statusView;
-                int w = g.getWidth();
-                if (w > 0) {
-                    probeLeaves(g, 0, w, 0,
-                            (int) (w * 0.34f), (int) (w * 0.62f), cnt);
-                    zoneReady = (cnt[0] >= 1 && cnt[1] >= 1) ? 1 : 2;
-                    lastProbe = "L" + cnt[0] + "/R" + cnt[1] + "/w" + w;
-                    XposedInit.diag("SYS-ROUND zone=" + (zoneReady == 1 ? "ok" : "no")
-                            + " " + lastProbe);
-                } else {
-                    zoneReady = 2;
-                    lastProbe = "w0";
-                }
-            } else {
-                zoneReady = 2;
-                lastProbe = "nosb";
-            }
-        }
-        String sig = Config.showSec + "/" + Config.hideSec;
-        long seg = Math.max(1, Config.showSec) * 1000L;
-        long off = Math.max(1, Config.hideSec) * 1000L;
-        // v3.2：**不可分区的机器直接退出三班倒**。
-        //
-        // 真机日志（HyperOS 4 / K90）摊开是这样的：zone=no，rot 在 2 和 3 之间
-        // 每 20 / 40 秒翻一次，dim 在 19 和 0 之间跟着翻。观感就是状态栏整条
-        // 黑一阵、亮一下，用户原话「状态栏都崩了」。
-        //
-        // 根因在三段周期本身：三段是给「能分区」的机器设计的（左亮 / 右亮 / 全灭）。
-        // 一旦分不了区，第三段「全灭」就直接等于整条状态栏消失，而且它占整个周期
-        // 的 off 段（用户配 40 秒），比两态方案激进得多。
-        // 这里不再硬演：分不了区就交回常规 hide/show 相位（applyHide 统一管），
-        // 宁可状态栏整条跟着周期走，也不要半残的三段循环。
-        if (zoneReady == 2) {
-            if (statusRound >= 0) {
-                statusRound = -1;
-                lastMaskSig = "";
-                restoreStatusChildren();
-                XposedInit.diag("SYS-ROUND off 本机不可分区，三班倒退出 " + lastProbe);
-            }
-            return;
-        }
-        long p = now % (seg * 2 + off);
-        int r = p < seg ? 0 : (p < seg * 2 ? 1 : 2);
-        if (r == statusRound && !cfgChanged && sig.equals(lastMaskSig)) {
-            return;
-        }
-        statusRound = r;
-        lastMaskSig = sig;
-        // 先整条恢复再按新相位重遮：从「留左」切到「留右」时，
-        // 上一轮被透明的时间区必须点亮，否则两边会越轮越黑。
-        restoreStatusChildren();
-        if (r != 3) {
-            hideStatusKeepNotify();
-        }
-        XposedInit.diag("SYS-ROUND rot=" + r + " seg=" + Config.showSec
-                + "s off=" + Config.hideSec + "s zone=" + (zoneReady == 1 ? "ok" : "no")
-                + " " + lastProbe + " dim=" + dimmed.size());
-    }
-
-    /**
-     * v3.0.31：只统计、不动手 —— 数出状态栏里落在左区 / 右区的可见叶子各有多少。
-     *
-     * <p>和 {@link #dimLeaves} 走同一套坐标累加规则，但不改 alpha，
-     * 所以可以在「探测」阶段安全调用，不会把状态栏先遮一遍再判断。</p>
-     */
-    private static void probeLeaves(View v, int left, int right, int depth,
-                                    int leftLimit, int rightLimit, int[] out) {
-        if (v == null || depth > ICON_SCAN_MAX_DEPTH) {
-            return;
-        }
-        if (v.getVisibility() != View.VISIBLE || v.getAlpha() <= 0.01f) {
-            return;
-        }
-        if (v instanceof android.view.ViewGroup) {
-            android.view.ViewGroup g = (android.view.ViewGroup) v;
-            for (int i = 0; i < g.getChildCount(); i++) {
-                View c = g.getChildAt(i);
-                if (c == null || c.getVisibility() == View.GONE) {
-                    continue;
-                }
-                if (isHeadsUpBanner(c) && isHeadsUpVisible(c)) {
-                    continue;
-                }
-                probeLeaves(c, left + c.getLeft(), left + c.getRight(), depth + 1,
-                        leftLimit, rightLimit, out);
-            }
-            return;
-        }
-        if (isNotifyish(v)) {
-            return;
-        }
-        int cx = (left + right) / 2;
-        if (cx < leftLimit) {
-            out[0]++;
-        } else if (cx > rightLimit) {
-            out[1]++;
-        }
-    }
-
-    /** 全局显示相位只恢复导航栏，状态栏留给三班倒相位决定 */
-    private static void applyShowNavOnly() {
-        if (navView != null && navView.getAlpha() != 1f) {
-            navView.setAlpha(1f);
-            Log.i(TAG, "nav shown");
-        }
-    }
 
     private static void applyHide() {
         // 状态栏：用 alpha=0 透明化而非 GONE。
@@ -1406,10 +1214,7 @@ public final class Controller {
         // 能走到这里总闸必然是开的。删掉旧版恒真的 if (enableStatus) 冗余判断，
         // 状态栏隐藏不再与总闸语义重复；恢复统一交给暂停分支处理。
         if (statusView != null) {
-            if (Config.enableStatusBar && statusRound >= 0) {
-                // v3.0.30：状态栏由「三班倒」相位独立接管，applyStatusRound 每轮已画好。
-                // 这里再按全局隐藏相位整条重遮，会把刚点亮的另一侧一起灭掉，必须让路。
-            } else if (Config.enableStatusBar) {
+            if (Config.enableStatusBar) {
                 hideStatusKeepNotify();
             } else if (statusView.getAlpha() != 1f || statusChildrenHidden()) {
                 // 用户在功能页关掉了「状态栏」，但导航栏仍要按周期隐藏。
@@ -1672,19 +1477,6 @@ public final class Controller {
         }
         int left = (int) (w * 0.34f);
         int right = (int) (w * 0.62f);
-        // v3.0.30：三班倒相位优先。留左就只遮右、留右就只遮左、全灭两侧都遮。
-        if (statusRound == 0) {
-            return cx > right;
-        }
-        if (statusRound == 1) {
-            return cx < left;
-        }
-        if (statusRound == 2) {
-            return true;
-        }
-        if (statusRound == 3) {
-            return false;      // v3.0.31：本机分不了区，单侧相位整条不动，绝不乱遮
-        }
         if (Config.statusClockOn && Config.statusIconsOn) {
             return true;
         }
@@ -1963,11 +1755,6 @@ public final class Controller {
 
     private static void applyShow() {
         restoreStatusChildren();
-        // v3.0.30：暂停 / 灭屏 / 名单豁免下的「整条点亮」是权威状态，
-        // 必须把三班倒相位作废，否则恢复后 r 与旧值相同会被判成「无需重画」，
-        // 状态栏会一直全亮到下一个相位边界。
-        statusRound = -1;
-        lastMaskSig = "";
         if (navView != null && navView.getAlpha() != 1f) {
             navView.setAlpha(1f);
             Log.i(TAG, "nav shown");

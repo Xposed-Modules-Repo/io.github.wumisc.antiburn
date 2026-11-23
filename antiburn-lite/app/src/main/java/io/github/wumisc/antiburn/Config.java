@@ -97,15 +97,7 @@ public final class Config {
     public static volatile boolean statusClockOn = true;
     /** v3.0.20：隐藏状态栏时是否隐藏右侧网络/信号/电量等图标。缺键按 true。 */
     public static volatile boolean statusIconsOn = true;
-    /**
-     * v3.2.5：状态栏「三班倒」开关（开 = 左亮 / 右亮 / 全灭 三段轮换）。
-     *
-     * <p>缺键按 true —— 与 v3.0.30 起的既有观感一致，升级不会突然变样。
-     * 关掉后状态栏回到常规 hide/show 两段周期（{@code applyHide} 统一管），
-     * 不再出现「只亮左边 / 只亮右边」的中间态：对「轮着亮反而更晃眼」
-     * 或「时间时有时无」的用户，这是一条明确的出口。</p>
-     */
-    public static volatile boolean enableStatusRound = true;
+    /** 诊断日志（diag.log）开关，默认关；排查时打开。 */
     public static volatile boolean enableLog = false;
     /** v2.8.2：应用内区域兜底遮盖；Config 侧留存并打进 CONF apply，真正消费方是 BurnInMaskService。 */
     /**
@@ -785,7 +777,6 @@ public final class Config {
         boolean ayn = enableA11yYieldNotify;
         boolean sb = enableStatusBar;
         boolean scl = statusClockOn, sic = statusIconsOn;
-        boolean srd = enableStatusRound;
         String style = uiStyle;
         String custom = customPoems;
         int h = hideSec, s = showSec;
@@ -886,7 +877,6 @@ public final class Config {
                 case "enable_ball": ball = "1".equals(v); break;
                 case "enable_icon": ic = "1".equals(v); break;
                 case "enable_status_bar": sb = "1".equals(v); break;
-                case "enable_status_round": srd = "1".equals(v); break;
                 case "status_clock_on": scl = "1".equals(v); break;
                 case "status_icons_on": sic = "1".equals(v); break;
                 case "enable_log": lg = "1".equals(v); break;
@@ -985,7 +975,6 @@ public final class Config {
         enableBall = ball;
         enableIcon = ic;
         enableStatusBar = sb;
-        enableStatusRound = srd;
         enableLog = lg;
         enableAppOverlay = ao;
         enableA11yYieldNotify = ayn;
