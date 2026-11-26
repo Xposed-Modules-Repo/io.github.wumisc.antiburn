@@ -231,9 +231,16 @@ public final class Capability {
                 || isPackageInstalled(ctx, "org.lsposed.lspatch.loader");
     }
 
+    /**
+     * API 102 实验分支：探测 libxposed 而不是 legacy XposedBridge。
+     *
+     * 本分支已经把 io.github.wumisc.antiburn.compat 兼容壳打进了 APK，再拿它当「是否在 Xposed 环境」
+     * 的证据会恒真；改成探测 io.github.libxposed.api.XposedModule —— 它只以 compileOnly
+     * 参与编译、不进 APK，只有框架注入时才在 ClassLoader 里。
+     */
     private static boolean xposedBridgeLoadable() {
         try {
-            Class.forName("de.robv.android.xposed.XposedBridge");
+            Class.forName("io.github.libxposed.api.XposedModule");
             return true;
         } catch (Throwable t) {
             return false;

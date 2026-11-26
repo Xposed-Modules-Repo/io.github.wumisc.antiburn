@@ -49,6 +49,14 @@ public final class LivePause {
     });
 
     // ---------- 发布侧（App 进程） ----------
+    /** 热重载退役：单线程 IO 执行器同样需要显式收掉。 */
+    static void stopForReload() {
+        try {
+            IO.shutdownNow();
+        } catch (Throwable ignored) {
+        }
+    }
+
     private static volatile boolean published = false;
     private static volatile boolean lastActive = false;
     private static volatile long lastPublishAt = 0L;

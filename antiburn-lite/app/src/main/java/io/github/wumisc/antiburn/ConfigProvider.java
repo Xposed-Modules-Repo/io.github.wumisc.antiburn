@@ -5,7 +5,13 @@ import android.content.ContentValues;
 import android.content.Context;
 import android.database.Cursor;
 import android.net.Uri;
+import android.os.Binder;
 import android.os.Bundle;
+import android.os.ParcelFileDescriptor;
+import android.os.Process;
+import android.util.Log;
+
+import java.io.File;
 
 /**
  * 把配置暴露给被 LSPosed hook 的进程（SystemUI / 抖音 / 红果）。
@@ -27,6 +33,30 @@ public final class ConfigProvider extends ContentProvider {
     /** v2.8.2：被注入进程写不出公共日志时的回传通道，由 App 进程代写。 */
     public static final String METHOD_PUT_LOG = "antiburn_put_log";
     public static final String KEY_LOG = "log";
+
+    /**
+     * 热重载记账通道：hook 进程热重载成功后 call 一次，App 侧把时间写进私有 prefs，
+     * 界面据此判断「系统界面里跑的已经是新代码」，不再提示重启。
+     */
+    public static final String METHOD_PUT_RELOAD = "antiburn_put_reload";
+    public static final String HOOK_PREFS = "antiburn_hook";
+    public static final String KEY_RELOAD_AT = "hot_reload_at";
+    /** 模块曾经在系统界面进程里成功装上钩子的时间；只有它为空才算「首次安装」。 */
+    public static final String METHOD_PUT_SEEN = "antiburn_put_seen";
+    public static final String KEY_SEEN_AT = "hook_seen_at";
+    /** 自换代码成功时间（存的是「换到的那一版 APK 的 lastUpdateTime」）；用于和框架热重载互斥。 */
+    public static final String METHOD_PUT_SELF = "antiburn_put_self";
+    public static final String KEY_SELF_AT = "self_reload_at";
+    /** 一次读回三个代际时间，供 SystemUI 决定「这一版到底该由谁来装」。 */
+    public static final String METHOD_GET_GEN = "antiburn_get_gen";
+
+    /**
+     * v3.2.37：自换代码的 APK 交接通道。SystemUI 等 hook 进程受 SELinux 限制，
+     * 直接读模块 /data/app/…/base.apk 会失败（DexClassLoader 抛 ClassNotFoundException）。
+     * 由本进程（能读自己的 APK）打开只读 FD 经 Binder 传给 hook 进程，绕过路径权限。
+     */
+    public static final String METHOD_GET_APK = "antiburn_get_apk";
+    public static final String KEY_APK_FD = "apk_fd";
     /** Provider 是 exported 的：要求调用方带模块内约定的 token，防止任意 App 读走配置全文 */
     public static final String KEY_TOKEN = "token";
     public static final String TOKEN = "antiburn-hook-v25";
@@ -54,6 +84,42 @@ public final class ConfigProvider extends ContentProvider {
         }
     }
 
+    /**
+     * v3.2.17：调用方白名单。
+     *
+     * <p>用 {@link Binder#getCallingUid()} 取真实调用方，再按包名白名单校验，
+     * 而不是信任 extras 里的 token —— token 在 dex 里，谁都能读。</p>
+     */
+    private boolean callerAllowed() {
+        try {
+            int uid = Binder.getCallingUid();
+            if (uid == Process.myUid() || uid == Process.SYSTEM_UID || uid == 0 || uid == 2000) {
+                return true;
+            }
+            Context ctx = getContext();
+            if (ctx == null) {
+                return false;
+            }
+            String[] pkgs = ctx.getPackageManager().getPackagesForUid(uid);
+            if (pkgs == null) {
+                return false;
+            }
+            for (String p : pkgs) {
+                if (p == null) {
+                    continue;
+                }
+                if (p.equals("com.android.systemui") || p.startsWith("io.github.wumisc.antiburn")) {
+                    return true;
+                }
+                if (VideoApps.of(p) != VideoApps.Kind.NONE) {
+                    return true;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return false;
+    }
+
     @Override
     public boolean onCreate() {
         Context ctx = getContext();
@@ -70,6 +136,28 @@ public final class ConfigProvider extends ContentProvider {
         if (extras == null || !TOKEN.equals(extras.getString(KEY_TOKEN))) {
             return null;
         }
+        // v3.2.17（审计修正）：token 是写在 APK 里的常量，任何 App 反编译都能拿到，
+        // 单靠它挡不住「读配置 / 往公共日志里灌垃圾」。这里再按调用方 uid 校验一次：
+        // 只放行本模块、SystemUI、root/shell 与四个视频 App，其余一律等同于没带 token。
+        if (!callerAllowed()) {
+            return null;
+        }
+        // v3.2.37：把本进程自己的 APK 以只读 FD 交给 hook 进程做自换代码。
+        // FD 经 Binder 传递不受 /data/app 路径 SELinux 限制，接收方拷到本地缓存再载 dex。
+        if (METHOD_GET_APK.equals(method)) {
+            Bundle r = new Bundle();
+            try {
+                Context c = getContext();
+                String src = c.getPackageManager().getPackageInfo(c.getPackageName(), 0)
+                        .applicationInfo.sourceDir;
+                ParcelFileDescriptor fd = ParcelFileDescriptor.open(
+                        new File(src), ParcelFileDescriptor.MODE_READ_ONLY);
+                r.putParcelable(KEY_APK_FD, fd);
+            } catch (Throwable t) {
+                Log.w("antiburn", "get_apk fail " + t);
+            }
+            return r;
+        }
         // v2.8.2「改日志」：视频 App 进程常拿不到 su，直写 /sdcard 又被分区存储挡住，
         // INJECTED / HOOK 这类关键行会整批丢失，导出日志里只剩 SystemUI 的 SYS 心跳。
         // 这里让 App 进程代写一行，是可观测性的最后一层兜底。
@@ -80,6 +168,56 @@ public final class ConfigProvider extends ContentProvider {
                 noteInject(line);
             }
             return null;
+        }
+        if (METHOD_PUT_SELF.equals(method)) {
+            try {
+                getContext().getSharedPreferences(HOOK_PREFS, Context.MODE_PRIVATE)
+                        .edit().putLong(KEY_SELF_AT, extras.getLong(KEY_CONF, 0L)).commit();
+                Bundle r = new Bundle();
+                r.putBoolean("ok", true);
+                return r;
+            } catch (Throwable t) {
+                Log.w("Antiburn", "note self reload failed", t);
+                return null;
+            }
+        }
+        if (METHOD_GET_GEN.equals(method)) {
+            try {
+                android.content.SharedPreferences sp =
+                        getContext().getSharedPreferences(HOOK_PREFS, Context.MODE_PRIVATE);
+                Bundle r = new Bundle();
+                r.putLong(KEY_RELOAD_AT, sp.getLong(KEY_RELOAD_AT, 0L));
+                r.putLong(KEY_SELF_AT, sp.getLong(KEY_SELF_AT, 0L));
+                r.putLong(KEY_SEEN_AT, sp.getLong(KEY_SEEN_AT, 0L));
+                return r;
+            } catch (Throwable t) {
+                return null;
+            }
+        }
+        if (METHOD_PUT_SEEN.equals(method)) {
+            try {
+                getContext().getSharedPreferences(HOOK_PREFS, Context.MODE_PRIVATE)
+                        .edit().putLong(KEY_SEEN_AT, System.currentTimeMillis()).commit();
+                Bundle r = new Bundle();
+                r.putBoolean("ok", true);
+                return r;
+            } catch (Throwable t) {
+                Log.w("Antiburn", "note hook seen failed", t);
+                return null;
+            }
+        }
+        if (METHOD_PUT_RELOAD.equals(method)) {
+            long at = System.currentTimeMillis();
+            try {
+                getContext().getSharedPreferences(HOOK_PREFS, Context.MODE_PRIVATE)
+                        .edit().putLong(KEY_RELOAD_AT, at).commit();
+                Bundle r = new Bundle();
+                r.putLong(KEY_RELOAD_AT, at);
+                return r;
+            } catch (Throwable t) {
+                Log.w("Antiburn", "note hot reload failed", t);
+                return null;
+            }
         }
         if (!METHOD_GET.equals(method)) {
             return null;
@@ -176,6 +314,15 @@ public final class ConfigProvider extends ContentProvider {
      * 由 {@link ConfStore#exportLogs()} 用 su 把这个文件一起 cat 进用户可见日志。</p>
      */
     private void appendLog(String line) {
+        // v3.2.16：**先写用户可见的 antiburn.log**。
+        // 真机复盘：用户每次都是从文件管理器直接捞这个文件，而它以前只收模块自己的行
+        // （SYS / MASK / CONF），视频 App 的 ENTER / INJECTED / RDUMP / BDUMP 全躺在
+        // 私有镜像里，要等「点导出」或常驻服务 180 秒补录才并进来 —— 于是每份日志都
+        // 像「没注入」。这里就地追加，用户捞到的那份就是全的。
+        if (ConfStore.appendHookLine(line)) {
+            return;
+        }
+        // 落不进公共日志（权限被系统收回 / 文件被删）时退回私有镜像，导出照样能合并
         try {
             Context ctx = getContext();
             if (ctx == null) {

@@ -72,7 +72,7 @@ public final class OverlayGeometry {
 
         @Override
         public String toString() {
-            return "[" + left + "," + top + " " + right + "x" + bottom + "]";
+            return "[" + left + "," + top + " → " + right + "," + bottom + "]";
         }
     }
 
@@ -88,10 +88,13 @@ public final class OverlayGeometry {
             return null;
         }
         // 状态栏不可能高过屏幕的 1/4：超过说明取到的是别的尺寸
-        // （有 ROM 的 status_bar_height 在分屏 / 折叠态会返回整窗高度），
-        // 照画会把用户主要内容涂黑。
-        int h = Math.min(statusBarHeight, Math.max(MIN_SIDE, screenH / 4));
-        Rect r = new Rect(0, 0, screenW, h);
+        // （有 ROM 的 status_bar_height 在分屏 / 折叠态会返回整窗高度）。
+        // v3.2.25 修正：以前把这种值夹到 1/4 继续画，等于明知是错值还涂黑四分之一屏；
+        // 现在直接判为不可用（返回 null），由调用方换数据源。
+        if (statusBarHeight > screenH / 4) {
+            return null;
+        }
+        Rect r = new Rect(0, 0, screenW, statusBarHeight);
         return r.isEmpty() ? null : r;
     }
 
@@ -108,16 +111,19 @@ public final class OverlayGeometry {
             return null;
         }
         Rect r;
-        if (side == NAV_RIGHT) {
-            // 侧边导航栏宽度同样设上限：手势条 6dp、三键 48dp，超过屏幕 1/3 的一定是错值
-            int w = Math.min(navBarSize, Math.max(MIN_SIDE, screenW / 3));
-            r = new Rect(screenW - w, 0, screenW, screenH);
-        } else if (side == NAV_LEFT) {
-            int w = Math.min(navBarSize, Math.max(MIN_SIDE, screenW / 3));
-            r = new Rect(0, 0, w, screenH);
+        if (side == NAV_RIGHT || side == NAV_LEFT) {
+            // 侧边导航栏：手势条 6dp、三键 48dp，超过屏宽 1/3 一定是错值 —— 同样直接不画
+            if (navBarSize > screenW / 3) {
+                return null;
+            }
+            r = side == NAV_RIGHT
+                    ? new Rect(screenW - navBarSize, 0, screenW, screenH)
+                    : new Rect(0, 0, navBarSize, screenH);
         } else {
-            int h = Math.min(navBarSize, Math.max(MIN_SIDE, screenH / 3));
-            r = new Rect(0, screenH - h, screenW, screenH);
+            if (navBarSize > screenH / 3) {
+                return null;
+            }
+            r = new Rect(0, screenH - navBarSize, screenW, screenH);
         }
         return r.isEmpty() ? null : r;
     }

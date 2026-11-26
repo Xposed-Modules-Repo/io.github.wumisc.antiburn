@@ -12,8 +12,8 @@ android {
         applicationId "io.github.wumisc.antiburn"
         minSdk 33
         targetSdk 37
-        versionCode 105
-        versionName "3.2.6"
+        versionCode 139
+        versionName "3.3.0"
     }
 
     compileOptions {
@@ -24,6 +24,15 @@ android {
     buildFeatures {
         buildConfig true
         compose true
+    }
+
+    // JVM 沙盒（Robolectric）：让 AppVisibilityStore / HealReceiver 这些纯逻辑
+    // 在假 Android 运行时里真跑一遍，不依赖真机。桌面图标、闹钟、通知都能断言。
+    testOptions {
+        unitTests {
+            includeAndroidResources = true
+            returnDefaultValues = true
+        }
     }
 
     signingConfigs {
@@ -79,11 +88,28 @@ dependencies {
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
 
     // LSPosed/Xposed API（仅编译期）：SystemUI/抖音/红果 Hook 引擎
-    compileOnly 'de.robv.android.xposed:api:82'
+    compileOnly 'io.github.libxposed:api:102.0.0'
 
     // Shizuku（线路 B）：api 提供 Shizuku.newProcess / 权限查询，
     // provider 是 binder 中继（manifest 里注册 ShizukuProvider 才有用）。
     // 两者都在 Maven Central 与阿里云镜像上有，版本锁 13.1.5。
     implementation 'dev.rikka.shizuku:api:13.1.5'
     implementation 'dev.rikka.shizuku:provider:13.1.5'
+
+    // 只在 test 编译进：JVM 沙盒
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.robolectric:robolectric:4.16'
+    // API102：入口类 extends XposedModule，compileOnly 不进 APK，但 JVM 沙盒要能加载入口类验证契约
+    testImplementation 'io.github.libxposed:api:102.0.0'
+    // compileSdk 37（Android 17）的 android.jar 删掉了 android.hardware.fingerprint.FingerprintManager，
+    // 而 Robolectric 的 ShadowApplication / ShadowNotificationManager 源码里还引用着它 →
+    // test 编译报 "cannot access FingerprintManager"。把 android-36 的 jar 只挂到 test 编译期补上这个类，
+    // 运行期 Robolectric 用的是 android-all jar（里面有），不影响主工程。
+    def sdkRoot = System.getenv('ANDROID_HOME') ?: System.getenv('ANDROID_SDK_ROOT')
+    if (sdkRoot != null) {
+        def legacyJar = file("$sdkRoot/platforms/android-36/android.jar")
+        if (legacyJar.exists()) {
+            testCompileOnly files(legacyJar)
+        }
+    }
 }

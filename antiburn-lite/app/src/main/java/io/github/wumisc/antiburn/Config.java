@@ -97,6 +97,21 @@ public final class Config {
     public static volatile boolean statusClockOn = true;
     /** v3.0.20：隐藏状态栏时是否隐藏右侧网络/信号/电量等图标。缺键按 true。 */
     public static volatile boolean statusIconsOn = true;
+    /**
+     * v3.2.7：超级岛 / 焦点通知联动（缺键按 true）。
+     *
+     * <p>开启后，SystemUI 收到焦点通知（HyperIsland 生成的岛、原生超级岛）时，
+     * 状态栏静态图标立即透明；岛停止更新 10 秒后按当前周期恢复。</p>
+     */
+    public static volatile boolean enableIslandLink = true;
+    /**
+     * v3.2.8：系统级歌词联动（HyperLyric / SuperLyric，缺键按 true）。
+     *
+     * <p>歌词模块在 SystemUI 里注入的视图（状态栏歌词）不参与透明化：
+     * 隐藏静态图标时跳过整棵歌词子树，整层兜底（f4）在全栏含歌词视图时也放弃，
+     * 避免「防烧屏把歌词一起藏了」。</p>
+     */
+    public static volatile boolean enableLyricLink = true;
     /** 诊断日志（diag.log）开关，默认关；排查时打开。 */
     public static volatile boolean enableLog = false;
     /** v2.8.2：应用内区域兜底遮盖；Config 侧留存并打进 CONF apply，真正消费方是 BurnInMaskService。 */
@@ -308,6 +323,18 @@ public final class Config {
     private static volatile long lastChangeAt = 0L;
 
     private static final Object fetchLock = new Object();
+    /** 热重载退役：旧一代的预取线程必须退出，否则它会一直用旧类加载器读配置、写文件。 */
+    private static volatile boolean fetcherStop = false;
+
+    static void stopForReload() {
+        fetcherStop = true;
+        synchronized (fetchLock) {
+            try {
+                fetchLock.notifyAll();
+            } catch (Throwable ignored) {
+            }
+        }
+    }
 
     /** 后台预取：provider 读取与 su 兜底都不放在主线程执行。 */
     private static void ensureFetcher() {
@@ -320,7 +347,7 @@ public final class Config {
             }
             fetcherStarted = true;
             Thread t = new Thread(() -> {
-                while (true) {
+                while (!fetcherStop) {
                     long wait = 60000L;
                     try {
                         fetchRemote();
@@ -777,6 +804,8 @@ public final class Config {
         boolean ayn = enableA11yYieldNotify;
         boolean sb = enableStatusBar;
         boolean scl = statusClockOn, sic = statusIconsOn;
+        boolean isl = enableIslandLink;
+        boolean lyc = enableLyricLink;
         String style = uiStyle;
         String custom = customPoems;
         int h = hideSec, s = showSec;
@@ -877,6 +906,8 @@ public final class Config {
                 case "enable_ball": ball = "1".equals(v); break;
                 case "enable_icon": ic = "1".equals(v); break;
                 case "enable_status_bar": sb = "1".equals(v); break;
+                case "enable_island_link": isl = "1".equals(v); break;
+                case "enable_lyric_link": lyc = "1".equals(v); break;
                 case "status_clock_on": scl = "1".equals(v); break;
                 case "status_icons_on": sic = "1".equals(v); break;
                 case "enable_log": lg = "1".equals(v); break;
@@ -934,6 +965,8 @@ public final class Config {
         enableNav = en;
         statusClockOn = scl;
         statusIconsOn = sic;
+        enableIslandLink = isl;
+        enableLyricLink = lyc;
         engine = ConfStore.normEngine(engRaw);
         enableShift = sh;
         enableDouyinTop = dtop;
@@ -1102,7 +1135,7 @@ public final class Config {
         // hid=true 反复出现），HyperOS 4 上实测把 SystemUI 拖进 30 秒级的重启循环
         // （pid 5284→6433→8071→10226），用户感知就是「使用过程中闪退」。
         // 设置界面本来也不需要防烧屏，豁免自己是零代价的止血。
-        if ("io.github.wumisc.antiburn".equals(pkg)) {
+        if (pkg != null && pkg.startsWith("io.github.wumisc.antiburn")) {
             return false;
         }
         // 用户选了无障碍遮盖引擎：Hook 必须完全让位，否则两套引擎同时动手，

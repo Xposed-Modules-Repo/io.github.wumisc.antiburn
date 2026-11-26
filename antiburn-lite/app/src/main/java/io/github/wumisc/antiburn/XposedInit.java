@@ -8,8 +8,9 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 
-import de.robv.android.xposed.IXposedHookLoadPackage;
-import de.robv.android.xposed.callbacks.XC_LoadPackage;
+import io.github.wumisc.antiburn.compat.IXposedHookLoadPackage;
+import io.github.wumisc.antiburn.compat.XposedBridge;
+import io.github.wumisc.antiburn.compat.callbacks.XC_LoadPackage;
 
 /**
  * LSPosed 模块入口
@@ -82,6 +83,19 @@ public class XposedInit implements IXposedHookLoadPackage {
      * 关键事件（注入成功 / 初始化异常）：始终落盘，不受「诊断日志」开关控制。
      * 这是判断「模块有没有被注入」的唯一依据，不能被配置链路故障连带弄丢。
      */
+    /**
+     * 热重载退役：关掉旧一代的日志写线程。
+     *
+     * <p>{@code newSingleThreadExecutor} 的常驻线程不会自己消失，每热重载一次就多一条
+     * 永不退出的线程 + 一个旧类加载器引用（整个模块的类都回收不掉）。</p>
+     */
+    static void stopForReload() {
+        try {
+            LOG_WRITER.shutdownNow();
+        } catch (Throwable ignored) {
+        }
+    }
+
     public static void diagForce(String s) {
         // v2.8.0：关键事件（注入 / HOOK 状态）在视频 App 进程里常常只能靠 su 兜底落盘，
         // 旧版和 diag() 共用 10s 节流，注入日志会与紧随其后的事件挤在同一窗口被吞掉，
@@ -119,6 +133,7 @@ public class XposedInit implements IXposedHookLoadPackage {
                 }
             });
         } catch (Throwable t) {
+            // 执行器已被退役（SelfReload / 热重载）：这条日志直接丢，绝不把调用方带走
             QUEUED.decrementAndGet();
             Log.i(TAG, "DIAG " + s);
         }
@@ -229,12 +244,14 @@ public class XposedInit implements IXposedHookLoadPackage {
      * <p>v2.9.3：原先只有一条 `ActivityThread.currentApplication()` 的反射。Android 11+
      * 的隐藏 API 限制会把它挡在 untrusted_app（抖音 / 快手 / 红果 / B站 全是）外面 ——
      * 异常被静默吞掉，于是「注入进程的日志一条都进不了文件」，SELF 里 inject 恒为 0。
-     * 现在优先用 Xposed 自己提供的 {@code AndroidAppHelper.currentApplication()}：
-     * 它是模块进程内的公开入口，不受隐藏 API 名单限制。</p>
+     * 现在优先用 {@link AppContextHolder}：legacy 的 {@code AndroidAppHelper} 由框架
+     * 在自己的 ClassLoader 里提供，libxposed（API 102）没有等价类，所以本分支改成模块
+     * 自己在 {@code Application.<init>} 上抓实例 —— 构造器不走虚分派，任何 Application
+     * 子类都必经此处，拿到的就是这个进程唯一的 Application，且全程不碰隐藏 API。</p>
      */
     private static android.content.Context currentApplication() {
         try {
-            android.content.Context c = android.app.AndroidAppHelper.currentApplication();
+            android.content.Context c = AppContextHolder.currentApplication();
             if (c != null) {
                 return c;
             }
@@ -363,6 +380,8 @@ public class XposedInit implements IXposedHookLoadPackage {
             Log.i(TAG, "loaded into SystemUI, starting...");
             try {
                 Controller.init(lpparam);
+                // 自换代码基线：记下这一代来自哪次更新，之后每 20s 对比一次安装时间
+                SelfReload.arm(XposedBridge.currentModule());
             } catch (Throwable t) {
                 Log.e(TAG, "init failed", t);
                 diagForce("INIT FAILED SystemUI: " + Log.getStackTraceString(t));

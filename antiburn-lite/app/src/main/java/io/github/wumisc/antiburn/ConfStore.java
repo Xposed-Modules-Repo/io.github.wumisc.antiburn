@@ -59,6 +59,27 @@ public final class ConfStore {
     public static final String LOG_FILE = LOG_DIR + "/antiburn.log";
     /** 兜底目录：/data/local/tmp 下自建子目录并放开权限，保证 system uid 总有地方写 */
     public static final String LOG_DIR_FALLBACK = "/data/local/tmp/antiburn";
+    /** 单文件上限：超过就 rename 成 .1，与 XposedInit 的轮转口径保持一致（512KB） */
+    private static final long LOG_ROTATE_BYTES = 512 * 1024L;
+    /**
+     * v3.2.17：本进程直写失败后补 su 的最小间隔。
+     *
+     * <p>su 授权在部分 ROM 上每次都要弹窗；无障碍探针一轮可能追加好几批，
+     * 不节流会把用户烦死。10 秒与 XposedInit 的 SU_WRITE_INTERVAL_MS 同口径。
+     */
+    private static final long SU_APPEND_INTERVAL_MS = 10_000L;
+    /** 上一次走 su 追加的时刻（只在主写失败时才更新）。 */
+    private static long lastSuAppendAt = 0L;
+    /**
+     * 公共日志目录被分区存储拒绝后，短暂跳过直写。
+     *
+     * <p>v3.2.34：被注入的第三方进程没有 App 自己的「所有文件访问」授权，直写
+     * {@code /sdcard/Android/Prevent burn-in/antiburn.log} 会被 FUSE 拒绝；旧实现每条
+     * DIAG 行都撞一次，logcat 里 MediaProvider 每秒刷屏，既拖慢探针也淹没真实错误。
+     * 一次失败后 60 秒内直接走 su / 私有镜像，不再重复撞墙。</p>
+     */
+    private static volatile long publicLogBlockedUntil = 0L;
+    private static final long PUBLIC_LOG_BLOCK_MS = 60_000L;
 
     /** root 写入成功且读回校验通过 */
     public static final int WRITE_OK = 0;
@@ -173,6 +194,8 @@ public final class ConfStore {
     public static String defaultContent() {
         StringBuilder sb = new StringBuilder();
         sb.append("enable_status=1\n");
+        sb.append("enable_island_link=1\n");
+        sb.append("enable_lyric_link=1\n");
         sb.append("enable_shift=1\n");
         sb.append("enable_navigation=0\n");
         sb.append("enable_poem=0\n");
@@ -557,6 +580,166 @@ public final class ConfStore {
         return lastSyncState;
     }
 
+    /** 旧配置 + 旧日志的清理命令：所有会残留历史内容的位置一次删干净。 */
+    private static String wipeCmd(boolean logsOnly) {
+        StringBuilder sb = new StringBuilder("rm -f");
+        if (!logsOnly) {
+            sb.append(" \"").append(CONF).append("\" \"").append(CONF_TMP).append("\"")
+                    .append(" \"").append(EXTERNAL_MIRROR).append("\" \"").append(EXTERNAL_MIRROR).append(".tmp\"");
+        }
+        sb.append(" \"").append(LOG_FILE).append("\" \"").append(LOG_FILE).append(".1\"")
+                .append(" \"").append(LOG_DIR).append("\"/antiburn*.log")
+                .append(" \"").append(LOG_DIR_FALLBACK).append("\"/antiburn*.log")
+                .append(" \"").append(LOG_DIR_FALLBACK).append("\"/antiburn_diag.log")
+                .append(" 2>/dev/null; true");
+        return sb.toString();
+    }
+
+    /** 应用内私有目录里的 hook 日志（ConfigProvider 回传那一路）。 */
+    private static void deleteHookLog() {
+        try {
+            Context c = appCtx;
+            if (c == null) {
+                return;
+            }
+            File f = new File(c.getFilesDir(), ConfigProvider.HOOK_LOG_FILE);
+            if (f.exists()) {
+                //noinspection ResultOfMethodCallIgnored
+                f.delete();
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /**
+     * v3.2.7：**彻底重建**。删掉所有旧配置副本与全部旧日志，再写一份全新默认配置。
+     *
+     * <p>为什么需要：跨版本升级时旧 conf 的键集会一路带下去 —— 已废弃的字段仍留在文件里、
+     * 旧值继续被解析（比如早被废弃的旧开关键），日志也从上一版
+     * 一直累积，排障时永远先看到「旧版本的行」。这里直接清表重建，升级后看到的就是
+     * 当前版本的全新默认配置。</p>
+     *
+     * <p>调用点：① App 升级后首次启动自动执行（MainActivity 里按 versionCode 判定）；
+     * ② 通用页「重建配置」按钮。执行完必须重启系统界面，SystemUI 才会重新读新 conf。</p>
+     */
+    public static boolean resetAll() {
+        synchronized (LOCK) {
+            execSu(wipeCmd(false));
+            try {
+                File m = mirrorFile();
+                if (m != null && m.exists()) {
+                    //noinspection ResultOfMethodCallIgnored
+                    m.delete();
+                }
+                File mt = mirrorTmpFile();
+                if (mt != null && mt.exists()) {
+                    //noinspection ResultOfMethodCallIgnored
+                    mt.delete();
+                }
+            } catch (Throwable ignored) {
+            }
+            deleteHookLog();
+            String content = stampRev(defaultContent());
+            writeMirror(content);
+            mirrorIsDefault = false;
+            syncToRoot(content);
+            appendAudit("RESET vc=" + BuildConfig.VERSION_CODE + " 旧配置与旧日志已清空");
+            return true;
+        }
+    }
+
+    /**
+     * v3.2.16：本进程直接删日志文件，su 只当兜底。
+     *
+     * <p>真机实锤（3.2.15 那份日志）：升级清空的「起始标记」写进去了，可 11-22 的旧行
+     * 一条不少地留在文件里 —— 说明 {@code rm} 那一步根本没成功（su 授权被拒 / 被拦），
+     * 而 {@code wipeCmd} 是唯一删除手段，于是「覆盖安装自动清日志」实际上一直没清掉。
+     * 目录 0777、文件 0666 是本进程自己就有权限的，先直删；删不掉再交给 su。</p>
+     */
+    private static void wipeDirect() {
+        try {
+            //noinspection ResultOfMethodCallIgnored
+            new File(LOG_FILE).delete();
+            //noinspection ResultOfMethodCallIgnored
+            new File(LOG_FILE + ".1").delete();
+        } catch (Throwable ignored) {
+        }
+        deleteLogsInDir(LOG_DIR);
+        deleteLogsInDir(LOG_DIR_FALLBACK);
+    }
+
+    /** 删除目录下所有 antiburn 日志（主文件 / 轮转 / 诊断），不动别的文件。 */
+    private static void deleteLogsInDir(String dir) {
+        try {
+            File d = new File(dir);
+            File[] fs = d.listFiles();
+            if (fs == null) {
+                return;
+            }
+            for (File f : fs) {
+                String n = f.getName();
+                if (n.startsWith("antiburn") && (n.endsWith(".log") || n.endsWith(".log.1"))) {
+                    //noinspection ResultOfMethodCallIgnored
+                    f.delete();
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** v3.2.7：只清日志，不动配置。通用页「清空日志」用。 */
+    public static void clearLogs() {
+        wipeDirect();
+        execSu(wipeCmd(true));
+        deleteHookLog();
+        appendAudit("LOGS cleared, 之后只写 v" + BuildConfig.VERSION_NAME);
+    }
+
+    /**
+     * v3.2.15：覆盖安装（versionCode 变化）后自动清空旧日志并重建，返回是否真的清过。
+     *
+     * <p>用户反馈：「跑的还是旧版，日志又是轮转后的残卷，看不出到底新旧」——
+     * 之前只在<b>打开模块</b>时才清，装完直接开快手的人根本触发不到。现在本方法
+     * 由 {@code AbApplication.onCreate()} 调用，任何进程（含 Provider 被 Hook 拉起）
+     * 只要启动就会先判断一次；MainActivity 复用同一入口，只多一个提示。
+     *
+     * <p>清空范围沿用 {@link #wipeCmd(boolean)}：主日志 + 轮转的 .1 + 兜底目录 +
+     * 私有镜像，一个不留；随后立刻写一行起始标记，让「刚清完」这件事在文件第一行
+     * 就能看见，不必再靠行数猜。</p>
+     *
+     * <p>记账口径与杀进程一致：先判、后写 last_vc，清了就记，避免重复清；
+     * 首次安装（last_vc=0）不清 —— 那时候本来就没有旧日志。</p>
+     */
+    public static boolean clearLogsIfUpgraded(android.content.Context ctx) {
+        if (ctx == null) {
+            return false;
+        }
+        try {
+            android.content.SharedPreferences meta =
+                    ctx.getSharedPreferences("antiburn_meta", android.content.Context.MODE_PRIVATE);
+            int last = meta.getInt("last_vc", 0);
+            int now = BuildConfig.VERSION_CODE;
+            if (last == 0 || last == now) {
+                // 首次安装或同版本重复启动：不动日志
+                if (last == 0) {
+                    meta.edit().putInt("last_vc", now).apply();
+                }
+                return false;
+            }
+            // 先记账再动手：清的过程中被二次拉起不会重复执行
+            meta.edit().putInt("last_vc", now).apply();
+            clearLogs();
+            appendRawLine(System.currentTimeMillis() + " [app/self] LOG ver="
+                    + BuildConfig.VERSION_NAME + " vc=" + now
+                    + " 旧日志已清空（含 .1 与私有镜像），新日志从这里开始");
+            // 留给界面一次性提示：清空可能发生在 Application 里（用户还没看到界面）
+            meta.edit().putBoolean("cleared_pending", true).apply();
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
     /**
      * 旧版本升级迁移：旧版只写 /data/local/tmp，没有应用内镜像，
      * 会导致 ConfigProvider 返回 null、模块跑默认值。启动时异步补齐一次。
@@ -798,6 +981,7 @@ public final class ConfStore {
                 + "chmod 0666 \"" + LOG_FILE + "\" 2>/dev/null; "
                 + "wc -l \"" + LOG_FILE + "\" 2>/dev/null; true";
         String out = execSuCapture(cmd);
+        supplementHookMirror();
         appendSelfCheck();
         return out == null ? "" : out.trim();
     }
@@ -844,8 +1028,8 @@ public final class ConfStore {
                     + "；三方 App 写盘受限，不代表没加载）；处理：先强行停止该 App 再打开"
                     : "hook=NONE（共享日志和 LSPosed 日志都还没采到视频 App 命中）；"
                     + "处理：功能 › 通用 › 作用域自检，勾上打 ✗ 的 App → 强行停止该 App 再打开；"
-                    + "若是覆盖安装/更新了本模块，需重启手机一次（不是只重启系统界面）："
-                    + "SystemUI 会自动重注，但抖音/快手等三方 App 只有重启手机后才会重新加载新 dex。";
+                    + "若是覆盖安装/更新了本模块：更新后第一次打开本应用会自动停止抖音/红果/快手/B站，"
+                    + "重新打开它们即重新注入，不用重启手机。";
             int ovl = occurrences(all, "OVL on app=") + occurrences(all, "OVL window attached");
             // v2.8.8：enter= 直接给出 handleLoadPackage 的命中进程。
             // 以前要翻几百行才能确认「模块到底进没进抖音」，现在第一行就能判。
@@ -894,10 +1078,15 @@ public final class ConfStore {
         if (execSu(cmd)) {
             return true;
         }
+        long now = System.currentTimeMillis();
+        if (now < publicLogBlockedUntil) {
+            return false;
+        }
         try (java.io.FileOutputStream fo = new java.io.FileOutputStream(LOG_FILE, true)) {
             fo.write((line + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
             return true;
         } catch (Throwable ignored) {
+            publicLogBlockedUntil = now + PUBLIC_LOG_BLOCK_MS;
             return false;
         }
     }
@@ -910,6 +1099,200 @@ public final class ConfStore {
      */
     public static boolean appendRawLine(String line) {
         return appendRaw(line);
+    }
+
+    /**
+     * v3.2.16：被注入进程交回的日志行，**直接落进用户可见的 antiburn.log**。
+     *
+     * <p>真机实锤：用户从文件管理器直接捞 {@code /sdcard/Android/Prevent burn-in/antiburn.log}，
+     * 里面只有本模块自己写的 SYS / MASK / CONF 行 —— 视频 App 的 ENTER / INJECTED / RDUMP / BDUMP
+     * 全在私有镜像里，只有点「导出」或常驻服务 180 秒补录一次才会被并进来。
+     * 于是每份日志都「看起来没注入」，实际注入一直是好的。</p>
+     *
+     * <p>本进程（模块自身）对这个文件是有写权限的（目录 0777 / 文件 0666，早先建好），
+     * 所以 Provider 收到行就地追加即可：不 fork su、不等导出、不依赖常驻服务。
+     * 写不进去时返回 false，调用方退回私有镜像，导出时照样合并，不丢行。</p>
+     */
+    public static boolean appendHookLine(String line) {
+        if (line == null || line.isEmpty()) {
+            return false;
+        }
+        return appendDirectText(line + "\n");
+    }
+
+    /**
+     * v3.2.16：**不借 su、不等导出**，本进程直接把文本追加进公共日志。
+     *
+     * <p>公共目录是 su 时期建好并放开过权限的（0777 / 0666），模块自己写它是够的；
+     * 这也正是 MASK 心跳一直能落盘的原因。凡是「本进程能写」的行都走这里，
+     * 只有真的写不进去才退回镜像与 su —— 旧版把顺序做反了，su 一被拒就整批丢。</p>
+     *
+     * <p>超过 512KB 先 rename 成 .1，与 XposedInit 的轮转口径一致。</p>
+     */
+    public static boolean appendDirectText(String text) {
+        if (text == null || text.isEmpty()) {
+            return false;
+        }
+        long now = System.currentTimeMillis();
+        if (now >= publicLogBlockedUntil && writeDirect(LOG_FILE, text)) {
+            return true;
+        }
+        if (now >= publicLogBlockedUntil) {
+            // 直写失败（通常是注入进程没有 /sdcard/Android 的分区存储授权）；
+            // 先记下退避窗口，再走 su / 私有镜像，避免下一行继续撞 MediaProvider。
+            publicLogBlockedUntil = now + PUBLIC_LOG_BLOCK_MS;
+        }
+        return suAppend(text);
+    }
+
+    /** 单次直写；超过轮转阈值先改名成 .1。成功返回 true，任何异常都当失败。 */
+    private static boolean writeDirect(String path, String text) {
+        try {
+            File f = new File(path);
+            if (f.length() > LOG_ROTATE_BYTES) {
+                //noinspection ResultOfMethodCallIgnored
+                f.renameTo(new File(path + ".1"));
+            }
+            try (FileOutputStream fo = new FileOutputStream(f, true)) {
+                fo.write(text.getBytes(StandardCharsets.UTF_8));
+            }
+            return true;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    /**
+     * v3.2.17：su 追加兜底。只在本进程直写失败时调用，且 10 秒最多一次；
+     * 两个目录都补一份（兜底目录保证有，用户目录方便直接取）。
+     * 命令结尾 {@code ; true} 让 execSu 恒成功，但这里不把它当回写条件。
+     */
+    private static boolean suAppend(String text) {
+        long now = System.currentTimeMillis();
+        if (now - lastSuAppendAt < SU_APPEND_INTERVAL_MS) {
+            return false;
+        }
+        lastSuAppendAt = now;
+        try {
+            String b64 = Base64.encodeToString(text.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
+            return execSu("mkdir -p \"" + LOG_DIR + "\" \"" + LOG_DIR_FALLBACK + "\" 2>/dev/null; "
+                    + "echo " + b64 + " | base64 -d | tee -a \"" + LOG_FILE + "\" "
+                    + "| tee -a \"" + LOG_DIR_FALLBACK + "/antiburn.log\" >/dev/null 2>&1; true");
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    /**
+     * v3.2.13 观测性兜底：部分 HyperOS 上 su 读应用私有 files 目录被 SELinux 拦掉，
+     * exportLogs 命令里的 {@code cat <私有镜像>} 静默失败，公开日志只剩 SystemUI 心跳；
+     * 本进程直读镜像却成功（{@link #readHookMirror()}），于是 SELF 能数出注入次数，
+     * 正文却看不到 ENTER/INJECTED/RDUMP/BDUMP 明细。这里在 su 合并之后，用本进程
+     * 直读镜像把 su 没带出来的行批量补进公开日志；整行去重、只追加，绝不回写镜像。
+     */
+    private static void supplementHookMirror() {
+        try {
+            String mirror = readHookMirror();
+            if (mirror == null || mirror.isEmpty()) {
+                return;
+            }
+            Set<String> seen = new HashSet<>();
+            String existing = readPublicLogDirect();
+            if (existing != null) {
+                for (String l : existing.split("\\r?\\n")) {
+                    if (!l.isEmpty()) {
+                        seen.add(l);
+                    }
+                }
+            }
+            StringBuilder missing = new StringBuilder();
+            for (String line : mirror.split("\\r?\\n")) {
+                if (line.isEmpty() || !seen.add(line)) {
+                    continue;
+                }
+                if (!line.matches("[0-9]{10,}.*")) {
+                    continue;
+                }
+                if (line.contains("] SELF ver=")) {
+                    continue;
+                }
+                missing.append(line).append('\n');
+            }
+            if (missing.length() == 0) {
+                return;
+            }
+            byte[] bytes = missing.toString().getBytes(StandardCharsets.UTF_8);
+            // v3.2.14：先直写。目录在 prepareSharedDirs 里已 chmod 0777、日志文件 0666，
+            // 本进程追加不需要 su —— 这样常驻服务可以低频补录而不 fork 任何进程。
+            boolean directOk = false;
+            try (FileOutputStream fo = new FileOutputStream(LOG_FILE, true)) {
+                fo.write(bytes);
+                directOk = true;
+            } catch (Throwable ignored) {
+                // 权限被系统收回去时退回 su
+            }
+            if (directOk) {
+                return;
+            }
+            String payload = Base64.encodeToString(bytes, Base64.NO_WRAP);
+            String cmd = "mkdir -p \"" + LOG_DIR + "\" \"" + LOG_DIR_FALLBACK + "\" 2>/dev/null; "
+                    + "echo " + payload + " | base64 -d "
+                    + "| tee -a \"" + LOG_FILE + "\" "
+                    + "| tee -a \"" + LOG_DIR_FALLBACK + "/antiburn.log\" >/dev/null 2>&1; true";
+            execSu(cmd);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /**
+     * v3.2.14：常驻服务用的静默补录。
+     *
+     * <p>用户反馈「每次都点一下导出按钮才知道日志好没好」——真正要的不是按钮，
+     * 而是 {@code antiburn.log} 自己就是最新的。这里只做一件事：把镜像里还没进
+     * 公开日志的行补进去，不写 SELF、不重排、不弹任何提示。</p>
+     *
+     * <p>成本控制：读自己的私有文件，没有新行就直接 return（常态零开销）；
+     * 有新行时优先本进程直写，一次 {@code write()} 就结束，不 fork su。
+     * 受「诊断日志」开关门控 —— 开关关着就完全不干活。</p>
+     */
+    public static void autoSyncLog() {
+        try {
+            if (!Config.enableLog) {
+                return;
+            }
+        } catch (Throwable ignored) {
+            // 配置还没加载好时按「不开」处理，绝不在后台凭空写盘
+            return;
+        }
+        try {
+            String mirror = readHookMirror();
+            if (mirror == null || mirror.isEmpty()) {
+                return;
+            }
+            supplementHookMirror();
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** 直读当前公开日志（本进程）；读不到再走 su 兜底，供镜像补录做整行去重比对。 */
+    private static String readPublicLogDirect() {
+        try {
+            File f = new File(LOG_FILE);
+            if (f.exists() && f.length() > 0) {
+                StringBuilder sb = new StringBuilder();
+                try (java.io.BufferedReader br = new java.io.BufferedReader(
+                        new java.io.FileReader(f))) {
+                    String line;
+                    while ((line = br.readLine()) != null) {
+                        sb.append(line).append('\n');
+                    }
+                }
+                return sb.toString();
+            }
+        } catch (Throwable ignored) {
+        }
+        return execSuCapture("cat \"" + LOG_FILE + "\" 2>/dev/null; cat \""
+                + LOG_DIR_FALLBACK + "/antiburn.log\" 2>/dev/null");
     }
 
     /**

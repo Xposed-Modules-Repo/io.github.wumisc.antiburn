@@ -117,6 +117,21 @@ public class BurnInMaskService extends AccessibilityService {
     /** 前台包名，来自 TYPE_WINDOW_STATE_CHANGED；拿不到时保持 null */
     private volatile String foregroundPkg;
 
+    /**
+     * v3.2.16：无障碍探针（NDUMP）—— 目标 App 前台时导出「固定区域」的真实节点，
+     * 一行一个 class / view-id / bounds / text。
+     *
+     * <p>为什么是这条通道：被注入进程（抖音 / 快手 / 红果）写不了公共存储，su 又常被拒，
+     * 于是 RDUMP / BDUMP 这类探针连续四份日志一条都没落下来，快手的红点和右侧列只能靠猜。
+     * 无障碍服务本来就有 {@code canRetrieveWindowContent}，读到的正是同一棵 UI 树，
+     * 而且本进程对公共日志有写权限 —— 不用 root、不用导出、不用等补录。</p>
+     */
+    private static final long DUMP_MIN_GAP_MS = 10 * 60_000L;
+    private static final long DUMP_AFTER_MS = 1500L;
+    private static final int DUMP_MAX_LINES = 120;
+    private volatile String lastDumpPkg;
+    private volatile long lastDumpAt = 0L;
+
     /** 当前相位开始时间与相位（true = 遮盖中） */
     private long phaseStart = 0L;
     private boolean masked = false;
@@ -192,6 +207,14 @@ public class BurnInMaskService extends AccessibilityService {
      * 表现为「无障碍服务崩溃、开关被自动关掉」。改为后台单线程串行执行，
      * 同一时刻只允许一个 su 任务，既不阻塞也不堆积。</p>
      */
+    /** v3.2.24：探针写盘专用单线程。与 suIo 分开，避免重日志把掩码诊断挤后面。 */
+    private static final java.util.concurrent.ExecutorService probeIo =
+            java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+                Thread t = new Thread(r, "antiburn-probe-io");
+                t.setDaemon(true);
+                return t;
+            });
+
     private static final java.util.concurrent.ExecutorService suIo =
             java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
                 Thread t = new Thread(r, "antiburn-mask-log");
@@ -513,6 +536,7 @@ public class BurnInMaskService extends AccessibilityService {
                 foregroundPkg = pkg;
                 // v3.0.24：把前台包名交给常驻通知的实时判断（非目标包只更新前台，不覆盖目标）
                 ForegroundWatch.onForeground(this, pkg);
+                maybeDumpNodes(pkg);
                 // v2.7.5：空转期间是 5 秒一帧，若只等下一帧，切进目标应用后要 5 秒才盖上，
                 // 用户会当成「没生效」。这里立刻插一帧，响应仍是一次事件驱动，不增加常驻唤醒。
                 handler.removeCallbacks(tick);
@@ -526,6 +550,217 @@ public class BurnInMaskService extends AccessibilityService {
     @Override
     public void onInterrupt() {
         // 无障碍服务被系统中断（例如用户关掉服务）。窗口会在 onUnbind 里撤掉。
+    }
+
+    // ---------- v3.2.16：无障碍探针（NDUMP） ----------
+
+    /**
+     * 目标 App 切到前台时排一次节点导出。只在「诊断日志」开关打开、且前台是本模块
+     * 认识的视频 App 时跑；同包 10 分钟内只采一次，切页面不会反复扫树。
+     */
+    private void maybeDumpNodes(String pkg) {
+        try {
+            // v3.2.17（审计修正）：VideoApps.of() 对任何包都返回 Kind（未知是 Kind.NONE）,
+            // 永远不为 null —— 旧断言 `== null` 恒假，等于没过滤。
+            if (pkg == null || VideoApps.of(pkg) == VideoApps.Kind.NONE) {
+                return;
+            }
+            long now = System.currentTimeMillis();
+            String last = lastDumpPkg;
+            if (pkg.equals(last) && now - lastDumpAt < DUMP_MIN_GAP_MS) {
+                return;
+            }
+            // v3.2.19：探针不再要求「诊断日志」开关。
+            // 真机日志 170 行里快手已在前台 8 次、NDUMP 仍是 0 —— 开关是关的，
+            // 而用户恰恰是「为了拿到节点才开的模块」。改成只看「是不是视频 App」，
+            // 同包 10 分钟一次、最多 120 行，成本比一次页面重绘还低。
+            lastDumpPkg = pkg;
+            lastDumpAt = now;
+            // v3.2.20：先留一行「要跑了」，这样万一延迟任务没执行，日志能直接指出来
+            emitProbe(now + " [a11y] NDUMP sched pkg=" + pkg
+                    + " w=" + screenW + " h=" + screenH + "\n");
+            // 等 1.5 秒让页面布局稳定，否则抓到的是上一页的树
+            handler.postDelayed(() -> dumpNodesNow(pkg), DUMP_AFTER_MS);
+        } catch (Throwable t) {
+            // 旧版这里吞掉异常，探针失效时日志里一点痕迹都没有
+            emitProbe(System.currentTimeMillis() + " [a11y] NDUMP sched-fail pkg=" + pkg
+                    + " e=" + t.getClass().getSimpleName() + "\n");
+        }
+    }
+
+    /**
+     * v3.2.19：探针输出的唯一出口。
+     *
+     * <p>先走 `ConfStore.appendDirectText`（本进程直写 → 失败 su 追加）；两条都失败时
+     * 直接写进模块私有镜像 `files/hook-injected.log` —— 这个文件一定是本进程可写的，
+     * 下次导出/常驻补录会把它并回公共日志。这样「探针跑了但日志里没有」不会再发生。</p>
+     */
+    private void emitProbe(String text) {
+        if (text == null || text.isEmpty()) {
+            return;
+        }
+        final String body = text;
+        // v3.2.24（审计修正）：写盘一律离开主线程。
+        // appendDirectText 直写失败会走 suAppend → execSu 里 waitFor 最长 4 秒，
+        // 而 emitProbe 的调用点全在无障碍服务主线程（step / onAccessibilityEvent / 延迟 dump）。
+        // 一次 su 授权弹窗就足够把主线程卡到 ANR —— 与 3.2.1 那次「服务被判崩溃、开关自动关掉」同源。
+        try {
+            probeIo.execute(() -> {
+                try {
+                    if (ConfStore.appendDirectText(body)) {
+                        return;
+                    }
+                } catch (Throwable ignored) {
+                }
+                try {
+                    java.io.File f = new java.io.File(getFilesDir(), ConfigProvider.HOOK_LOG_FILE);
+                    try (java.io.FileOutputStream fo = new java.io.FileOutputStream(f, true)) {
+                        fo.write(body.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    }
+                } catch (Throwable ignored) {
+                }
+            });
+        } catch (Throwable ignored) {
+            // 线程池已关（服务销毁）：直接丢这一行，绝不在调用方线程上补写
+        }
+    }
+
+    /**
+     * 把「角落 / 顶栏 / 右侧列 / 底栏」四个固定区域里的节点落进公共日志。
+     *
+     * <p>行格式刻意压短：{@code r=right c=TextView id=com.smile.gifmaker:id/xxx b=1120,900,1170,950 t=1.4万}。
+     * 快手左上红点和右侧赞/评/藏/转就在这几条里，拿到就能写精确规则。</p>
+     */
+    private void dumpNodesNow(String pkg) {
+        int w = screenW, h = screenH;
+        if (w <= 0 || h <= 0) {
+            try {
+                Rect b = wm.getCurrentWindowMetrics().getBounds();
+                w = b.width();
+                h = b.height();
+            } catch (Throwable ignored) {
+                // 兜底：资源尺寸（旧版这里直接 return，探针什么都没写就被吞了）
+                try {
+                    android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+                    w = dm.widthPixels;
+                    h = dm.heightPixels;
+                } catch (Throwable ignored2) {
+                    // 仍然拿不到
+                }
+            }
+        }
+        if (w <= 0 || h <= 0) {
+            emitProbe(System.currentTimeMillis() + " [a11y] NDUMP fail pkg=" + pkg
+                    + " no-metrics w=" + w + " h=" + h + "\n");
+            return;
+        }
+        StringBuilder sb = new StringBuilder();
+        int scan = 0, top = 0, right = 0, bottom = 0, corner = 0;
+        try {
+            android.view.accessibility.AccessibilityNodeInfo root = getRootInActiveWindow();
+            if (root == null) {
+                emitProbe(System.currentTimeMillis() + " [a11y] NDUMP pkg="
+                        + pkg + " empty（拿不到活动窗口，可能是全屏 SurfaceView / 悬浮窗覆盖）\n");
+                return;
+            }
+            java.util.ArrayDeque<android.view.accessibility.AccessibilityNodeInfo> q =
+                    new java.util.ArrayDeque<>();
+            q.add(root);
+            int depthGuard = 0;
+            while (!q.isEmpty() && scan < 3000 && depthGuard < 3000) {
+                android.view.accessibility.AccessibilityNodeInfo n = q.poll();
+                depthGuard++;
+                if (n == null) {
+                    continue;
+                }
+                scan++;
+                Rect r = new Rect();
+                n.getBoundsInScreen(r);
+                int cx = (r.left + r.right) / 2;
+                int cy = (r.top + r.bottom) / 2;
+                boolean tiny = r.width() <= 0 || r.height() <= 0;
+                if (!tiny && r.width() < w * 0.995f) {
+                    String region = null;
+                    // 左上角：红点 / 徽标所在（快手左上红点就在这块）
+                    if (cx < w * 0.30f && cy < h * 0.16f) {
+                        region = "corner";
+                        corner++;
+                    } else if (cy < h * 0.16f) {
+                        region = "top";
+                        top++;
+                    } else if (cy > h * 0.86f) {
+                        region = "bottom";
+                        bottom++;
+                    } else if (cx > w * 0.76f) {
+                        region = "right";
+                        right++;
+                    }
+                    if (region != null && sb.length() < 6000) {
+                        sb.append(System.currentTimeMillis()).append(" [a11y] NDUMP r=").append(region)
+                                .append(" c=").append(shortClass(n.getClassName()))
+                                .append(" id=").append(shortId(n.getViewIdResourceName()))
+                                .append(" b=").append(r.left).append(',').append(r.top).append(',')
+                                .append(r.right).append(',').append(r.bottom);
+                        CharSequence t = n.getText();
+                        if (t != null && t.length() > 0) {
+                            String s = t.toString().replace('\n', ' ').replace(' ', '_');
+                            sb.append(" t=").append(s.length() > 12 ? s.substring(0, 12) : s);
+                        }
+                        sb.append('\n');
+                    }
+                }
+                for (int i = 0; i < n.getChildCount(); i++) {
+                    android.view.accessibility.AccessibilityNodeInfo c = n.getChild(i);
+                    if (c != null) {
+                        q.add(c);
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            sb.append(System.currentTimeMillis()).append(" [a11y] NDUMP pkg=").append(pkg)
+                    .append(" failed=").append(t.getClass().getSimpleName()).append('\n');
+        }
+        try {
+            String body = sb.toString();
+            // 行数上限：一个页面一两百行就够定位，日志不能因为探针爆掉
+            int nl = body.indexOf('\n');
+            int cnt = 1;
+            int cut = body.length();
+            while (nl >= 0 && cnt < DUMP_MAX_LINES) {
+                nl = body.indexOf('\n', nl + 1);
+                cnt++;
+            }
+            if (nl >= 0) {
+                cut = nl + 1;
+            }
+            if (cut < body.length()) {
+                body = body.substring(0, cut);
+            }
+            String head = System.currentTimeMillis() + " [a11y] NDUMP begin pkg=" + pkg
+                    + " nodes=" + scan + " corner=" + corner + " top=" + top
+                    + " right=" + right + " bottom=" + bottom + " w=" + w + " h=" + h + "\n";
+            String tail = System.currentTimeMillis() + " [a11y] NDUMP end pkg=" + pkg + "\n";
+            emitProbe(head + body + tail);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static String shortClass(CharSequence cn) {
+        if (cn == null) {
+            return "?";
+        }
+        String s = cn.toString();
+        int i = s.lastIndexOf('.');
+        return i >= 0 ? s.substring(i + 1) : s;
+    }
+
+    /** 只留「包名之外的 id 名」，日志短一半，读起来也直观。 */
+    private static String shortId(String id) {
+        if (id == null || id.isEmpty()) {
+            return "-";
+        }
+        int i = id.indexOf(":id/");
+        return i >= 0 ? id.substring(i + 4) : id;
     }
 
     @Override
@@ -760,6 +995,12 @@ public class BurnInMaskService extends AccessibilityService {
         boolean locked = screenOn && isLockedCached(now);
         Cfg c = config(now);
         resolveApp(c, foregroundPkg);
+        // v3.2.20：探针的第二个触发点。窗口事件只在「包名变化」时来一次，
+        // 如果进快手那一刻事件被系统合并掉、或包名没变（用户从首页退回播放页），
+        // 事件路径就永远不触发。心跳这里每帧顺手问一次，同包 10 分钟一次，成本可忽略。
+        if (foregroundPkg != null) {
+            maybeDumpNodes(foregroundPkg);
+        }
 
         // v2.8.2：两条通道分开判，互不覆盖。
         //  sysBar  —— 系统栏遮盖，只在 overlay 引擎下画；LSPosed 引擎的系统栏由

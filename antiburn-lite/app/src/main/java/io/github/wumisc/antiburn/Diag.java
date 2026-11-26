@@ -6,7 +6,7 @@ package io.github.wumisc.antiburn;
  * <p>真机 3.0.28 日志给出了明确的闪退现场：</p>
  * <pre>
  * FATAL java.lang.NoClassDefFoundError: Lio/github/wumisc/antiburn/XposedInit;
- *   Caused by: ClassNotFoundException: de.robv.android.xposed.IXposedHookLoadPackage
+ *   Caused by: ClassNotFoundException: io.github.wumisc.antiburn.compat.IXposedHookLoadPackage
  *   at AppComponentFactory.instantiateReceiver(...)
  * </pre>
  *
@@ -16,7 +16,7 @@ package io.github.wumisc.antiburn;
  * 于是「开机广播 / 覆盖安装广播」一进来，类加载就抛 NoClassDefFoundError，整个进程被杀。</p>
  *
  * <p>本类只做一件事：把日志写到和 hook 侧同一个共享日志文件，但不引用任何
- * {@code de.robv.android.xposed} 类型。App 进程（BootReceiver / Config / 前台服务）
+ * {@code io.github.wumisc.antiburn.compat} 类型。App 进程（BootReceiver / Config / 前台服务）
  * 一律走这里；XposedInit.diagForce 只保留给真正被注入的进程。</p>
  */
 public final class Diag {

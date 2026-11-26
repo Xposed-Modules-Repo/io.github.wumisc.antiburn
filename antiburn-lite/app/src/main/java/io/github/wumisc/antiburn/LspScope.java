@@ -134,6 +134,12 @@ final class LspScope {
         boolean opened;
         /** 本模块是否已在 LSPosed 里登记并启用。 */
         boolean registered;
+        /**
+         * API 102（libxposed）静态作用域：作用域写在模块包里的
+         * META-INF/xposed/scope.list，管理器里没有「勾选」这一步。
+         * 此时 registered 直接按模块自声明成立，不再依赖配置库里有行。
+         */
+        boolean staticScope;
         /** 旧版 LSPosed 的 modules 主键，新版没有这一列，仅在 scope 用 mid 关联时启用。 */
         int mid = -1;
         final Set<String> scope = new LinkedHashSet<>();
@@ -361,16 +367,16 @@ final class LspScope {
             r.db = findDb();
             if (r.db == null) {
                 r.error = "no-db";
-                return r;
+                return finish(ctx, r);
             }
             if (ctx == null) {
                 r.error = "no-context";
-                return r;
+                return finish(ctx, r);
             }
             File copy = stage(ctx, r.db);
             if (copy == null) {
                 r.error = "su-denied";
-                return r;
+                return finish(ctx, r);
             }
             r.copied = true;
             SQLiteDatabase d = null;
@@ -384,13 +390,13 @@ final class LspScope {
                 // module_pkg_name 为主键，压根没有自增 mid。
                 if (!hasTable(d, "modules")) {
                     r.error = "schema:no-modules";
-                    return r;
+                    return finish(ctx, r);
                 }
                 List<String> mcols = columns(d, "modules");
                 String mcol = pickPkgColumn(mcols);
                 if (mcol == null) {
                     r.error = "schema:modules" + join(mcols);
-                    return r;
+                    return finish(ctx, r);
                 }
                 try (Cursor c = d.rawQuery(
                         "select 1 from modules where " + mcol + "=? limit 1", new String[]{MODULE})) {
@@ -400,13 +406,13 @@ final class LspScope {
                     // modules 里查不到本模块名时，把实际登记过的模块打出来 ——
                     // 常见于包名被改过、或用户在管理器里根本没启用。
                     r.error = "unregistered" + join(moduleNames(d, mcol));
-                    return r;
+                    return finish(ctx, r);
                 }
 
                 // ---- scope：新版按 module_pkg_name 关联，旧版按 mid ----
                 if (!hasTable(d, "scope")) {
                     r.error = "schema:no-scope";
-                    return r;
+                    return finish(ctx, r);
                 }
                 List<String> scols = columns(d, "scope");
                 if (scols.contains("module_pkg_name")) {
@@ -421,14 +427,14 @@ final class LspScope {
                     }
                     if (r.mid <= 0) {
                         r.error = "schema:no-mid";
-                        return r;
+                        return finish(ctx, r);
                     }
                     readScope(d, r, "mid=?", new String[]{String.valueOf(r.mid)});
                 } else {
                     // 两种关联方式都对不上：把真实列名带回去，下一版据此适配，
                     // 不要再靠猜。
                     r.error = "schema:scope" + join(scols);
-                    return r;
+                    return finish(ctx, r);
                 }
             } catch (Throwable t) {
                 // v2.8.8：只记异常类名会把 SQLITE_CANTOPEN(14)、文件损坏、schema 不符
@@ -457,10 +463,93 @@ final class LspScope {
                     r.missing.add(p);
                 }
             }
-            return r;
+            return finish(ctx, r);
         } catch (Throwable t) {
             r.error = "error:" + t.getClass().getSimpleName();
-            return r;
+            return finish(ctx, r);
+        }
+    }
+
+    /**
+     * probe 的唯一出口：先看是不是 API 102 的静态作用域模块，再算「装了但没勾」的缺口。
+     *
+     * <p>libxposed 模块的作用域写在包里的 scope.list，管理器里没有可勾选的 scope 行，
+     * 配置库也往往根本没有本模块记录 —— 旧口径会把它判成「没启用模块」，
+     * 用户照着提示去 LSPosed 里找「勾选项」只会更迷路。这里以模块自声明为准。</p>
+     */
+    private static Report finish(Context ctx, Report r) {
+        if (!r.registered) {
+            applyStaticScope(ctx, r);
+        }
+        try {
+            r.installed.addAll(installedTargets(ctx));
+            for (String p : r.installed) {
+                if (!r.scope.contains(p)) {
+                    r.missing.add(p);
+                }
+            }
+        } catch (Throwable ignored) {
+            // 装了什么列不出来，不影响已读到的结论
+        }
+        return r;
+    }
+
+    /** 读本应用 APK 里的 META-INF/xposed/{module.prop,scope.list}，静态作用域才算数。 */
+    private static void applyStaticScope(Context ctx, Report r) {
+        if (ctx == null) {
+            return;
+        }
+        try {
+            java.io.File apk = new java.io.File(ctx.getApplicationInfo().sourceDir);
+            java.util.zip.ZipFile zip = new java.util.zip.ZipFile(apk);
+            try {
+                java.util.zip.ZipEntry prop = zip.getEntry("META-INF/xposed/module.prop");
+                java.util.zip.ZipEntry list = zip.getEntry("META-INF/xposed/scope.list");
+                if (prop == null || list == null) {
+                    return;
+                }
+                boolean isStatic = false;
+                java.io.BufferedReader br = new java.io.BufferedReader(
+                        new java.io.InputStreamReader(zip.getInputStream(prop), "UTF-8"));
+                try {
+                    String line;
+                    while ((line = br.readLine()) != null) {
+                        if (line.trim().equals("staticScope=true")) {
+                            isStatic = true;
+                        }
+                    }
+                } finally {
+                    br.close();
+                }
+                if (!isStatic) {
+                    return;
+                }
+                java.util.Set<String> declared = new LinkedHashSet<>();
+                br = new java.io.BufferedReader(
+                        new java.io.InputStreamReader(zip.getInputStream(list), "UTF-8"));
+                try {
+                    String line;
+                    while ((line = br.readLine()) != null) {
+                        String p = line.trim();
+                        if (!p.isEmpty()) {
+                            declared.add(p);
+                        }
+                    }
+                } finally {
+                    br.close();
+                }
+                if (declared.isEmpty()) {
+                    return;
+                }
+                r.staticScope = true;
+                r.registered = true;
+                r.error = null;
+                r.scope.addAll(declared);
+            } finally {
+                zip.close();
+            }
+        } catch (Throwable ignored) {
+            // 读不到就维持旧口径，不要伪造「已启用」
         }
     }
 
@@ -508,6 +597,9 @@ final class LspScope {
                     break;
             }
             return sb.toString();
+        }
+        if (r.staticScope) {
+            sb.append(" static=declared");
         }
         sb.append(" mid=").append(r.mid)
                 .append(" scope=").append(r.scope.size()).append('[').append(join(r.scope)).append(']')
@@ -584,11 +676,14 @@ final class LspScope {
             return sb.toString();
         }
         sb.append("模块登记：已启用");
+        if (r.staticScope) {
+            sb.append("（API 102 静态作用域：作用域写在模块包内，管理器里没有勾选这一步）");
+        }
         if (r.mid > 0) {
             sb.append("（mid=").append(r.mid).append("）");
         }
         sb.append('\n');
-        sb.append("已勾选作用域：").append(r.scope.size()).append(" 个");
+        sb.append(r.staticScope ? "模块声明的作用域：" : "已勾选作用域：").append(r.scope.size()).append(" 个");
         if (!r.scope.isEmpty()) {
             sb.append('\n');
             for (String p : r.scope) {
@@ -607,8 +702,12 @@ final class LspScope {
         sb.append('\n');
         if (r.missing.isEmpty()) {
             sb.append("结论：作用域已勾齐。\n若仍无效果，请强行停止对应 App 再打开，让新进程重新加载模块。\n")
-                    .append("若是覆盖安装/更新了本模块，需重启手机一次（不是只重启系统界面）：")
-                    .append("SystemUI 会自动重注，但抖音/快手等三方 App 只有重启手机后才会重新加载新 dex。");
+                    .append("若是覆盖安装/更新了本模块：更新后第一次打开本应用会自动停止这四个 App，")
+                    .append("重新打开即重新注入，不用重启手机。");
+        } else if (r.staticScope) {
+            sb.append("结论：有 ").append(r.missing.size()).append(" 个已安装的包不在模块声明的静态作用域里，这些 App 内一定没效果。\n\n")
+                    .append("处理：这是 API 102 静态作用域（写在模块包的 scope.list），管理器里没有可勾的项；\n")
+                    .append("把上面打 ✗ 的包名反馈过来，下一版补进 scope.list 即可。");
         } else {
             sb.append("结论：有 ").append(r.missing.size()).append(" 个应用没勾选，模块不会被注入，这些 App 内一定没效果。\n\n")
                     .append("处理：LSPosed → 模块 → 抗烧屏 → 作用域 → 勾选上面打 ✗ 的应用 → 保存 → 强行停止该 App 再打开。");

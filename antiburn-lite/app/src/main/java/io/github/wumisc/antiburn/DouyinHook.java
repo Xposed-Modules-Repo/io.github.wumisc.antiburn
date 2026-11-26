@@ -23,9 +23,9 @@ import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 
-import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedHelpers;
-import de.robv.android.xposed.callbacks.XC_LoadPackage;
+import io.github.wumisc.antiburn.compat.XC_MethodHook;
+import io.github.wumisc.antiburn.compat.XposedHelpers;
+import io.github.wumisc.antiburn.compat.callbacks.XC_LoadPackage;
 
 /**
  * 抖音（com.ss.android.ugc.aweme）防烧屏：区域化定时隐藏，把控制权交给用户。
@@ -116,8 +116,19 @@ public final class DouyinHook {
      */
     private static final java.util.Map<View, Integer> missRounds =
             new java.util.WeakHashMap<>();
-    /** v3.0.36：宽限轮数。tick 约 1 秒一轮，3 轮 = 3 秒，足够跨过一次滚动/重绘抖动。 */
-    private static final int MISS_GRACE_ROUNDS = 3;
+    /**
+     * 宽限轮数。
+     *
+     * <p>v3.0.36 原本是 3 轮（约 3 秒）。真机反馈「看搜索视频时藏了两三次，很快就还原」
+     * 说明 3 秒不够：快手搜索结果页的右列在「视频切换 / 评论抽屉 / 相关搜索浮层」之间
+     * 会连续几轮收不到，超过 3 轮就 releaseAll 放出来了。</p>
+     *
+     * <p>v3.2.23 抬到 30 轮。周期最快约 1 秒一轮，等于「连续 30 秒收不到才认定真的翻页」；
+     * 期间只要窗口还 attached 且可见就一直藏。真正翻页（列表/网格/主页）走的是
+     * {@code looksLikeGridPage} 与 {@code hideEnabled} 的分页分支，那里是立即释放，
+     * 不受这个宽限期影响 —— 所以不会出现「退回主页还残留一块黑」。</p>
+     */
+    private static final int MISS_GRACE_ROUNDS = 30;
 
     /**
      * v3.0.36 保底台账：**本模块动过的每一个 View**（弱引用集合，不持有对象）。
@@ -176,6 +187,15 @@ public final class DouyinHook {
      * 这个标记只用于「直播固定条补扫」，不替代 livePaused / liveDetected 的历史判定。</p>
      */
     private static volatile boolean liveFixedPage = false;
+    /**
+     * v3.2.16：作品列表 / 搜索结果这类「网格页」。
+     *
+     * <p>真机反馈「抖音主页误杀严重」：主页的作品网格是「等尺寸封面 + 多列」结构，
+     * 几何规则里「贴右缘的竖条」会把最右那一列封面整列当成右侧互动列透明掉，
+     * 于是主页右侧空出一大块、只剩零星按钮浮在上面。这类页面不是全屏播放页，
+     * 藏掉封面没有任何防烧屏收益，只会变成误杀 —— 检测到网格就只遮顶部 chrome。</p>
+     */
+    private static volatile boolean gridPage = false;
     /** v3.0.28：页面类型判定（主页/直播页）的节流时间戳，避免每帧全树扫描。 */
     private static long lastPageKindAt = 0L;
     /** v3.0.28：直播固定条补扫节流。 */
@@ -198,6 +218,8 @@ public final class DouyinHook {
     private static volatile View leftTop;      // 左上角菜单按钮
     private static volatile View currentDecor; // 当前根视图（用于周期强制重扫）
     private static boolean started = false;
+    /** 热重载退役标记：置位后本代循环、悬浮球、全局布局监听全部退出。 */
+    private static volatile boolean retired = false;
     private static boolean hidden = false;
     /** 当前相位（隐藏 / 显示）的起始时刻，用于 v2.9.0 恢复的周期真隐藏。 */
     private static long phaseAt = 0L;
@@ -351,6 +373,7 @@ public final class DouyinHook {
     }
 
     static void init(XC_LoadPackage.LoadPackageParam lpparam) {
+        retired = false;
         try {
             // v2.8.0：与 XposedInit 共用 VideoApps 唯一真源。旧版这里用精确 equals 认
             // tv.danmaku.bili，B站渠道包 com.bilibili.app.in 即使被注入也会掉进「抖音」
@@ -695,6 +718,7 @@ public final class DouyinHook {
             if (nowKind - lastPageKindAt >= 1200L) {
                 lastPageKindAt = nowKind;
                 profilePage = !isVideoApp && isProfilePage(root);
+                gridPage = looksLikeGridPage(root);
                 // 只认直播间独有的三个词，绝不拿「说点什么」当判据 —— 合集页 / 单视频页
                 // 底部也有评论输入条，一旦误判成直播间就会跳过右侧按钮列。
                 liveFixedPage = !isVideoApp && !profilePage
@@ -2099,8 +2123,114 @@ public final class DouyinHook {
         scheduleCycle(3000);
     }
 
+    /**
+     * 热重载退役（旧一代代码里执行）。
+     *
+     * <p>视频 App 进程里我们留下的东西比 SystemUI 更多：周期 Handler、全局布局监听、
+     * 挂在 decorView 上的悬浮球，以及一批被 setAlpha(0)/挪过位置的控件。
+     * 框架只 unhook 方法，不会替我们收拾这些 —— 不收拾就会出现「热重载后有两个悬浮球、
+     * 控件位置歪了」，旧类加载器也回收不掉。</p>
+     */
+    static void shutdownForReload() {
+        retired = true;
+        try {
+            handler.removeCallbacksAndMessages(null);
+        } catch (Throwable ignored) {
+        }
+        cycleScheduled = false;
+        try {
+            if (registeredDecor != null && glListener != null) {
+                registeredDecor.getViewTreeObserver().removeOnGlobalLayoutListener(glListener);
+            }
+        } catch (Throwable ignored) {
+        }
+        registeredDecor = null;
+        glListener = null;
+        try {
+            if (ballView != null && ballView.getParent() instanceof ViewGroup) {
+                ((ViewGroup) ballView.getParent()).removeView(ballView);
+            }
+        } catch (Throwable ignored) {
+        }
+        ballView = null;
+        // 把所有被隐藏 / 挪位过的控件还原，避免「热重载后界面缺一块」
+        try {
+            releaseAll(rightList, null);
+            releaseAll(bottomList, null);
+            releaseAll(swipeHintList, null);
+            releaseAll(centerPlusList, null);
+            releaseAll(redDotList, null);
+            releaseAll(captionList, null);
+            releaseAll(ksLiveTargetList, null);
+            releaseAll(dyLiveTargetList, null);
+            releaseAll(ksFeedTargetList, null);
+            releaseAll(dramaTargetList, null);
+            releaseAll(liveTopList, null);
+            releaseAll(liveBottomList, null);
+            releaseAll(liveRightList, null);
+            releaseAll(dramaPaywallList, null);
+        } catch (Throwable ignored) {
+        }
+        rightList.clear();
+        bottomList.clear();
+        swipeHintList.clear();
+        centerPlusList.clear();
+        redDotList.clear();
+        captionList.clear();
+        ksLiveTargetList.clear();
+        dyLiveTargetList.clear();
+        ksFeedTargetList.clear();
+        dramaTargetList.clear();
+        liveTopList.clear();
+        liveBottomList.clear();
+        liveRightList.clear();
+        dramaPaywallList.clear();
+        // v3.2.30：旧版只清了列表与悬浮球，topBar / rightTop / leftTop / currentDecor /
+        // lastRoot 这些静态引用仍攥着宿主 Activity 的 DecorView，热重载后旧类加载器
+        // 整代回收不掉；missRounds / 相位 / 直播判定也会把「上一页」的状态带进日志。
+        // 新类加载器本来是干净静态，但 SelfReload 失败回滚、或框架复用同一加载器时
+        // 这些残留就是实打实的联动错位，所以退役时逐个归零。
+        topBar = null;
+        rightTop = null;
+        leftTop = null;
+        currentDecor = null;
+        lastRoot = null;
+        missRounds.clear();
+        hidden = false;
+        forceShow = false;
+        phaseAt = 0L;
+        shiftDx = 0;
+        shiftDy = 0;
+        shiftStepAt = 0L;
+        treeDumped = false;
+        lastScan = 0L;
+        lastPageKindAt = 0L;
+        lastBandsAt = 0L;
+        lastHookSig = "";
+        lastHookDiagAt = 0L;
+        lastRightReject = "-";
+        ksRightAllow = "-";
+        liveDetected = false;
+        livePaused = false;
+        liveStrongHit = false;
+        liveInputSeen = false;
+        liveHiddenCount = 0;
+        liveStreak = 0;
+        lastLiveProbe = 0L;
+        dphLastN = -1;
+        dphLastHits = -1;
+        dphLastRej = -1;
+        lastDphScanAt = 0L;
+        ballDocked = false;
+        started = false;
+        XposedInit.diag("HOTRELOAD retire video hook");
+    }
+
     /** 唯一周期调度入口：先登记「已排下一次」，异常兜底据此避免重复排队。 */
     private static void scheduleCycle(long delayMs) {
+        if (retired) {
+            return;
+        }
         cycleScheduled = true;
         handler.postDelayed(cycleRunnable, delayMs);
     }
@@ -2119,6 +2249,9 @@ public final class DouyinHook {
                 // v2.7.3 核心修复：任何异常都不得让周期循环停摆。
                 // tick() 正常路径已经在末尾排好下一次（cycleScheduled=true），此处不重复排；
                 // 只有异常中断导致未排时才兜底，保证隐藏功能不会「一次性死掉」。
+                if (retired) {
+                    return;
+                }
                 if (!cycleScheduled && handler != null) {
                     scheduleCycle(3000);
                 }
@@ -2224,6 +2357,12 @@ public final class DouyinHook {
     }
 
     private static void tick() {
+        // v3.2.30：退役后即使已出队的旧 cycleRunnable 还在跑，也立即退出。
+        // 旧版只靠末尾 scheduleCycle 的 retired 检查，这一轮仍会走完 Config.reload /
+        // hookDiag / 各列表施加，热重载瞬间和新一代抢同一批控件。
+        if (retired) {
+            return;
+        }
         // 宿主 Context 供 ConfigProvider 跨进程读配置使用
         if (currentDecor != null) {
             Config.attach(currentDecor.getContext());
@@ -2372,17 +2511,25 @@ public final class DouyinHook {
             // v2.7：红果底部是「完整观看/选集」功能入口，hideEnabled 里强制常驻不隐藏，
             // enableDramaBottom 也没有可点开的 UI（恒 false）。旧版却把它算进 anyEnabled，
             // 于是 qualifies 了一个根本不会隐藏的区域，白白跑完整周期。这里移除。
-            anyEnabled = (Config.enableDramaLike && !rightList.isEmpty())
-                    || (Config.enableDramaTop && topBar != null)
-                    || (Config.enableDramaRt && rightTop != null)
-                    || (Config.enableDramaLt && leftTop != null)
-                    || (Config.enableDramaSwipe && !swipeHintList.isEmpty());
+            //
+            // v3.2.30：与快手 / B站 对齐，anyEnabled 只看「用户开了哪些区域」，
+            // 不再把「这一轮恰好收到几个容器」算进来。滚动 / 弹层 / Compose 重绘
+            // 必然有落空的一两轮；旧判据会在那一轮把整页 showAll，下一秒又藏回去，
+            // 真机表现就是「藏了又露、反复抽搐」。识别为空时各区域循环本来就是空操作，
+            // 不需要靠 anyEnabled=false 去恢复。
+            anyEnabled = Config.enableDramaLike
+                    || Config.enableDramaTop
+                    || Config.enableDramaRt
+                    || Config.enableDramaLt
+                    || Config.enableDramaSwipe;
         } else {
-            anyEnabled = (Config.enableDouyinLike && !rightList.isEmpty())
-                    || (Config.enableDouyinTop && topBar != null)
-                    || (Config.enableDouyinBottom && !bottomList.isEmpty())
-                    || (Config.enableDouyinRt && rightTop != null)
-                    || (Config.enableDouyinLt && leftTop != null);
+            // v3.2.30：同上。抖音的五个区域开关任一开启就维持隐藏窗口，
+            // 不再依赖 rightList / topBar / bottomList 当前是否非空。
+            anyEnabled = Config.enableDouyinLike
+                    || Config.enableDouyinTop
+                    || Config.enableDouyinBottom
+                    || Config.enableDouyinRt
+                    || Config.enableDouyinLt;
             // v2.9.2：删掉 `Config.enableLive && liveDetected && 三区非空` 这一项。
             // 它让直播页在没有普通区域可藏时也进入隐藏窗口，每秒空转一轮，
             // 还顺带占掉普通页的相位；直播间现在整体让位（见 LIVE_ROOM_HIDE），
@@ -2434,25 +2581,43 @@ public final class DouyinHook {
         // 所以这里改回 v2.9.0 的周期性方案：hideSec 藏、showSec 显，两者都用配置值。
         long hideMs = Math.max(1, Config.hideSec) * 1000L;
         long showMs = Math.max(1, Config.showSec) * 1000L;
-        if (!hidden) {
-            // phaseAt==0 表示刚进页面，先立刻藏一轮，别让用户等一个 showSec
-            if (phaseAt == 0L || now - phaseAt >= showMs) {
-                hideEnabled();
-                hidden = true;
-                phaseAt = now;
-            }
-        } else if (now - phaseAt >= hideMs) {
+        // v3.2.34：与 SystemUI 的 Controller 完全同源的「单调时钟对周期取模」相位。
+        //
+        // 旧版用本地 phaseAt 记「上一次切换时刻」，再等 hideMs/showMs。真机日志实锤
+        // （B站 cyc=30/12 却出现 72s/26s 的隐藏段）：phaseAt 只在 tick 里推进，而 tick
+        // 会被页面切换 / 布局事件打断、稀疏运行，导致「该切的时候没切」，隐藏段被拉长、
+        // 显示段被压缩，用户看到的就是「藏得短、显得长」、四个 App 节奏各不相同。
+        //
+        // 取模相位不依赖任何本地状态：任何一次 tick 都直接由共享时钟算出此刻该藏还是该显，
+        // 隐藏段恒等于 hideSec、显示段恒等于 showSec，且与 SystemUI 状态栏逐秒对齐。
+        long pos = now % (hideMs + showMs);
+        boolean shouldHide = pos < hideMs;
+        if (shouldHide && !hidden) {
+            hideEnabled();
+            hidden = true;
+            phaseAt = now;   // 仅观测：记录进入隐藏相位时刻，不参与判定
+        } else if (!shouldHide && hidden) {
             showAll();
             hidden = false;
-            phaseAt = now;
+            phaseAt = now;   // 仅观测：记录恢复显示时刻，不参与判定
         }
 
-        // 每 1 秒重扫一次：相位切换靠时间戳判定，tick 间隔必须小于最短相位，
-        // 否则 showSec 调小时会出现「该切了却迟迟不切」的迟滞。
+        // 每 1 秒重扫一次：相位由取模直接判定，tick 只负责把结论施加到视图，
+        // 间隔小于最短相位即可保证切换迟滞 ≤1s。
         scheduleCycle(1000);
     }
 
     private static void hideEnabled() {
+        // v3.2.30：总开关 / 灭屏必须在最前面拦。旧版只在 tick() 里判，onResume 与
+        // onGlobalLayout 复用 hidden=true 直接调本方法时绕过了总闸 —— 用户关掉
+        // 「防烧屏保护」后切一次页面，固定控件仍会被藏一下，看起来就是开关不生效。
+        if (!Config.enableStatus || !isScreenOn()) {
+            if (hidden) {
+                showAll();
+                hidden = false;
+            }
+            return;
+        }
         // v2.8.4：先推进偏移相位，再按各区域开关应用。
         updateShiftPhase();
         // 悬浮球"强制显示"模式：不隐藏任何控件（用于查看各区域控件是否被正确隐藏）
@@ -2462,8 +2627,33 @@ public final class DouyinHook {
         }
         // v3.0.26：个人主页 / 作品列表页整页放行，否则作品封面会被当固定控件透明化 → 白屏。
         // 只在抖音 / 红果生效，快手 / B站 的 isVideoApp 分支不参与。
+        // v3.2.9：放行的同时补遮「个人页顶部固定 chrome」——
+        // 红果「我的」页的「预约 / 游戏」两个入口、头像昵称简介、统计区都固定占着像素，
+        // 整页放行等于这块永远不防烧屏（用户截图：只有这两个方块亮着）。
+        // 只遮 y 中心 < 21.5% 的文本/图标叶子和它们的容器，作品网格在下面，白屏问题不受影响。
         if (profilePage && !isVideoApp) {
-            showAll();
+            // v3.2.9：只在「本相位内第一次进个人页」做一次，避免每秒 showAll→hide 的日志与重绘
+            if (!profileChromeHidden) {
+                showAll();
+                hideProfileChrome(lastRoot);
+                profileChromeHidden = true;
+            }
+            return;
+        }
+        // v3.2.16：作品列表 / 搜索结果这类「网格页」同样整页放行 —— 只保留顶部 chrome 的遮罩。
+        // 主页作品网格的最右一列会被「贴右缘竖条」规则当成右侧互动列整列透明，
+        // 真机表现就是「主页右侧空掉一大块、只剩几个按钮浮着」。网格页不是播放页，
+        // 藏封面没有防烧屏收益，纯误杀；对快手主页那类列表页同样生效。
+        if (gridPage) {
+            if (!isVideoApp) {
+                if (!profileChromeHidden) {
+                    showAll();
+                    hideProfileChrome(lastRoot);
+                    profileChromeHidden = true;
+                }
+            } else {
+                showAll();
+            }
             return;
         }
         // v2.9.2：直播间通道断开时，直播页只做恢复，绝不隐藏任何普通区域。
@@ -2872,6 +3062,11 @@ public final class DouyinHook {
         for (View v : centerPlusList) {
             showDeep(v);
         }
+        // v3.2.9：个人页顶部 chrome 的恢复（退出个人页/关开关/相位切显示都要点亮）
+        for (View v : profileChromeList) {
+            showDeep(v);
+        }
+        profileChromeHidden = false;
         for (View v : liveTopList) {
             showDeep(v);
         }
@@ -3793,9 +3988,163 @@ public final class DouyinHook {
             return !containsVideoSurface(root, 0);
         }
         if (!hasAnyText(root, 0, "作品") || !hasAnyText(root, 0, "粉丝", "获赞", "私密")) {
-            return false;
+            // v3.2.9：红果「我的」页没有「粉丝 / 获赞」，特征是「作品 + 历史 / 收藏 / 点赞」Tab。
+            // 少这一条，红果个人页 profilePage 恒 false，顶部「预约 / 游戏」入口永远不遮。
+            return hasAnyText(root, 0, "作品") && hasAnyText(root, 0, "收藏", "点赞")
+                    && !containsVideoSurface(root, 0);
         }
         return !containsVideoSurface(root, 0);
+    }
+
+    /** v3.2.9：个人页顶部固定 chrome 的保底台账（showAll 按它点亮）。 */
+    private static final List<View> profileChromeList = new ArrayList<>();
+    /** v3.2.9：本相位内个人页 chrome 是否已遮，避免每秒重复 showAll→hide。 */
+    private static boolean profileChromeHidden = false;
+
+    /**
+     * v3.2.9：个人页顶部固定 chrome —— 只遮「一行/一小块」的文本与图标。
+     *
+     * <p>为什么按 y 中心而不是整条带：作品网格从 22% 以下开始，整条带会把第一排作品卡
+     * 盖掉，又回到 v3.0.26 的白屏。这里只收 y 中心 &lt; 21.5%、高度 &lt; 10% 屏高、
+     * 宽度 &lt; 85% 屏宽的 TextView / ImageView / ImageButton 叶子，
+     * 容器由 {@link #transparentDeep} 整棵 INVISIBLE，避免半透明叠加后仍有残影。</p>
+     */
+    private static void hideProfileChrome(View root) {
+        profileChromeList.clear();
+        if (root == null || !root.isAttachedToWindow() || forceShow) {
+            return;
+        }
+        int h = screenH(root);
+        if (h <= 0) {
+            return;
+        }
+        collectProfileChrome(root, 0, (int) (h * 0.215f), screenW(root));
+        for (int i = 0; i < profileChromeList.size(); i++) {
+            transparentDeep(profileChromeList.get(i), "profile-chrome");
+        }
+    }
+
+    private static void collectProfileChrome(View v, int depth, int yLimit, int wLimit) {
+        if (v == null || depth > MAX_DEPTH || v.getVisibility() == View.GONE) {
+            return;
+        }
+        if (isOwnOverlay(v)) {
+            return;
+        }
+        try {
+            int[] l = loc(v);
+            if (l != null && v.getWidth() > 0 && v.getHeight() > 0) {
+                int cy = l[1] + v.getHeight() / 2;
+                boolean small = v.getHeight() < screenH(v) * 0.10f
+                        && v.getWidth() < wLimit * 0.85f;
+                boolean leafLike = v instanceof android.widget.TextView
+                        || v instanceof ImageView
+                        || v instanceof android.widget.ImageButton;
+                if (cy < yLimit && small && leafLike) {
+                    profileChromeList.add(v);
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) {
+                collectProfileChrome(g.getChildAt(i), depth + 1, yLimit, wLimit);
+            }
+        }
+    }
+
+    /**
+     * v3.2.16：作品列表 / 搜索结果页的结构判定（「等尺寸封面 + 多列」网格）。
+     *
+     * <p>真机截图里主页右侧空出整列、只剩零星按钮：主页的作品网格每一格都是
+     * 「宽约 1/3 屏、高约 1/5 屏」的同尺寸卡片，最右那一列落进了「贴右缘竖条」的
+     * 几何规则，被当成右侧互动列整列透明掉了。这类页面不是全屏播放页，藏掉封面
+     * 没有任何防烧屏收益，只会变成误杀。</p>
+     *
+     * <p>判据刻意收得很紧，宁可判不出也不误判：</p>
+     * <ul>
+     *   <li>单元宽 20%～38% 屏宽、高 14%～48% 屏高（播放器、推荐双列大卡都不在内）；</li>
+     *   <li>至少 6 格，且尺寸彼此一致（±10%）；</li>
+     *   <li>这些格子加起来占屏 ≥ 30%，且分布在 ≥2 列 —— 选集小方块、礼物小格子凑不出来。</li>
+     * </ul>
+     */
+    private static boolean looksLikeGridPage(View root) {
+        if (root == null || !root.isAttachedToWindow()) {
+            return false;
+        }
+        int w = screenW(root), h = screenH(root);
+        if (w <= 0 || h <= 0) {
+            return false;
+        }
+        // 0=格子数 1=列位图 2=已扫节点 3=基准宽 4=基准高 5=累计面积
+        int[] st = new int[]{0, 0, 0, 0, 0, 0};
+        scanGridCells(root, 0, w, h, st);
+        if (st[0] < 6 || Integer.bitCount(st[1]) < 2) {
+            return false;
+        }
+        return st[5] >= (long) w * h * 3 / 10;
+    }
+
+    private static void scanGridCells(View v, int depth, int w, int h, int[] st) {
+        if (v == null || depth > MAX_DEPTH || st[2] >= 6000) {
+            return;
+        }
+        st[2]++;
+        boolean matched = false;
+        try {
+            if (v.getVisibility() == View.VISIBLE) {
+                int vw = v.getWidth(), vh = v.getHeight();
+                if (vw >= w * 0.20f && vw <= w * 0.38f
+                        && vh >= h * 0.14f && vh <= h * 0.48f
+                        && hasImageChild(v)) {
+                    if (st[0] == 0) {
+                        st[3] = vw;
+                        st[4] = vh;
+                    }
+                    // 尺寸必须彼此一致，避免把「大图 + 一排小图」混算成网格
+                    if (Math.abs(vw - st[3]) <= st[3] / 10 && Math.abs(vh - st[4]) <= st[4] / 10) {
+                        int[] l = loc(v);
+                        if (l != null) {
+                            st[0]++;
+                            st[5] += vw * vh;
+                            int col = l[0] * 3 / Math.max(1, w);
+                            st[1] |= (1 << Math.min(2, Math.max(0, col)));
+                            matched = true;
+                        }
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        // 命中即整格计入，不再下钻，避免同一个封面被它的 ImageView 子节点重复计数
+        if (matched || !(v instanceof ViewGroup)) {
+            return;
+        }
+        ViewGroup g = (ViewGroup) v;
+        for (int i = 0; i < g.getChildCount(); i++) {
+            scanGridCells(g.getChildAt(i), depth + 1, w, h, st);
+        }
+    }
+
+    /** 这一格「像一张图」：自己是 ImageView，或直接子节点里有一张可见 ImageView。 */
+    private static boolean hasImageChild(View v) {
+        if (v instanceof ImageView) {
+            return true;
+        }
+        if (!(v instanceof ViewGroup)) {
+            return v.getClass().getName().contains("ImageView");
+        }
+        ViewGroup g = (ViewGroup) v;
+        for (int i = 0; i < g.getChildCount(); i++) {
+            View c = g.getChildAt(i);
+            if (c != null && c.getVisibility() == View.VISIBLE
+                    && (c instanceof ImageView || c.getClass().getName().contains("ImageView")))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     // ---------- v2.6.9：底部中央独立圆形「+」发布按钮 ----------

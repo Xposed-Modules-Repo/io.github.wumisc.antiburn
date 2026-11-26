@@ -8,9 +8,9 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.TextView;
 
-import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedHelpers;
-import de.robv.android.xposed.callbacks.XC_LoadPackage;
+import io.github.wumisc.antiburn.compat.XC_MethodHook;
+import io.github.wumisc.antiburn.compat.XposedHelpers;
+import io.github.wumisc.antiburn.compat.callbacks.XC_LoadPackage;
 
 /**
  * 快手 / 哔哩哔哩适配计划 —— Step 1：View 树诊断探针（只读，零隐藏）。

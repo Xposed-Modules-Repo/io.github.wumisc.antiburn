@@ -1,5 +1,7 @@
 package io.github.wumisc.antiburn;
 
+import android.os.Handler;
+import android.os.Looper;
 import android.view.View;
 import android.view.ViewGroup;
 
@@ -91,8 +93,7 @@ public final class PixelShift {
         }
         if (navRoot != nav) {
             if (navRoot != null) {
-                navRoot.setTranslationX(0f);
-                navRoot.setTranslationY(0f);
+                setTranslationSafe(navRoot, 0f, 0f);
             }
             navRoot = nav;
         }
@@ -257,11 +258,32 @@ public final class PixelShift {
     }
 
     private static void apply(View v, int x, int y) {
-        try {
-            v.setTranslationX(x);
-            v.setTranslationY(y);
-        } catch (Throwable t) {
-            Diag.d("SHIFT apply failed: " + t);
+        setTranslationSafe(v, x, y);
+    }
+
+    /**
+     * v3.2.32：SystemUI 的 RegionInterceptingFrameLayout 可能由非主线程创建；
+     * 直接 setTranslationX/Y 会触发 CalledFromWrongThreadException（被系统吞掉，
+     * 但偏移不生效）。有 AttachInfo 时投递到该 View 自己的 Handler。
+     */
+    private static void setTranslationSafe(View v, float x, float y) {
+        Handler h = v.getHandler();
+        if (h != null && h.getLooper() != Looper.myLooper()) {
+            h.post(() -> {
+                try {
+                    v.setTranslationX(x);
+                    v.setTranslationY(y);
+                } catch (Throwable t) {
+                    Diag.d("SHIFT apply failed: " + t);
+                }
+            });
+        } else {
+            try {
+                v.setTranslationX(x);
+                v.setTranslationY(y);
+            } catch (Throwable t) {
+                Diag.d("SHIFT apply failed: " + t);
+            }
         }
     }
 
@@ -275,8 +297,7 @@ public final class PixelShift {
     private static void clearTouched() {
         for (View v : touched) {
             try {
-                v.setTranslationX(0f);
-                v.setTranslationY(0f);
+                setTranslationSafe(v, 0f, 0f);
             } catch (Throwable ignored) {
             }
         }
@@ -288,15 +309,13 @@ public final class PixelShift {
         clearTouched();
         if (statusRoot != null) {
             try {
-                statusRoot.setTranslationX(0f);
-                statusRoot.setTranslationY(0f);
+                setTranslationSafe(statusRoot, 0f, 0f);
             } catch (Throwable ignored) {
             }
         }
         if (navRoot != null) {
             try {
-                navRoot.setTranslationX(0f);
-                navRoot.setTranslationY(0f);
+                setTranslationSafe(navRoot, 0f, 0f);
             } catch (Throwable ignored) {
             }
         }

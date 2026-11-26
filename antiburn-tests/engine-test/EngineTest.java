@@ -190,9 +190,10 @@ public class EngineTest {
         r = OverlayGeometry.statusBar(1080, 2400, 80);
         check(r != null && r.top == 0 && r.bottom == 80 && r.width() == 1080, "状态栏 80px 全宽贴顶", String.valueOf(r));
 
-        // 异常高度：超过屏幕 1/4 说明取到的不是状态栏，必须夹住，否则会把主要内容涂黑
+        // 异常高度：超过屏幕 1/4 说明取到的不是状态栏。旧版夹到 1/4 继续涂黑，
+        // 等于把状态栏以下半屏也盖掉；v3.2.26 起整块拒绝，交给无障碍/悬浮窗兜底。
         r = OverlayGeometry.statusBar(1080, 2400, 900);
-        check(r != null && r.height() == 600, "状态栏异常高度被夹到屏幕 1/4", String.valueOf(r));
+        check(r == null, "状态栏异常高度直接拒绝（不夹到 1/4 继续涂黑）", String.valueOf(r));
 
         check(OverlayGeometry.statusBar(1080, 2400, 0) == null, "高度为 0 → 不遮", "null");
 
@@ -206,7 +207,7 @@ public class EngineTest {
         check(r != null && r.left == 0 && r.right == 48, "横屏左侧（少数 ROM）", String.valueOf(r));
 
         r = OverlayGeometry.navigationBar(1080, 2400, 5000, OverlayGeometry.NAV_BOTTOM);
-        check(r != null && r.height() == 800, "导航栏异常厚度被夹到屏幕 1/3", String.valueOf(r));
+        check(r == null, "导航栏异常厚度直接拒绝（不夹到 1/3 继续涂黑）", String.valueOf(r));
 
         // 系统上报：正常状态栏
         r = OverlayGeometry.fromSystemBounds(1080, 2400, 0, 0, 1080, 120);

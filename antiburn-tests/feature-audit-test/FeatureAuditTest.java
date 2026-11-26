@@ -472,10 +472,12 @@ public class FeatureAuditTest {
                 "T-09b 提示只在总开关关闭时出现", "");
         check(main.contains("it.copy(enableStatus = true)"),
                 "T-09c 提示上的按钮直接开总闸，不用滚下去找开关", "");
-        int offCall = main.indexOf("MasterOffNotice(dark) {");
-        int staleCall = main.indexOf("hook = hook,");
+        // v3.2.11：橙色旧版提醒迁到首页一级后，顺序判据改为「总开关在前、旧版提醒在后」：
+        // 总闸关着是第一顺位原因，旧版是第二顺位，用户不会先看到旧版而漏掉总闸。
+        int offCall = main.indexOf("Text(\"防烧屏总开关\"");
+        int staleCall = main.indexOf("HomeStaleCard(dark = dark)");
         check(offCall > 0 && staleCall > 0 && offCall < staleCall,
-                "T-09d 提示排在旧版检测之前（总闸是第一顺位原因）",
+                "T-09d 总开关排在旧版提醒之前（总闸是第一顺位原因）",
                 "off=" + offCall + " stale=" + staleCall);
         check(main.contains("不打开不会有任何效果") && main.contains("打开才会生效"),
                 "T-09e 两条引擎的切换提示都会点名总开关", "");
@@ -713,8 +715,10 @@ public class FeatureAuditTest {
 
         check(versionAtLeast(gradle, 38, "2.7.5"),
                 "T-14x 版本号不低于 vc38 / 2.7.5（单调升，升版无需改测试）", "");
-        check(manifest.contains("xposedscope") && manifest.contains("快手、哔哩哔哩各区域"),
-                "T-14y 模块描述如实写明已支持快手/B站", "");
+        String stringsXml = read(dir.resolve("../../../../../res/values/strings.xml"));
+        check(manifest.contains("android:description=\"@string/module_description\"")
+                        && stringsXml.contains("快手、哔哩哔哩各区域"),
+                "T-14y 模块描述如实写明已支持快手/B站（libxposed 走 android:description）", "");
 
         // ---------- T-15 v2.6.9 真机反馈三项修复 ----------
         System.out.println("== T-15 v2.6.9 真机反馈修复 ==");
@@ -959,8 +963,8 @@ public class FeatureAuditTest {
                 "T-20n 恢复时只点亮自己改过的视图（不覆盖 ROM 的 alpha）", "");
         check(main.contains("Thanks(\"酷安\"") && main.contains("Thanks(\"心之所及\""),
                 "T-20o 感谢名单新增酷安 / 心之所及", "");
-        check(manifest.contains("魅族 Flyme"),
-                "T-20p 模块描述如实写明已适配 Flyme", "");
+        check(stringsXml.contains("魅族 Flyme"),
+                "T-20p 模块描述如实写明已适配 Flyme（描述已迁到 strings.xml）", "");
 
         // ---------- T-21 v2.7.4 全面体检修掉的五个真 bug ----------
         // 这一组守的是「用户真实会遇到、但静态看代码很容易漏」的五处：
@@ -1803,8 +1807,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 105
-                    && "3.2.6".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 139
+                    && "3.3.0".equals(nm.group(1));
             check(ok, "T-42b 版本锚点恰为 99 / 3.2（非区间，锁死发布锚点）", "");
         }
         check(hook297raw.contains("SAFE_RESTORE") && hook297raw.contains("DRAMA_PAYWALL_HIDE"),
@@ -1870,17 +1874,17 @@ public class FeatureAuditTest {
         String diagBody = slice(lsp, "static String diagnose(Context ctx)", "private static String lspLogDigest");
         int doneAt = diagBody.indexOf("结论：作用域已勾齐");
         String doneTip = doneAt >= 0 ? diagBody.substring(doneAt, Math.min(diagBody.length(), doneAt + 500)) : "";
-        check(injectTip.contains("重启手机") && injectTip.contains("dex")
-                        && injectTip.contains("不是只重启系统界面")
-                        && doneTip.contains("重启手机") && doneTip.contains("dex")
-                        && doneTip.contains("不是只重启系统界面"),
-                "T-43b P2 注入卡与作用域自检均含覆盖安装后需重启手机的指引（不是只重启系统界面）", "");
+        // v3.2.12：更新后首次启动会自动停止四个视频 App，指引改成「重新打开即重新注入」，
+        // 不再要求用户为模块重启手机。
+        check(injectTip.contains("自动停止") && injectTip.contains("不用重启手机")
+                        && doneTip.contains("自动停止") && doneTip.contains("不用重启手机"),
+                "T-43b P2 注入卡与作用域自检均写明「自动停掉四个 App、重开即重注入」", "");
         {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 105
-                    && "3.2.6".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 139
+                    && "3.3.0".equals(nm.group(1));
             // 与 T-42b 断言同源，是发布前的双重防回退锁，不冒充新增不变量（评审建议改标签）。
             check(ok, "T-43c P3 版本锚点与 T-42b 双重锁定（99/3.2）（发布前防回退，非新增不变量）", "");
         }
@@ -1918,8 +1922,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 105
-                    && "3.2.6".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 139
+                    && "3.3.0".equals(nm.group(1));
             check(ok, "T-44c 版本号恰为 99 / 3.2（发布锚点）", "");
         }
 
@@ -1961,8 +1965,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 105
-                    && "3.2.6".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 139
+                    && "3.3.0".equals(nm.group(1));
             check(ok, "T-45c 版本号恰为 99 / 3.2（发布锚点）", "");
         }
 
@@ -2038,8 +2042,8 @@ public class FeatureAuditTest {
             // ⑤ 版本锚点 + 辅助方法只读性
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
-            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 105
-                    && "3.2.6".equals(nm.group(1));
+            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 139
+                    && "3.3.0".equals(nm.group(1));
             String helper = stripComments(slice(dy304raw, "private static boolean hasChildByClass(View v, String target)",
                     "private static int scoreRight(ViewGroup g)"));
             boolean readonly = helper.contains("MAX_DEPTH") && helper.contains("catch (Throwable")
@@ -2083,8 +2087,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 105
-                    && "3.2.6".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 139
+                    && "3.3.0".equals(nm.group(1));
             check(ok, "T-47c 版本号恰为 99 / 3.2（v3.0.13 发布锚点）", "");
         }
 
@@ -2351,7 +2355,7 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ver = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 105 && "3.2.6".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 139 && "3.3.0".equals(nm.group(1));
             check(ver, "T-48-VER 版本锚点 99/3.2（T-42b~T-47c 六处已同步）", "");
         }
 
@@ -2482,10 +2486,10 @@ public class FeatureAuditTest {
             check(ok, "T-49-D3 v3.0.4 作者栏分支（Avatar+Follow+单维50%）逐字原样", "");
         }
         {
-            // D4 livePaused 只读：赋值次数与基线 3 处一致，THH 新增区零写
+            // D4 livePaused 只读：赋值次数与基线 4 处一致（v3.2.30 退役归零新增 1 处授权改动），THH 新增区零写
             String thh = dy307.substring(dy307.indexOf("private static boolean isCountLike(CharSequence cs)"));
-            boolean ok = count(dy307, "livePaused\\s*=") == 3 && count(thh, "livePaused\\s*=") == 0;
-            check(ok, "T-49-D4 livePaused 赋值 3 处与基线一致 + THH 区零写", "");
+            boolean ok = count(dy307, "livePaused\\s*=") == 4 && count(thh, "livePaused\\s*=") == 0;
+            check(ok, "T-49-D4 livePaused 赋值 4 处（退役归零新增 1）与基线一致 + THH 区零写", "");
         }
         {
             // D5 v2.9.4 hideLiveCandidate 与基线逐字一致（design §7.3 附加）
@@ -2548,10 +2552,10 @@ public class FeatureAuditTest {
                     "T-50-W1 feed 恰 1 处 + 返回值被 return + 无 && livePaused 直读门控", "");
         }
         {
-            // W2 livePaused 零写：全文 3 处赋值与基线一致，isCountLike 之后的 THH 新增区零写。
+            // W2 livePaused 零写：全文 4 处赋值与基线一致（v3.2.30 退役归零新增 1 处授权改动），isCountLike 之后的 THH 新增区零写。
             String thhSlice = dy307.substring(dy307.indexOf("private static boolean isCountLike(CharSequence cs)"));
-            boolean ok = count(dy307, "livePaused\\s*=") == 3 && count(thhSlice, "livePaused\\s*=") == 0;
-            check(ok, "T-50-W2 livePaused 赋值 3 处 + 新增 THH 区零写（双锁）", "");
+            boolean ok = count(dy307, "livePaused\\s*=") == 4 && count(thhSlice, "livePaused\\s*=") == 0;
+            check(ok, "T-50-W2 livePaused 赋值 4 处 + 新增 THH 区零写（双锁）", "");
         }
         {
             // W3 D5 PII 守卫（转写设计 §5.3 五条）：
@@ -2715,15 +2719,18 @@ public class FeatureAuditTest {
             // v3.2.6 重锁：段[2] 暂停分支去掉三班倒判据（25→23 行）；段[5] 移除
             //   applyStatusRound/probeLeaves/applyShowNavOnly（545→529 行）；段[6] applyShow
             //   去掉相位复位（46→41 行）。均为「删除三班倒」授权改动。
-            int[] a2Lines = {9, 12, 23, 23, 11, 529, 41};
+            // v3.2.7 重锁：段[0] 含超级岛岛判定（15 行）、段[1] 含「岛期间只遮状态栏」分支（24 行）、
+            //   段[6] applyShow 复位 islandHid（42 行），属「超级岛联动」授权改动。
+            // v3.2.8 重锁：段[5] 含系统级歌词豁免（isLyricView 四处跳过 + dimAlong 保留 + f4 否决 + ly= 诊断），529→555 行。
+            int[] a2Lines = {15, 24, 23, 23, 11, 618, 42};
             String[] a2Sha = {
-                    "f317657c4ab99a9805e8cc9165ceb5c51afbc181bce1043c9fa3c773e8bce124",
-                    "d9bc8a9f13ec04aa47d3d9b311e84c69867fdfb503bd1b94ca1f80fd4dc3e482",
+                    "b59687277f0acea61b5b87b8ac97985ce18ea2bbd3ca424e7c97b9aac442a30a",
+                    "6bcbfde0d4bcfcded6c634baf396f96721d75da8b700523d02b5f9f88d9ce099",
                     "3effc07f0ebca68663dbd95766e0a3d11baf1d57b18efd064becaf1311f1fd7f",
                     "a8a3c21d8ec069e7d778a2e3e18682c9b4a68f25945bdb80452ebf823f138d35",
                     "31f7e195cb32c1bf85b3631c5e2ac43dc8d795b5cc2e48e1137371646ba36020",
-                    "5e3ade580facaa3693b7d9fb594dc56db8dc3477cc0ed0a2e98b7e0a2be74a7e",
-                    "29a926668a181c748745072486318738514980532d0c6d971a90b77e5e8363a9"
+                    "24802c718869bf222fd3dd86c3ef78d09dc05414bf5cd8503b7f2cae34c23754",
+                    "b11a1da81eb94b2c4f0e55aca73c5ebcedc53db0bf91841f6d7d42f64c36456a"
             };
             StringBuilder drift = new StringBuilder();
             for (int i = 0; i < a2From.length; i++) {
@@ -2770,6 +2777,8 @@ public class FeatureAuditTest {
         //   v3.0.11：DouyinHook 本轮有 P0a/P0b 授权改动，整文件哈希必然变化。按 design-backend §9.1/§12，
         //   禁用整文件哈希，改为「剥离本轮 6 类授权改动后重算 == 基线」——既守住零越界，又不误伤授权改动。
         //   v3.0.14：新增悬浮球「贴底收起」授权改动（字段/ensureBall/onTouch/removeBall），基线已重锁。
+        //   v3.2.9：新增个人页顶部 chrome（hideProfileChrome/collectProfileChrome）与红果个人页判据，
+        //       归一化后重算基线 —— 属「红果我的页预约/游戏入口不遮」授权改动。
         {
             String dyNorm = dy310;
             // 1) 词表：新注释+新数组 -> 旧数组
@@ -2816,13 +2825,13 @@ public class FeatureAuditTest {
             int fixed45 = count(act310, "(?m)^[ \\t]*val[ \\t]+navMicroSec[ \\t]*=[ \\t]*45[ \\t]*$");
             int boundSaveable = count(act310,
                     "navMicroSec[^\\n]*rememberSaveable|rememberSaveable[^\\n]*navMicroSec");
-                                    check("8822c3ea9d941b677b97bc3914196d2d3fa98ba802618a3b31b8e627426d9e16".equals(dyNormHash)
+                                    check("48368fc251d5e9265f0b7d656ce5c182b628a697be785685e8b179b1fd974b25".equals(dyNormHash)
                             && fetchLines == 11
                             && "e9395fb642fcb791b8af95ce676fb109cd7c16196ac7ff8d9242def575ba39a7".equals(fetchHash)
                             && t60 == 1 && t2 == 1 && t20 == 1 && t90 == 1
                             && fixed45 == 1 && boundSaveable == 0,
-                    "T-52-A4 DouyinHook 归一化重算/fetchInterval/navMicroSec 三处零改（v3.0.28 扫描节流/注入时效授权新增，基线重锁）",
-                    "dyNorm=" + dyNormHash.substring(0, 8) + " fetchLines=" + fetchLines
+                    "T-52-A4 DouyinHook 归一化重算/fetchInterval/navMicroSec 三处零改（v3.2.16 网格页放行授权新增，基线重锁）",
+                    "dyNorm=" + dyNormHash + " fetchLines=" + fetchLines
                             + " fetch=" + fetchHash.substring(0, 8)
                             + " 60000/2000/20000/90000=" + t60 + "/" + t2 + "/" + t20 + "/" + t90
                             + " fixed45=" + fixed45 + " bound=" + boundSaveable);
@@ -3005,18 +3014,24 @@ public class FeatureAuditTest {
                     // v3.0.30：状态栏三班倒相位（applyStatusRound/applyShowNavOnly），基线重锁
                     // v3.0.31：分区能力探测 probeLeaves + 不可分区降级，基线重锁
                     // v3.0.35：AOSP/Pixel 薄命中补遮，基线重锁
-                    {"Controller.java", "69958205805b19231755de2581045945d893f8a8812a303087ef68619f36506a"},
-                    {"Config.java", "3f603999570682432335dbede46930bdf36e821d42c073766c83a7ac25229831"},
+                    // v3.2.9：f4 关键节点否决（aw getWidth / isKeyStaticIcon / f4key）+ 歌词父链反查，基线重锁
+                    {"Controller.java", "c5d17fad900a9cbe909cd78b200a5f54cc33b5358048436d743a9da31d8b9ae8"},
+                    {"Config.java", "b1b4de75a7af897ff14680f11592fce082ab4d13bfe519e79b55725e7d4d02c1"},
                     // v3.0.16 授权改动：enable_app_overlay 默认值 0→1（仅无障碍引擎生效）
-                    {"ConfStore.java", "abe7b6034db15577b1b89c49007ebd78db12347fedaa99af9e3465c986ee73cb"},
+                    // v3.2.13 授权改动：exportLogs 补本进程直读镜像去重兜底（su 私有目录读取被拦）
+                    // v3.2.14 授权改动：autoSyncLog 常驻静默补录 + 补录改先直写后 su，基线重锁
+                    // v3.2.16 授权改动：appendHookLine/appendDirectText + clearLogs 直删优先，基线重锁
+                    // v3.2.17 审计修正：appendDirectText 直写失败补 su 追加（10s 节流），基线重锁
+                    {"ConfStore.java", "6e1753f3f61a6ec056b043847fa7fc5666394aebdb82afb66f86622041611261"},
                     {"ThhLiveGate.java", "09903e9bb86f1f9f044c04a869df71a9c6e31ea8d8e4746aa7381c0e81226c5f"},
                     // v3.0.16 授权改动：应用内遮盖通道重开（仅 overlay 引擎）
-                    {"BurnInMaskService.java", "aef50ab9c6f83ccb168345226eff5c50fcc9558ee1daa64ec7d76e03d342e1e1"},
+                    // v3.2.16 授权改动：无障碍探针 NDUMP（免 root 采集红点/右侧列/底栏节点），基线重锁
+                    {"BurnInMaskService.java", "45c09609a5dad548b77ee5003d7c7fb692202d942c73e6b7d227cf9e703e9904"},
                     {"BootReceiver.java", "8383a771e4ce1e3fc9d9fa7da4b6e00f66740a901a3a56ca8041b3c10ba2aeea"},
                     {"VideoApps.java", "a2d2e5d5d3ccd65e6dc2960a2e80d7237ede53230161fdf790f6812327dddea4"},
-                    {"VideoAppProbe.java", "a3367842f05930d3698ac90f87325a910ce5d76eed2d06644d64f56155b49bb9"},
-                    {"LivePause.java", "a831315930feaf768dbf00dcdec317338a7ddce6707f3e134142a5b951aae984"},
-                    {"LspScope.java", "ae13eb8546982734559eb6c4c0f69a6f99a19c33ee8f9d2b361a00bb1c23dd3f"},
+                    {"VideoAppProbe.java", "339431f7762ed59befe066a22da5a0049ada5c8c88c3452a7c277687967de0b1"},
+                    {"LivePause.java", "437751be4d6b5e804b9151d1233046b4e2e55f155b3c8405371979e590cd74c9"},
+                    {"LspScope.java", "4a2d183a28d0ca9ae9e40a5ae85b97f05bcd91eed6366fc9a5bb3598bac4d60a"},
                     {"AppRegions.java", "97e9e423f41b48c945af69af4aada5814c90efdbc5afa3674c896c02da5915cd"}
             };
             int ok = 0;
@@ -3108,10 +3123,10 @@ public class FeatureAuditTest {
                     "T-54-G2b 非容器分支 + 三级链薄命中补遮，共 2 处调用", "");
             String headG2 = slice(hide, "View sv = statusView;",
                     "if (!(sv instanceof android.view.ViewGroup))");
-            check(headG2.contains("sv.setAlpha(1f)"),
-                    "T-54-G2c1 入口统一恢复残留 sv.alpha=1（降级前生效）", "");
+            check(headG2.contains("setAlphaSafe(sv, 1f)"),
+                    "T-54-G2c1 入口统一恢复残留 sv.alpha=1（降级前生效，线程安全投递）", "");
             check(hide.contains("if (sv.getAlpha() != 1f) {")
-                            && hide.contains("sv.setAlpha(1f);"),
+                            && hide.contains("setAlphaSafe(sv, 1f);"),
                     "T-54-G2c2 两处降级仍保留 alpha 恢复（统一入口，无整窗透明）", "");
             String fb = slice(p1ctrl, "private static void hideKnownStaticIconsOnly", "\n    }");
             check(fb.contains("containsHeadsUp(v, 0)") && !fb.contains("sv.setAlpha"),
@@ -3135,8 +3150,11 @@ public class FeatureAuditTest {
 
             // G6 · 无障碍零事件 + 静态几何（反通知事件断言 + 几何上限）
             String sb = slice(ogo, "public static Rect statusBar", "\n    }");
-            check(sb.contains("Math.min(statusBarHeight") && sb.contains("screenH / 4"),
-                    "T-54-G6a statusBar 几何上限 h=min(statusBarHeight,..) 未改（INV-4）", "");
+            // v3.2.26 语义变更：超标不再「夹到 1/4 继续涂黑」（那会把状态栏以下半屏也盖掉），
+            // 而是整块拒绝返回 null，交给无障碍/悬浮窗兜底。约束方向不变：仍以 screenH/4 为上限。
+            check(sb.contains("statusBarHeight > screenH / 4") && sb.contains("return null")
+                            && !sb.contains("Math.min(statusBarHeight"),
+                    "T-54-G6a statusBar 超屏高 1/4 直接拒绝（不再夹到 1/4 继续涂黑）", sb);
             // v3.2.2 授权变更：无障碍侧新增「通知事件 → 顶部区让开」。
             // 约束不放松：只能用于让开（YIELD_NOTIFY_MS），不得引入任何 heads-up grace /
             // topForHeadsUp 之类的改动路径；开关必须存在（c.yieldNotify）。
@@ -3159,22 +3177,25 @@ public class FeatureAuditTest {
             check(r1 != null && bottom1 == 72,
                     "T-54-G7a statusBar(1080,2400,72).bottom==statusBarHeight（横幅在其下方）", "bottom=" + bottom1);
             Object r2 = statusBarMethod.invoke(null, 1080, 2400, 1000);
-            int bottom2 = r2.getClass().getField("bottom").getInt(r2);
-            check(bottom2 <= 2400 / 4,
-                    "T-54-G7b 异常高度钳制 bottom<=screenH/4", "bottom=" + bottom2);
+            check(r2 == null,
+                    "T-54-G7b 异常高度（1000 > 屏高 1/4）返回 null，拒绝整块涂黑", "r2=" + r2);
             Object r3 = statusBarMethod.invoke(null, 1080, 2400, 0);
             check(r3 == null, "T-54-G7c statusBarHeight<=0 返回 null", "");
 
             // G8 · 越界哈希零改（G8a 冻结 8 文件）+ 授权/无障碍文件基线（实测值，待主理人复核锁定）
             String[][] p1Frozen = {
-                    {"Config.java",      "3f603999570682432335dbede46930bdf36e821d42c073766c83a7ac25229831"},
+                    {"Config.java",      "b1b4de75a7af897ff14680f11592fce082ab4d13bfe519e79b55725e7d4d02c1"},
                     // v3.0.16 授权改动：enable_app_overlay 默认 1（仅无障碍引擎生效）
-                    {"ConfStore.java",   "abe7b6034db15577b1b89c49007ebd78db12347fedaa99af9e3465c986ee73cb"},
+                    // v3.2.13 授权改动：exportLogs 补本进程直读镜像去重兜底（su 私有目录读取被拦）
+                    // v3.2.14 授权改动：autoSyncLog 常驻静默补录 + 补录改先直写后 su，基线重锁
+                    // v3.2.16 授权改动：appendHookLine/appendDirectText + clearLogs 直删优先，基线重锁
+                    // v3.2.17 审计修正：appendDirectText 直写失败补 su 追加（10s 节流），基线重锁
+                    {"ConfStore.java",   "6e1753f3f61a6ec056b043847fa7fc5666394aebdb82afb66f86622041611261"},
                     {"ThhLiveGate.java", "09903e9bb86f1f9f044c04a869df71a9c6e31ea8d8e4746aa7381c0e81226c5f"},
                     {"VideoApps.java",   "a2d2e5d5d3ccd65e6dc2960a2e80d7237ede53230161fdf790f6812327dddea4"},
-                    {"VideoAppProbe.java","a3367842f05930d3698ac90f87325a910ce5d76eed2d06644d64f56155b49bb9"},
-                    {"LivePause.java",   "a831315930feaf768dbf00dcdec317338a7ddce6707f3e134142a5b951aae984"},
-                    {"LspScope.java",    "ae13eb8546982734559eb6c4c0f69a6f99a19c33ee8f9d2b361a00bb1c23dd3f"},
+                    {"VideoAppProbe.java","339431f7762ed59befe066a22da5a0049ada5c8c88c3452a7c277687967de0b1"},
+                    {"LivePause.java",   "437751be4d6b5e804b9151d1233046b4e2e55f155b3c8405371979e590cd74c9"},
+                    {"LspScope.java",    "4a2d183a28d0ca9ae9e40a5ae85b97f05bcd91eed6366fc9a5bb3598bac4d60a"},
                     {"AppRegions.java",  "97e9e423f41b48c945af69af4aada5814c90efdbc5afa3674c896c02da5915cd"}
             };
             int okP1 = 0;
@@ -3193,15 +3214,15 @@ public class FeatureAuditTest {
             // G8c：无障碍侧三文件零改（哈希=开工前基线，实施者按 sha256sum 实测，待主理人复核）
             String cfgH = sha256(read(dir.resolve("../../../../../res/xml/accessibility_service_config.xml")));
             boolean a11yZero = // v3.2 授权：MASK 日志签名对 fg 去抖（前台插件进程抖动不再每次写盘）
-                    "aef50ab9c6f83ccb168345226eff5c50fcc9558ee1daa64ec7d76e03d342e1e1".equals(sha256(bmsRaw))
-                    && "c56258f24f1395ad4c2b6510b165a88785294109227cdf6d04a151938ba8e23c".equals(sha256(read(dir.resolve("OverlayGeometry.java"))))
+                    "45c09609a5dad548b77ee5003d7c7fb692202d942c73e6b7d227cf9e703e9904".equals(sha256(bmsRaw))
+                    && "c33f8b30633d0b54c20518104258a8841665e498f7150bc8de67688a8d86381c".equals(sha256(read(dir.resolve("OverlayGeometry.java"))))
                     && "9026c696e17c9f16dff35e1146a59117c81a680342a337ce8cf02dcb6a5488bb".equals(cfgH);
             check(a11yZero, "T-54-G8c 无障碍侧 3 文件哈希==v3.2.2 基线（BMS/config 已授权变更）", "");
             // G8b：授权文件修复后基线（v3.0.14 偏移推进修复后实测，已按 sha256sum 重采；v3.0.30 三班倒重锁）
             // 注意：必须读原始文件（含注释），与 sha256sum 采集口径一致，不能用 stripComments 后的串。
-            boolean authZero = "69958205805b19231755de2581045945d893f8a8812a303087ef68619f36506a"
+            boolean authZero = "c5d17fad900a9cbe909cd78b200a5f54cc33b5358048436d743a9da31d8b9ae8"
                             .equals(sha256(read(dir.resolve("Controller.java"))))
-                    && "fc9c5b0fb1f35fb2ecf084b398507f14dc0f5b15079cc82427c59ba580dc2e99"
+                    && "ae8602070523ef88536b09f1dd15f65b50ee62d6cec523271d994f75de4c7507"
                             .equals(sha256(read(dir.resolve("PixelShift.java"))));
             check(authZero, "T-54-G8b 授权文件哈希==修复后实测基线（待主理人复核确认）", "");
 
@@ -3275,8 +3296,8 @@ public class FeatureAuditTest {
             java.util.regex.Matcher nm313 = java.util.regex.Pattern
                     .compile("versionName\\s+\"([^\"]+)\"").matcher(gradle313);
             boolean ver313 = cm313.find() && nm313.find()
-                    && Integer.parseInt(cm313.group(1)) == 105
-                    && "3.2.6".equals(nm313.group(1));
+                    && Integer.parseInt(cm313.group(1)) == 139
+                    && "3.3.0".equals(nm313.group(1));
             check(ver313, "T-55-A5 版本锚点 99 / 3.2", "");
 
             // A6 · 变异实证：把 INFO 类目改坏，A1 守卫必须失效（证明断言非空转）
@@ -3475,8 +3496,17 @@ public class FeatureAuditTest {
             check(hook322.contains("\"BOTTOMCHROME add \""),
                     "T-62-A2 命中底部 chrome 时写诊断日志（下轮可直接验证）", "");
             String act322 = read(dir.resolve("MainActivity.kt"));
-            check(act322.contains("已开启 $generalOn/4 项"),
-                    "T-62-A3 通用页计数口径与四项开关一致（3↔4 错位已修）", "");
+            // v3.2.38：诊断日志开关上移；v3.2.39：从功能页移到首页 › 功能设置（HomeAllPage）。
+            check(act322.contains("已开启 $generalOn/3 项"),
+                    "T-62-A3 通用页计数口径与三项开关一致（诊断日志已移出功能页）", "");
+            check(act322.contains("state.enableStatusBar, state.enableNav, state.enableBall"),
+                    "T-62-A3b 通用计数仅含状态栏 / 导航栏 / 悬浮球，不再计入诊断日志", "");
+            String feat322 = slice(act322, "private fun FeaturesPage(", "private fun OptionRow(");
+            String all322 = slice(act322, "private fun HomeAllPage(", "// ---- v3.0.12 P2");
+            check(!feat322.contains("OptionRow(\"诊断日志\""),
+                    "T-62-A3c 诊断日志开关已不在功能页（FeaturesPage）", "");
+            check(all322.contains("OptionRow(\"诊断日志\""),
+                    "T-62-A3d 诊断日志开关位于首页 › 功能设置（HomeAllPage）", "");
         }
 
         // ---------- T-63 v3.0.23 自检证据源改为双层，去掉「没加载模块」误判 ----------
@@ -3539,7 +3569,9 @@ public class FeatureAuditTest {
         System.out.println("== T-65 闪退修复 ==");
         {
             String cfg325 = stripComments(read(dir.resolve("Config.java")));
-            int selfGuard = cfg325.indexOf("\"io.github.wumisc.antiburn\".equals(pkg)");
+            // API 102 实验分支：自身包名改成前缀判定（稳定版 io.github.wumisc.antiburn
+            // 与实验版 …antiburn.api102 共存时都视为「自己的界面」），语义不变。
+            int selfGuard = cfg325.indexOf("pkg.startsWith(\"io.github.wumisc.antiburn\")");
             boolean selfExempt = selfGuard > 0
                     && cfg325.substring(selfGuard, Math.min(cfg325.length(), selfGuard + 120)).contains("return false");
             check(selfExempt,
@@ -3794,6 +3826,861 @@ public class FeatureAuditTest {
             check(iBar72 > 0 && iClock72 > iBar72,
                     "T-72-A8 通用页「状态栏」下方不再有该开关（隐藏时间紧邻）",
                     "bar=" + iBar72 + " clock=" + iClock72);
+        }
+
+        // ---------- T-73 v3.2.7 超级岛联动（HyperIsland / 原生焦点通知） ----------
+        {
+            String iw73 = read(dir.resolve("IslandWatch.java"));
+            String ct73 = read(dir.resolve("Controller.java"));
+            String cf73 = read(dir.resolve("Config.java"));
+            String cs73 = read(dir.resolve("ConfStore.java"));
+            String act73 = read(dir.resolve("MainActivity.kt"));
+            String bm73 = read(dir.resolve("BurnInMaskService.java"));
+
+            check(iw73.contains("com.android.systemui.statusbar.NotificationListener")
+                            && iw73.contains("hookAllMethods")
+                            && iw73.contains("onNotificationPosted"),
+                    "T-73-A1 SystemUI 通知入口 hook（hookAllMethods 兼容各 ROM 重载）", "");
+            check(iw73.contains("\"miui.focus.param\"") && iw73.contains("\"miui.focus.pics\"")
+                            && iw73.contains("startsWith(K_PREFIX)"),
+                    "T-73-A2 只认 miui.focus.* 标志，不按包名、不读 HyperIsland 私有配置", "");
+            check(ct73.contains("ISLAND_HOLD_MS = 10_000L")
+                            && ct73.contains("islandUntil = Math.max(islandUntil, now + ISLAND_HOLD_MS)")
+                            && ct73.contains("now - lastIslandDiag >= 60_000L")
+                            && ct73.contains("if (!Config.enableIslandLink)"),
+                    "T-73-A3 10 秒滑动窗口续期 + 日志 60 秒去抖 + 开关门控", "");
+            String islBlk73 = slice(ct73, "} else if (islandNow) {", "} else {");
+            check(islBlk73.contains("hideStatusKeepNotify()")
+                            && !islBlk73.contains("applyHide()")
+                            && !islBlk73.contains("navView"),
+                    "T-73-A4 岛期间只遮状态栏静态元素，导航栏与岛窗口不动", "");
+            check(ct73.contains("islandHid = false;"),
+                    "T-73-A5 applyShow / 隐藏相位都会复位岛标记，岛结束一定点亮", "");
+            check(cf73.contains("enableIslandLink") && cf73.contains("case \"enable_island_link\"")
+                            && cs73.contains("enable_island_link=1")
+                            && act73.contains("OptionRow(\"超级岛联动\""),
+                    "T-73-A6 三层配置：Config 字段 / conf 默认 1 / 通用页开关", "");
+            check(ct73.contains("IslandWatch.init(cl)"),
+                    "T-73-A7 SystemUI 注入时装配岛联动", "");
+            check(!bm73.contains("IslandWatch"),
+                    "T-73-A8 引擎边界：无障碍进程不引用岛 Hook（继续走通知让开）", "");
+        }
+
+        // ---------- T-74 v3.2.7 升级即重建（旧配置 / 旧日志不跨版本） ----------
+        {
+            String cs74 = read(dir.resolve("ConfStore.java"));
+            String act74 = read(dir.resolve("MainActivity.kt"));
+
+            check(cs74.contains("public static boolean resetAll()") && cs74.contains("deleteHookLog()")
+                            && cs74.contains("旧配置与旧日志已清空"),
+                    "T-74-A1 resetAll：清镜像 + 清日志 + 重写默认配置", "");
+            check(cs74.contains("public static void clearLogs()") && cs74.contains("LOGS cleared"),
+                    "T-74-A2 clearLogs：只清日志，不动配置", "");
+            check(act74.contains("ConfStore.clearLogsIfUpgraded(this)")
+                            && !act74.contains("val ok = try { ConfStore.resetAll() }")
+                            && act74.contains("配置已保留，旧日志已清空"),
+                    "T-74-A3 升级后首次启动只清日志、不重置配置（首次安装不触发）", "");
+            check(act74.contains("Text(\"清空日志\"") && act74.contains("Text(\"重建配置\"")
+                            && act74.contains("请重启系统界面"),
+                    "T-74-A4 通用页两个手动入口 + 重启系统界面提示", "");
+        }
+
+        // ---------- T-73 v3.2.7 升级即重建：旧配置 / 旧日志不再沿用 ----------
+        {
+            String cs73 = read(dir.resolve("ConfStore.java"));
+            String act73 = read(dir.resolve("MainActivity.kt"));
+
+            // A1 · 清理范围：conf 三副本（含外部镜像）与四类旧日志
+            String wipe = slice(cs73, "private static String wipeCmd(boolean logsOnly)", "return sb.toString();");
+            check(wipe.contains("CONF") && wipe.contains("CONF_TMP")
+                            && wipe.contains("EXTERNAL_MIRROR") && wipe.contains("LOG_FILE")
+                            && wipe.contains("antiburn*.log") && wipe.contains("antiburn_diag.log"),
+                    "T-73-A1 一次删清：root conf / tmp / 外部镜像 / 主日志 / 兜底日志 / 旧 diag", "");
+
+            // A2 · 重建 = 默认表 + 新 rev + 落镜像 + 同步 root，不留旧键
+            String reset = slice(cs73, "public static boolean resetAll()", "return true;");
+            check(reset.contains("stampRev(defaultContent())") && reset.contains("writeMirror(content)")
+                            && reset.contains("syncToRoot(content)") && reset.contains("RESET vc="),
+                    "T-73-A2 resetAll 写全新默认表（stampRev + mirror + root），并留一行 RESET 审计", "");
+
+            // A3 · 日志可单独清，不动配置
+            check(cs73.contains("public static void clearLogs()") && cs73.contains("wipeCmd(true)"),
+                    "T-73-A3 clearLogs 只删日志、不动 conf", "");
+
+            // A4 · 升级检测：记录 last_vc，只有「记录过且与本次不同」才重建
+            String app73 = read(dir.resolve("AbApplication.java"));
+            check(cs73.contains("public static boolean clearLogsIfUpgraded(")
+                            && cs73.contains("\"last_vc\"")
+                            && cs73.contains("last == 0 || last == now")
+                            && app73.contains("ConfStore.clearLogsIfUpgraded(this)"),
+                    "T-73-A4 升级才清日志（首次安装 last_vc=0 不触发），判定与调用点分离在 ConfStore/Application", "");
+
+            // A5 · su 不能压主线程：重建在后台线程，完成后才回 UI
+            String upBlk = slice(app73, "v3.2.15：覆盖安装后第一件事", "v3.0.11 P1");
+            check(upBlk.contains("new Thread(") && upBlk.contains("ConfStore.clearLogsIfUpgraded(this)"),
+                    "T-73-A5 清日志在后台线程执行，不阻塞启动", "");
+            check(!upBlk.contains("recreate()") && act73.contains("配置已保留，旧日志已清空"),
+                    "T-73-A6 升级不再重建页面（配置保留，界面读旧配置真值）", "");
+
+            // A7 · 手动入口：通用页两颗按钮
+            check(act73.contains("Text(\"清空日志\"") && act73.contains("Text(\"重建配置\"")
+                            && act73.contains("ConfStore.clearLogs()"),
+                    "T-73-A7 通用页提供「清空日志」「重建配置」两个手动入口", "");
+
+            // A8 · 旧配置里的键已无人解析（删了 enable_status_round，也不再有旧版字段迁移）
+            check(!cs73.contains("enable_status_round"),
+                    "T-73-A8 默认表不再写入任何已废弃键", "");
+        }
+
+        // ---------- T-75 v3.2.8 系统级歌词联动（HyperLyric / SuperLyric） ----------
+        {
+            String ct75 = read(dir.resolve("Controller.java"));
+            String cf75 = read(dir.resolve("Config.java"));
+            String cs75 = read(dir.resolve("ConfStore.java"));
+            String act75 = read(dir.resolve("MainActivity.kt"));
+            String bm75 = read(dir.resolve("BurnInMaskService.java"));
+
+            // A1 · 三层配置：Config 字段 + conf 默认 1 + 解析/赋值
+            check(cf75.contains("public static volatile boolean enableLyricLink = true")
+                            && cf75.contains("case \"enable_lyric_link\"")
+                            && cf75.contains("enableLyricLink = lyc")
+                            && cs75.contains("enable_lyric_link=1"),
+                    "T-75-A1 三层配置：Config 字段 / conf 默认 1 / 解析赋值", "");
+
+            // A2 · 判据以 HyperLyric 真实包名为准（app/build.gradle.kts 的 namespace）
+            check(ct75.contains("com.lidesheng.hyperlyric")
+                            && ct75.contains("com.hchen.superlyric")
+                            && ct75.contains("cn.startsWith(\"com.android.systemui\")"),
+                    "T-75-A2 判据：歌词模块包名优先，系统自身 *Lyric* 装饰不豁免", "");
+
+            // A3b · 四个遍历入口 + 逐叶入口全部跳过歌词（A3 单独校验函数存在）
+            int skip75 = count(ct75, "if \\(isLyricView\\(c\\)\\) \\{");
+            check(skip75 >= 4 && ct75.contains("if (isLyricView(v)) {"),
+                    "T-75-A3 四个遍历入口 + 逐叶入口全部跳过歌词子树", "skip=" + skip75);
+
+            // A4 · 沿通知区路径（dimAlong）把歌词当横幅同级保留
+            String along75 = slice(ct75, "private static void dimAlong(List<View> path, int idx) {",
+                    "private static void setAlphaTracked(");
+            check(along75.contains("} else if (isLyricView(c)) {")
+                            && along75.contains("setAlphaTracked(c, 1f, false)"),
+                    "T-75-A4 dimAlong 保留歌词（不透明、不记账）", "");
+
+            // A5 · 整层透明 f4 必须否决，否则歌词被整条抹掉
+            String whole75 = slice(ct75, "private static boolean dimWholeBarIfSafe(",
+                    "private static boolean hasLiveHeadsUp(");
+            check(whole75.contains("if (hasLyricView(svg, 0)) {"),
+                    "T-75-A5 f4 整层兜底在含歌词时放弃", "");
+
+            // A6 · 命中日志与 SYS 行字段
+            check(ct75.contains("LYRIC 跳过歌词视图 owner=")
+                            && ct75.contains("\" ly=\" + (!Config.enableLyricLink"),
+                    "T-75-A6 LYRIC 日志 + SYS 行 ly= 字段", "");
+
+            // A7 · 关掉开关等价于旧行为
+            String lyricFn75 = slice(ct75, "private static boolean isLyricView(View v) {",
+                    "private static String idName(");
+            check(lyricFn75.contains("if (v == null || !Config.enableLyricLink) {"),
+                    "T-75-A7 开关门控：关掉后不做任何豁免（回到 v3.2.7 行为）", "");
+
+            // A8 · UI：开关 + 存档 + 感谢名单
+            check(act75.contains("OptionRow(\"系统级歌词联动\"")
+                            && act75.contains("enableLyricLink = Bool(51, true)")
+                            && act75.contains("Thanks(\"酷安@人间极品米其林\""),
+                    "T-75-A8 通用页开关 / 存档索引 51 / 感谢名单含 @人间极品米其林", "");
+
+            // A9 · 引擎边界：无障碍进程不引用歌词检测
+            check(!bm75.contains("isLyricView") && !bm75.contains("enableLyricLink"),
+                    "T-75-A9 引擎边界：无障碍进程不参与歌词豁免", "");
+        }
+
+        // ---------- T-76 v3.2.9 状态栏整层兜底防误伤（aw 修正 + f4 否决） ----------
+        {
+            String ct76 = read(dir.resolve("Controller.java"));
+
+            // A1 · 宽度统计优先 View 自身宽度（真机 aw=0 的根因）
+            String awBlk76 = slice(ct76, "int aw = v.getWidth();", "lastDimW += Math.max(0, aw);");
+            check(awBlk76.contains("if (aw <= 0) {") && awBlk76.contains("aw = right - left;")
+                            && awBlk76.indexOf("v.getWidth()") >= 0,
+                    "T-76-A1 遮掉宽度优先 getWidth()，right-left 只作兜底", "");
+
+            // A2 · 关键节点词表（时钟 / 电池 / 信号 / 网络）
+            String key76 = slice(ct76, "private static boolean isKeyStaticIcon(View v) {", "}");
+            check(key76.contains("Clock") && key76.contains("Battery") && key76.contains("Signal")
+                            && key76.contains("Wifi"),
+                    "T-76-A2 关键节点词表覆盖时钟/电池/信号/网络", "");
+
+            // A3 · 三处置位 + 每轮重置
+            int mark76 = count(ct76, "lastKeyHit = true;");
+            check(mark76 >= 3 && ct76.contains("lastDimW = 0;\n        lastKeyHit = false;"),
+                    "T-76-A3 dimLeaves/f2/f2 递归三处置位，dimByZone 每轮重置", "mark=" + mark76);
+
+            // A4 · f4 否决：已遮关键节点就不再整层
+            check(ct76.contains("if (z >= 2 && (keyZone || keyNotify)) {")
+                            && ct76.contains("/f4key"),
+                    "T-76-A4 f2 命中关键节点时跳过整层兜底", "");
+
+            // A5 · 否决必须在 dimWholeBarIfSafe 之前（顺序错等于没守卫）
+            int f4key76 = ct76.indexOf("/f4key");
+            int whole76 = ct76.indexOf("dimWholeBarIfSafe(sv, svg)");
+            check(f4key76 > 0 && whole76 > f4key76,
+                    "T-76-A5 否决位于整层兜底调用之前", "key=" + f4key76 + " whole=" + whole76);
+        }
+
+
+        // ===== T-77 · v3.2.10：首页五卡收进一个二级入口 + 公益找孩子板块 + 新图标 =====
+        {
+            String m77 = read(dir.resolve("MainActivity.kt"));
+            String home77 = slice(m77, "private fun HomeTilePage(", "private fun HomeAllPage(");
+            String all77 = slice(m77, "private fun HomeAllPage(", "// ---- v3.0.12 P2");
+            check(count(m77, "ListRow\\(\"功能设置\"") == 1
+                            && !home77.contains("EngineStyleCard(")
+                            && !home77.contains("本应用隐身")
+                            && !home77.contains("ListRow(\"注入状态\"")
+                            && !home77.contains("ListRow(\"白名单\""),
+                    "T-77-A1 首页只留一个功能设置入口，五卡不再摆首页", "");
+            check(all77.contains("EngineStyleCard(") && all77.contains("ListRow(\"注入状态\"")
+                            && all77.contains("ListRow(\"白名单\"") && all77.contains("本应用隐身")
+                            && all77.contains("AppVisibilityStore.setHideRecents"),
+                    "T-77-A2 五卡原样在功能设置二级页（控件与 prefs 副作用不丢）", "");
+            check(m77.contains("var subParent by rememberSaveable")
+                            && m77.contains("BackHandler(enabled = subPage != null) { closeSub() }")
+                            && m77.contains("onBack = closeSub,"),
+                    "T-77-A3 二级页再进三级页记得来路，返回回上一级", "");
+            check(count(home77, "WelfareCard\\(") == 2
+                            && home77.contains("WelfareCard(slot = 0, onOpen = { onOpen(\"welfare\") }")
+                            && home77.contains("WelfareCard(slot = 1, onOpen = { onOpen(\"welfare-1\") }")
+                            && m77.contains("\"welfare\" -> WelfarePage(slot = 0, dark = dark, onOpenUrl = onOpenUrl)")
+                            && m77.contains("\"welfare-1\" -> WelfarePage(slot = 1, dark = dark, onOpenUrl = onOpenUrl)"),
+                    "T-77-A4 首页两张公益卡 + 各自二级页路由接通", "");
+
+            String w77 = read(dir.resolve("WelfareStore.java"));
+            check(w77.contains("raw.githubusercontent.com/wumisc/antiburn-missing-kids/main/kids.json")
+                            && w77.contains("cdn.jsdelivr.net/gh/wumisc/antiburn-missing-kids@main/kids.json")
+                            && w77.contains("getAssets().open(\"kids.json\")"),
+                    "T-77-B1 接口双通道 + 内置快照三级回落", "");
+            check(w77.contains("ROTATE_DAYS = 1")
+                            && w77.contains("(today - anchor) / ROTATE_DAYS")
+                            && w77.contains("FETCH_DAYS = 1")
+                            && w77.contains("KEY_FETCH_AT")
+                            && w77.contains("(steps * 2) % size")
+                            && w77.contains("b.regDate.compareTo(a.regDate)"),
+                    "T-77-B2 每 24 小时换一对（两卡各换一位）+ 每天最多联网一次 + 注册日期倒序", "");
+            String assets77 = read(dir.resolve("../../../../../assets/kids.json"));
+            java.util.regex.Matcher rd77 = java.util.regex.Pattern
+                    .compile("\"reg_date\": \"(\\d{4}-\\d{2}-\\d{2})\"").matcher(assets77);
+            java.util.List<String> dates77 = new java.util.ArrayList<>();
+            while (rd77.find()) {
+                dates77.add(rd77.group(1));
+            }
+            boolean desc77 = dates77.size() >= 3;
+            for (int i = 1; i < dates77.size(); i++) {
+                if (dates77.get(i).compareTo(dates77.get(i - 1)) > 0) {
+                    desc77 = false;
+                }
+            }
+            check(desc77, "T-77-B3 内置快照 ≥3 条且按注册日期倒序", "n=" + dates77.size());
+
+            String mf77 = read(dir.resolve("../../../../../AndroidManifest.xml"));
+            check(mf77.contains("android.permission.INTERNET"),
+                    "T-77-C1 公益板块联网权限已声明", "");
+            String ic77 = read(dir.resolve("../../../../../res/mipmap-anydpi-v26/ic_launcher.xml"));
+            check(ic77.contains("@drawable/ic_launcher_bg") && ic77.contains("@drawable/ic_launcher_fg"),
+                    "T-77-C2 自适应图标引用新前景/背景层", "");
+            java.awt.image.BufferedImage fg77 = javax.imageio.ImageIO.read(
+                    dir.resolve("../../../../../res/drawable-nodpi/ic_launcher_fg.png").toFile());
+            int minX = fg77.getWidth(), minY = fg77.getHeight(), maxX = 0, maxY = 0;
+            for (int y = 0; y < fg77.getHeight(); y++) {
+                for (int x = 0; x < fg77.getWidth(); x++) {
+                    if ((fg77.getRGB(x, y) >>> 24) > 8) {
+                        minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+                        minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+                    }
+                }
+            }
+            double ratio77 = (maxX - minX + 1) / (double) fg77.getWidth();
+            check(ratio77 <= 0.63 && minY >= fg77.getHeight() * 0.18,
+                    "T-77-C3 前景落在 66dp 安全区（圆形蒙版不裁人物）", "ratio=" + ratio77);
+        }
+
+        // ===== T-79 · v3.2.11：权限用途以小字写在各个功能下面（不做单独汇总页） =====
+        {
+            String m79 = read(dir.resolve("MainActivity.kt"));
+            String mf79 = read(dir.resolve("../../../../../AndroidManifest.xml"));
+            check(count(m79, "PermNote\\(") >= 6,
+                    "T-79-A1 权限小字：1 个定义 + 至少 5 处功能内调用（运行方式/注入状态/白名单/隐身/通用/公益）",
+                    "n=" + count(m79, "PermNote\\("));
+            check(!m79.contains("PermsPage(") && !m79.contains("\"perms\" ->"),
+                    "T-79-A2 不新建权限汇总页（只写在功能下）", "");
+            String[] purposes = {
+                    "读系统界面进程的启动时刻", "创建遮盖窗口", "枚举已安装应用",
+                    "只给这一个板块用", "常驻运行提示", "开机广播"
+            };
+            StringBuilder lack = new StringBuilder();
+            for (String p : purposes) {
+                if (!m79.contains(p)) {
+                    lack.append(p).append(' ');
+                }
+            }
+            check(lack.length() == 0, "T-79-B1 六个功能各自的权限用途都写在小字里", "缺=" + lack);
+            String[] manifestPerms = {
+                    "QUERY_ALL_PACKAGES", "RECEIVE_BOOT_COMPLETED", "FOREGROUND_SERVICE",
+                    "FOREGROUND_SERVICE_SPECIAL_USE", "POST_NOTIFICATIONS", "INTERNET"
+            };
+            StringBuilder miss79 = new StringBuilder();
+            for (String p : manifestPerms) {
+                if (!mf79.contains(p)) {
+                    miss79.append(p).append(' ');
+                }
+            }
+            check(miss79.length() == 0, "T-79-B2 清单里申请的权限都在小字里覆盖到", "缺=" + miss79);
+        }
+
+        // ===== T-80 · v3.2.14：日志免点击自动更新（常驻服务周期补录，零 su、零提示）=====
+        {
+            String cs80 = stripComments(read(dir.resolve("ConfStore.java")));
+            String autoBody = slice(cs80, "public static void autoSyncLog()", "private static String readPublicLogDirect()");
+            check(autoBody.contains("Config.enableLog") && autoBody.contains("supplementHookMirror()"),
+                    "T-80-A1 自动补录受「诊断日志」开关门控，且只复用既有补录逻辑（不新增写盘路径）", "");
+            String sup80 = slice(cs80, "private static void supplementHookMirror()", "public static void autoSyncLog()");
+            check(sup80.contains("new FileOutputStream(LOG_FILE, true)")
+                            && !sup80.contains("if (!execSu(cmd))"),
+                    "T-80-A2 补录改为「先本进程直写、失败才 su」——常驻循环不 fork 进程",
+                    "direct=" + sup80.contains("new FileOutputStream(LOG_FILE, true)")
+                            + " suFirst=" + sup80.contains("if (!execSu(cmd))"));
+            String gs80 = stripComments(read(dir.resolve("GuardService.java")));
+            check(gs80.contains("LOG_SYNC_MS = 180_000L")
+                            && gs80.contains("ConfStore.autoSyncLog()")
+                            && countLiteral(gs80, "removeCallbacks(logSync)") == 2,
+                    "T-80-A3 周期 180 秒、启动排期、销毁移除三处齐全（不泄漏 Runnable）",
+                    "rm=" + countLiteral(gs80, "removeCallbacks(logSync)"));
+            check(gs80.contains("IO.execute(") && gs80.contains("antiburn-log-sync"),
+                    "T-80-A4 读写离开主线程（单线程 executor，daemon）", "");
+            check(gs80.contains("3L * 3600_000L") && gs80.contains("30L * 60_000L"),
+                    "T-80-A5 通知节流未被动过（3 小时 / 30 分钟仍是原值），日志补录独立排期", "");
+            String act80 = read(dir.resolve("MainActivity.kt"));
+            check(act80.contains("ConfStore.autoSyncLog()"),
+                    "T-80-A6 打开模块即自动补一次（不必点「日志」按钮等 toast）", "");
+            check(cs80.contains("autoSyncLog") && !cs80.contains("appendSelfCheck()\n    }\n\n    /**\n     * v3.2.14"),
+                    "T-80-A7 自动补录不写 SELF 汇总行（避免每轮刷一条历史汇总）",
+                    "selfInAuto=" + autoBody.contains("appendSelfCheck()"));
+        }
+
+        // ===== T-81 · v3.2.15：覆盖安装即清空旧日志并重建（不用先打开模块）=====
+        {
+            String cs81 = read(dir.resolve("ConfStore.java"));
+            String app81 = read(dir.resolve("AbApplication.java"));
+            String up81 = slice(cs81, "public static boolean clearLogsIfUpgraded(", "public static void clearLogs()");
+            check(up81.contains("getSharedPreferences(\"antiburn_meta\"")
+                            && up81.contains("\"last_vc\"")
+                            && up81.contains("last == 0 || last == now"),
+                    "T-81-A1 判定口径：首次安装（last_vc=0）与同版本启动都不清，只有版本变了才清", "");
+            check(up81.contains("meta.edit().putInt(\"last_vc\", now).apply()")
+                            && up81.contains("clearLogs()"),
+                    "T-81-A2 先记账再清，清的过程中被二次拉起不会重复执行", "");
+            check(up81.contains("appendRawLine(") && up81.contains("旧日志已清空"),
+                    "T-81-A3 清完立刻写起始标记行（文件第一行就能看出是新日志、含版本号）", "");
+            check(up81.contains("cleared_pending"),
+                    "T-81-A4 清空发生在 Application 时，给界面留一次性提示标记", "");
+            String thr81 = slice(app81, "v3.2.15：覆盖安装后第一件事", "v3.0.11 P1");
+            check(thr81.contains("new Thread(") && thr81.contains("ConfStore.clearLogsIfUpgraded(this)"),
+                    "T-81-A5 Application 里后台线程触发（不阻塞启动、不等 su 授权）", "");
+            String wipe81 = slice(cs81, "private static String wipeCmd(boolean logsOnly)", "return sb.toString();");
+            check(wipe81.contains("LOG_FILE") && wipe81.contains(".1")
+                            && wipe81.contains("antiburn*.log"),
+                    "T-81-A6 清空范围含主日志 + 轮转 .1 + 兜底目录全部日志", "");
+        }
+
+        // ===== T-82 · v3.2.16：日志直达 / 真清空 / 网格页误杀防护 / 无障碍探针 =====
+        {
+            String cs82 = read(dir.resolve("ConfStore.java"));
+            String cp82 = read(dir.resolve("ConfigProvider.java"));
+            String dy82 = read(dir.resolve("DouyinHook.java"));
+            String mk82 = read(dir.resolve("BurnInMaskService.java"));
+
+            // A1 公共日志直写：不借 su、不等导出
+            String direct82 = slice(cs82, "public static boolean appendDirectText(", "/** 单次直写");
+            String write82 = slice(cs82, "private static boolean writeDirect(", "private static boolean suAppend(");
+            check(direct82.contains("writeDirect(LOG_FILE, text)")
+                            && direct82.indexOf("writeDirect") < direct82.indexOf("suAppend")
+                            && write82.contains("new FileOutputStream(f, true)")
+                            && write82.contains("LOG_ROTATE_BYTES")
+                            && !write82.contains("execSu("),
+                    "T-82-A1 appendDirectText 先本进程直写（writeDirect 不 fork su），失败才补 su", "");
+            check(slice(cs82, "public static boolean appendHookLine(", "public static boolean appendDirectText(")
+                            .contains("appendDirectText(line + "),
+                    "T-82-A2 appendHookLine 复用直写通道（被注入进程的行直接落进公共日志）", "");
+
+            // A3 Provider 顺序：先公共日志，落不下才退回私有镜像
+            String app82 = slice(cp82, "private void appendLog(String line)", "public Cursor query");
+            check(app82.indexOf("ConfStore.appendHookLine(line)") > 0
+                            && app82.indexOf("ConfStore.appendHookLine(line)") < app82.indexOf("HOOK_LOG_FILE")
+                            && app82.contains("return;"),
+                    "T-82-A3 Provider 先写公共日志，写不进才退回私有镜像", "");
+
+            // A4 真清空：直删优先，su 只兜底
+            String clr82 = slice(cs82, "private static void wipeDirect()", "public static void clearLogs()");
+            check(clr82.contains("new File(LOG_FILE).delete()")
+                            && clr82.contains("LOG_FILE + \".1\"")
+                            && clr82.contains("deleteLogsInDir(LOG_DIR)")
+                            && clr82.contains("deleteLogsInDir(LOG_DIR_FALLBACK)"),
+                    "T-82-A4 直删主日志 + .1 + 两个目录内的 antiburn 日志", "");
+            String body82 = slice(cs82, "public static void clearLogs()", "v3.2.15：覆盖安装");
+            check(body82.indexOf("wipeDirect()") > 0
+                            && body82.indexOf("wipeDirect()") < body82.indexOf("execSu(wipeCmd(true))"),
+                    "T-82-A5 clearLogs 先直删再 su（su 被拒时不再整批留着旧行）", "");
+
+            // A6 网格页判定：等尺寸封面 + 多列
+            check(slice(dy82, "private static boolean looksLikeGridPage(", "private static void scanGridCells(")
+                            .contains("Integer.bitCount(st[1]) < 2"),
+                    "T-82-A6 网格页要求 ≥2 列，避免单列列表被误判", "");
+            String scan82 = slice(dy82, "private static void scanGridCells(", "private static boolean hasImageChild(");
+            check(scan82.contains("w * 0.20f") && scan82.contains("w * 0.38f")
+                            && scan82.contains("st[3] / 10") && scan82.contains("st[5] +="),
+                    "T-82-A7 网格单元尺寸区间 + 尺寸一致 + 至少 6 格", "");
+            String hide82 = slice(dy82, "private static void hideEnabled()", "if (livePaused)");
+            check(hide82.contains("if (gridPage)") && hide82.contains("hideProfileChrome(lastRoot)"),
+                    "T-82-A8 网格页整页放行，只保留顶部 chrome 遮罩（主页最右列不再被当右侧列）", "");
+
+            // A9 无障碍探针
+            check(mk82.contains("maybeDumpNodes(pkg)"),
+                    "T-82-A9 前台切到视频 App 时排一次节点导出", "");
+            String dump82 = slice(mk82, "private void dumpNodesNow(String pkg)", "private static String shortClass(");
+            check(dump82.contains("getRootInActiveWindow()")
+                            && dump82.contains("\"corner\"")
+                            && dump82.contains("\"right\"") && dump82.contains("\"bottom\"")
+                            && dump82.contains("emitProbe(head + body + tail)"),
+                    "T-82-A10 导出角落/顶栏/右侧/底栏四区节点并直写公共日志", "");
+            // v3.2.19：探针不再要求「诊断日志」开关，且直写失败要有镜像兜底，否则又是「跑了但没行」
+            String emit82 = slice(mk82, "private void emitProbe(String text)", "private void dumpNodesNow(String pkg)");
+            check(mk82.contains("DUMP_MIN_GAP_MS = 10 * 60_000L")
+                            && !mk82.contains("if (!Config.enableLog)")
+                            && emit82.contains("ConfStore.appendDirectText(body)")
+                            && emit82.contains("ConfigProvider.HOOK_LOG_FILE"),
+                    "T-82-A11 探针门控：只看视频 App + 同包 10 分钟，输出有镜像兜底（不再依赖日志开关）", "");
+        }
+
+        // ===== T-83 · v3.2.16：常驻通知兼做焦点通知（标准通知 + 超级岛）=====
+        {
+            String isl83 = read(dir.resolve("IslandNotify.java"));
+            String gs83 = read(dir.resolve("GuardService.java"));
+            String apply83 = slice(isl83, "static boolean apply(Context ctx, Notification n", "static String param(");
+            check(isl83.contains("\"miui.focus.param\"") && !isl83.contains("n.extras.putBundle("),
+                    "T-83-A1 只用公开协议字段 miui.focus.param，不往 extras 塞图片 Bundle", "");
+            // v3.2.19：pics 的 key 必须带 miui.focus.pic_ 前缀（kit 的 PIC_PREFIX），
+            // 旧版 key_island_icon 这种自造名 SystemUI 找不到图，会整条焦点通知渲染失败
+            // v3.2.20：不再写 miui.focus.pics —— 真机上那张图会被焦点卡片画到右侧，
+            // 左侧 App 图标反而让位消失。图标统一交给 smallIcon。
+            check(apply83.contains("n.extras.putString(K_PARAM")
+                            && !apply83.contains("putBundle(K_PICS"),
+                    "T-83-A2 只写 miui.focus.param，不再塞 pics（那张图会顶掉左侧 App 图标）", "");
+            String build83 = slice(gs83, "private static Notification build(Context ctx)", "private static String statusText(");
+            check(build83.contains("if (Config.enableIslandLink)"),
+                    "T-83-A3 复用「超级岛联动」开关门控，关掉即回到纯普通通知", "");
+            String pj83 = slice(isl83, "static String param(String title", "/** 文案里的引号");
+            // v3.2.21：结构改为照抄「安全出行」真机上岛的那份 FocusNotifyParam.json
+            check(pj83.contains("\"param_v2\"") && pj83.contains("\"protocol\", 1")
+                            && pj83.contains("\"baseInfo\"") && pj83.contains("\"param_island\"")
+                            && pj83.contains("\"bigIslandArea\"") && pj83.contains("\"smallIslandArea\"")
+                            && pj83.contains("\"imageTextInfoLeft\"")
+                            && pj83.contains("\"updatable\""),
+                    "T-83-A4 JSON 照安全出行：param_v2/protocol 1/baseInfo/param_island/bigIslandArea", "");
+            check(!pj83.contains("\"param_v1\"") && !pj83.contains("\"islandType\"")
+                            && !pj83.contains("\"iconTextInfo\""),
+                    "T-83-A5 自造的 param_v1/islandType/iconTextInfo 已清掉（键名不对就是上不去岛的根因）", "");
+            check(pj83.contains("\"islandProperty\", 1") && !pj83.contains("\"timeout\"")
+                            && !pj83.contains("\"islandType\""),
+                    "T-83-A5b 信息展示型岛（islandProperty=1），与安全出行同口径", "");
+            String sg83 = slice(isl83, "private static String safe(", "}\n}");
+            check(sg83.contains("replace('\\n', ' ')") && sg83.contains("length() > 60"),
+                    "T-83-A6 文案收敛成单行并截断，异常文案不进 JSON 裸串", "");
+            // v3.2.19：extras 必须在 build() 之后写（kit 与 HyperIsland 都这么做）
+            check(build83.contains("Notification n = b.build()")
+                            && build83.indexOf("IslandNotify.apply(ctx, n, title, text)") > build83.indexOf("Notification n = b.build()")
+                            && build83.contains("return n;"),
+                    "T-83-A7 extras 写在 build() 之后（Builder 阶段加会被覆盖，字段会丢）", "");
+            check(isl83.contains("catch (Throwable ignored)"),
+                    "T-83-A8 拼装失败静默降级，绝不影响常驻通知本身", "");
+        }
+
+        // ===== T-84 · v3.2.17：全量代码审计后的三处修正 =====
+        {
+            String cs84 = read(dir.resolve("ConfStore.java"));
+            String mk84 = read(dir.resolve("BurnInMaskService.java"));
+            String cp84 = read(dir.resolve("ConfigProvider.java"));
+            String act84 = read(dir.resolve("MainActivity.kt"));
+
+            // A1 直写失败要补 su，不能静默丢行
+            String ad84 = slice(cs84, "public static boolean appendDirectText(", "/** 单次直写");
+            check(ad84.contains("writeDirect(LOG_FILE, text)") && ad84.contains("return suAppend(text)"),
+                    "T-84-A1 appendDirectText 直写失败改走 su 追加（分区存储写入被 FUSE 拦时不再丢行）", "");
+            String sa84 = slice(cs84, "private static boolean suAppend(", "v3.2.13 观测性兜底");
+            check(cs84.contains("SU_APPEND_INTERVAL_MS = 10_000L")
+                            && sa84.contains("lastSuAppendAt")
+                            && sa84.contains("LOG_DIR_FALLBACK"),
+                    "T-84-A2 su 追加 10 秒节流 + 两个目录都落（无授权弹窗风暴）", "");
+            String wd84 = slice(cs84, "private static boolean writeDirect(", "private static boolean suAppend(");
+            check(wd84.contains("LOG_ROTATE_BYTES") && wd84.contains("path + \".1\""),
+                    "T-84-A3 直写仍保留 512KB 轮转（.1 备份不丢）", "");
+
+            // A4 探针只对视频 App 跑
+            String dump84 = slice(mk84, "private void maybeDumpNodes(String pkg)", "handler.postDelayed");
+            check(dump84.contains("VideoApps.Kind.NONE"),
+                    "T-84-A4 NDUMP 用 Kind.NONE 过滤（原 == null 恒假，等于任何 App 都扫树）", "");
+
+            // A5 Provider 校验调用方
+            check(cp84.contains("Binder.getCallingUid()") && cp84.contains("callerAllowed()")
+                            && cp84.contains("com.android.systemui")
+                            && cp84.contains("VideoApps.of(p) != VideoApps.Kind.NONE"),
+                    "T-84-A5 Provider 加调用方 uid/包名白名单（token 只作第一道）", "");
+            String call84 = slice(cp84, "public Bundle call(String method", "if (METHOD_PUT_LOG.equals(method))");
+            check(call84.contains("if (!callerAllowed())"),
+                    "T-84-A6 白名单在 token 之后、任何读写之前执行", "");
+
+            // A7 文案改名
+            check(act84.contains("兼容名单") && !act84.contains("兼容性名单"),
+                    "T-84-A7 关于页文案统一为「兼容名单」（旧称「兼容性名单」全清理）", "");
+        }
+
+        // ===== T-85 · v3.2.18：通知图标「恰好一个」（资源引用，不画位图）=====
+        {
+            String isl85 = read(dir.resolve("IslandNotify.java"));
+            String gs85 = read(dir.resolve("GuardService.java"));
+            String ai85 = slice(gs85, "private static int smallIconRes(Context ctx)", "private static Notification quickBuild");
+            // v3.2.22：自适应图标不能做 smallIcon（Invalid notification → startForeground 失败 → FDNS）
+            check(ai85.contains("ctx.getApplicationInfo().icon")
+                            && ai85.contains("AdaptiveIconDrawable")
+                            && ai85.contains("R.drawable.ic_tile"),
+                    "T-85-A1 小图标取 applicationInfo.icon，自适应/解析失败退 ic_tile 单色矢量（彩色插画 PNG 不能做 smallIcon）", "");
+            check(!isl85.contains("Bitmap.createBitmap(") && !isl85.contains("new Canvas("),
+                    "T-85-A2 不再画位图（3.2.17 位图构造失败后退成不可见 ic_tile，真机图标时有时无）", "");
+            String ap85 = slice(isl85, "static boolean apply(Context ctx, Notification n", "static Icon appIcon(");
+            check(ap85.contains("if (ctx == null || n == null)"),
+                    "T-85-A3 apply 对空 context / 空通知直接返回，不写半个字段", "");
+            String bd85 = slice(gs85, "private static Notification build(Context ctx)", "private static String statusText(");
+            // v3.2.19：图标与岛解耦 —— smallIcon 固定是应用图标，永远只有一个；
+            // 岛能不能上另算，绝不再用 largeIcon 去「补一个」
+            check(bd85.contains("baseBuilder(ctx, smallIconRes(ctx), text)")
+                            && !bd85.contains("setLargeIcon("),
+                    "T-85-A4 图标走 baseBuilder(smallIconRes)，不再用 largeIcon", "");
+            check(bd85.contains("if (Config.enableIslandLink)")
+                            && bd85.contains("IslandNotify.apply(ctx, n, title, text)"),
+                    "T-85-A5 联动开启才写岛 extras，且写在 build() 之后", "");
+            check(!bd85.contains("// v3.2.17：通知栏左侧的大图"),
+                    "T-85-A6 旧的「无条件补大图」已删除（重复图标真机复现过）", "");
+        }
+
+        // ===== T-86 · v3.2.20：图标按「安全出行」写法 + 探针双触发 + 白名单门控 =====
+        {
+            String isl86 = read(dir.resolve("IslandNotify.java"));
+            String gs86 = read(dir.resolve("GuardService.java"));
+            String mk86 = read(dir.resolve("BurnInMaskService.java"));
+
+            String fa86 = slice(isl86, "static boolean focusAllowed(Context ctx)", "static boolean apply(");
+            check(fa86.contains("miui.statusbar.notification.public") && fa86.contains("canShowFocus")
+                            && fa86.contains("\"Xiaomi\"") && fa86.contains("catch (Throwable ignored)"),
+                    "T-86-A1 focusAllowed 读小米公开 Provider 的 canShowFocus（kit 同源），异常一律当不允许", "");
+            String bd86 = slice(gs86, "private static Notification build(Context ctx)", "private static String statusText(");
+            // v3.2.21 反转：焦点参数始终下发（安全出行 5.6.16 的结论）。
+            // 我们自己查 Provider 会被 HyperIsland 的 SystemUI 侧放行绕过 —— 白名单破解了也等于没开。
+            check(!bd86.contains("if (IslandNotify.focusAllowed(ctx))")
+                            && bd86.contains("IslandNotify.apply(ctx, n, title, text)")
+                            && bd86.contains("ISLAND focusAllowed="),
+                    "T-86-A2 焦点参数始终下发，白名单只作诊断（不再自己掐掉参数）", "");
+            check(bd86.contains("IslandNotify.apply(ctx, n, title, text)")
+                            && bd86.contains("ISLAND extras=fail"),
+                    "T-86-A3 允许时才挂岛，失败仍有诊断行", "");
+            // 探针第二触发点：心跳里也问一次（窗口事件可能被系统合并，包名也可能不变）
+            check(mk86.contains("maybeDumpNodes(foregroundPkg);"),
+                    "T-86-A4 心跳每帧补问一次探针（事件路径失效也能落数据）", "");
+            check(mk86.contains("[a11y] NDUMP sched pkg=") && mk86.contains("[a11y] NDUMP fail pkg="),
+                    "T-86-A5 探针排期与失败都留痕，不再静默吞掉", "");
+        }
+
+        // ===== T-87 · v3.2.22：FDNS（前台服务 5 秒没挂通知）导致进程连环崩 =====
+        {
+            String gs87 = read(dir.resolve("GuardService.java"));
+            // A1 先挂最小通知，再后台拼完整版
+            check(gs87.contains("startForeground(NOTIF_ID, quickBuild(this))"),
+                    "T-87-A1 onStartCommand 先挂最小通知（不读 prefs / 不跨进程），抢 5 秒窗口", "");
+            // A2 兜底：单色矢量再挂一次
+            check(gs87.contains("startForeground(NOTIF_ID, plainBuild(this))"),
+                    "T-87-A2 第一次挂失败退 ic_tile 单色矢量再挂（自适应图标做 smallIcon 会抛）", "");
+            // A3 完整版构建离开主线程
+            String post87 = slice(gs87, "private void post()", "private void postFull()");
+            check(post87.contains("IO.execute(") && !post87.contains("build(this)"),
+                    "T-87-A3 post() 只排期不 build（完整版在 IO 线程拼）", "");
+            // A4 ensure 去重：服务活着不再 startForegroundService
+            String es87 = slice(gs87, "public static void ensure(Context ctx)", "public static void stop(Context ctx)");
+            check(es87.contains("if (instance != null)"),
+                    "T-87-A4 ensure 见到 instance 直接返回（不断崩溃重启的循环就此断掉）", "");
+            // A5 quickBuild 不碰 statusText / 岛
+            String qb87 = slice(gs87, "private static Notification quickBuild(Context ctx)", "private static Notification.Builder baseBuilder");
+            check(!qb87.contains("statusText") && !qb87.contains("IslandNotify"),
+                    "T-87-A5 最小通知不含 statusText 与岛参数（它们才是阻塞源）", "");
+        }
+
+        // ---------- T-88 v3.2.25 进程被杀后的保命自愈 ----------
+        System.out.println();
+        System.out.println("== T-88 保命自愈（常驻服务被杀后自己回来）==");
+        {
+            String heal = read(dir.resolve("HealReceiver.java"));
+            String gs88 = read(dir.resolve("GuardService.java"));
+            String man88 = read(dir.resolve("../../../../../AndroidManifest.xml"));
+
+            check(heal.contains("ACTION_HEAL") && heal.contains("GuardService.class"),
+                    "T-88-A1 自愈入口齐备：自定义 HEAL 动作 + 拉起 GuardService", "");
+            check(heal.contains("FAST_MS = 45_000L") && heal.contains("CHECK_MS = 15L * 60_000L"),
+                    "T-88-A2 两层节奏：被杀后 45 秒补刀 + 15 分钟兜底巡检", "");
+            check(heal.contains("setAndAllowWhileIdle(") && !heal.contains("setExact(")
+                            && !heal.contains("setExactAndAllowWhileIdle(")
+                            && !heal.contains("setRepeating("),
+                    "T-88-A3 只用不精确的 allowWhileIdle 闹钟（不申请精确闹钟权限、不重复闹钟）", "");
+            check(!heal.contains("WAKE_LOCK"),
+                    "T-88-A4 不拿 wake lock（一次唤醒只读内存状态，功耗可忽略）", "");
+            check(heal.contains("catch (Throwable t)") && heal.contains("HEAL block="),
+                    "T-88-A5 后台启动被拦时不崩、不重试风暴，只记一行诊断", "");
+            check(heal.contains("ACTION_MY_PACKAGE_REPLACED"),
+                    "T-88-A6 覆盖安装后自动拉起（旧进程必然已死）", "");
+
+            check(gs88.contains("static boolean alive()") && slice(gs88, "static boolean alive()", "private static void createChannel").contains("instance != null")
+                            && !slice(gs88, "static boolean alive()", "private static void createChannel").contains("SharedPreferences"),
+                    "T-88-A7 存活探测只看进程内实例（不读盘、不跨进程）", "");
+            String oc88 = slice(gs88, "public void onDestroy()", "public IBinder onBind");
+            check(oc88.contains("onTaskRemoved") && oc88.contains("HealReceiver.armFast(this)")
+                            && oc88.contains("if (!stoppedByUser)"),
+                    "T-88-A8 onDestroy / onTaskRemoved 排快速自愈，且用户已停止时不排", "");
+            check(gs88.contains("stoppedByUser = true;") && gs88.contains("ACTION_STOP"),
+                    "T-88-A9 用户主动「停止」会关掉自愈（否则通知自己回来，等于流氓软件）", "");
+            check(gs88.contains("HealReceiver.arm(this)"),
+                    "T-88-A10 每次服务起来都重排兜底巡检（天然续命）", "");
+            check(gs88.contains(".addAction(R.drawable.ic_tile, \"立即恢复\", HealReceiver.manualPending(ctx))"),
+                    "T-88-A11 常驻通知挂「立即恢复」按钮（系统不放行后台启动时的手动兜底）", "");
+            check(gs88.contains("已自愈恢复"),
+                    "T-88-A12 自愈后通知如实说明，不假装一直没停", "");
+            check(man88.contains("\".HealReceiver\"") && man88.contains("android:exported=\"false\"")
+                            && man88.contains("io.github.wumisc.antiburn.HEAL")
+                            && man88.contains("android.intent.action.MY_PACKAGE_REPLACED"),
+                    "T-88-A13 接收器已注册、不导出、只收自家动作与覆盖安装", "");
+            check(!man88.contains("SCHEDULE_EXACT_ALARM") && !man88.contains("USE_EXACT_ALARM"),
+                    "T-88-A14 没有多要精确闹钟权限（不精确闹钟足够）", "");
+            check(heal.contains("notifyBlocked") && heal.contains("nm.notify(BLOCK_ID"),
+                    "T-88-A15 系统拒绝后台启动时仍有可见兜底通知（点一下就恢复）", "");
+            check(heal.contains("stopPending") && heal.contains("GuardService.ACTION_STOP"),
+                    "T-88-A19 「停止守护」入口已构造（ACTION_STOP 不再是走不到的死代码）", "");
+            check(gs88.contains("\"停止守护\"") && gs88.contains("HealReceiver.stopPending(ctx)"),
+                    "T-88-A20 常驻通知真的挂了停止按钮（用户有明确退出口）", "");
+            check(heal.contains("cancelBlocked") && gs88.contains("HealReceiver.cancelBlocked(this)"),
+                    "T-88-A21 服务起来后撤掉「已停止」兜底通知（两条通知不自相矛盾）", "");
+            // v3.2.25 追加：用户点「停止」后闹钟可能已经排在系统侧，仅置内存标志不够，
+            // 到点会再把服务拉起来（自己复活）。必须注销闹钟 + 落盘记住「别回来」。
+            check(heal.contains("static void markUserStop") && heal.contains("am.cancel(pending(ctx))")
+                            && heal.contains("am.cancel(manualPending(ctx))"),
+                    "T-88-A16 停止时注销两档闹钟（系统侧排好的也要撤）", "");
+            check(heal.contains("if (!manual && userStopped(ctx))") && heal.contains("HEAL skip=user_stopped"),
+                    "T-88-A17 接收器尊重「用户已停止」：闹钟再响也不自动复活", "");
+            check(gs88.contains("HealReceiver.markUserStop(this)") && gs88.contains("HealReceiver.clearUserStop(this)"),
+                    "T-88-A18 停止/正常启动分别写入与清除「别回来」档位", "");
+        }
+
+        // ---------- T-89 v3.2.25「本应用隐身」开关自关修复 ----------
+        //
+        // 真实故障：实验分支 applicationId（…antiburn.api102）与清单命名空间（…antiburn）
+        // 不一致时，AppVisibilityStore 用 getPackageName() 拼出的别名组件在包里不存在，
+        // setComponentEnabledSetting 直接抛 IllegalArgumentException —— 点开关就崩，
+        // 重开后 prefs 又没落盘，看起来就是「打开后自动关闭」。
+        System.out.println();
+        System.out.println("== T-89 v3.2.25 本应用隐身开关自关修复 ==");
+        {
+            String vis88 = read(dir.resolve("AppVisibilityStore.java"));
+            String vis88c = stripComments(vis88);
+            // A1：别名必须按清单真实组件查，而不是只用包名拼
+            check(vis88c.contains("getPackageInfo") && vis88c.contains("endsWith(ALIAS_SUFFIX)"),
+                    "T-89-A1 别名组件按清单查（endsWith(ALIAS_SUFFIX)），不再只靠包名拼接", "");
+            check(countLiteral(vis88c, "LauncherAlias") <= 1,
+                    "T-89-A2 后缀常量只出现 1 处（组件名字面量集中，不散落拼接）", "");
+            // A2：切换失败必须返回 false 并回写旧值（磁盘与界面一致）
+            String set88 = slice(vis88c, "public static boolean setHideLauncherIcon", "public static boolean isHideRecents");
+            check(set88.contains("commit()") && set88.contains("return false"),
+                    "T-89-A3 开关落盘用 commit，切组件失败返回 false 并回滚 prefs", "");
+            // A3：任何异常都不冒到 UI
+            String app88 = slice(vis88c, "public static boolean applyLauncherVisibility", "private static ComponentName launcherAlias");
+            check(app88.contains("catch (Throwable t)") && app88.contains("return false"),
+                    "T-89-A4 applyLauncherVisibility 吞异常并返回 false（不再一点就崩）", "");
+            // A4：UI 必须判返回值并整体回退，否则「已隐藏」是假状态
+            String act88 = read(dir.resolve("MainActivity.kt"));
+            String tap88 = slice(act88, "val ok = AppVisibilityStore.setHideLauncherIcon(context, on)",
+                    "AppVisibilityStore.setHideRecents(context, on)");
+            check(tap88.contains("if (!ok && on)") && tap88.contains("hideLauncher = false"),
+                    "T-89-A5 开关失败时两个状态一起回退 + 提示（不显示假「已隐藏」）", "");
+            check(set88.contains("final boolean old = isHideLauncherIcon(c)")
+                            && set88.contains("putBoolean(K_HIDE_LAUNCHER_ICON, old)"),
+                    "T-89-A6 失败回滚到真实旧值（不再用 !hide，幂等重放不会把开关翻反）", "");
+        }
+
+        // ---------- T-90 v3.2.25 感谢名单新增 @不羁 ----------
+        System.out.println();
+        System.out.println("== T-90 感谢名单 ==");
+        {
+            String main90 = read(dir.resolve("MainActivity.kt"));
+            check(main90.contains("Thanks(\"酷安@不羁\", \"羁\", \"资金支持\")"),
+                    "T-90-A1 感谢名单新增「酷安@不羁 · 资金支持」", "");
+            String table90 = slice(main90, "private val THANKS = listOf(", "private const val PROJECT_URL");
+            check(!table90.contains("元") && !table90.contains("¥") && !table90.contains("￥"),
+                    "T-90-A2 名单只记昵称与贡献，不出现金额", "");
+            check(main90.contains("THANKS.size"),
+                    "T-90-A3 二级菜单的人数由 THANKS.size 自动算（加人不改文案）", "");
+        }
+
+        // ---------- T-91 v3.2.26 覆盖安装后真正热重载（不再只打日志） ----------
+        System.out.println();
+        System.out.println("== T-91 API 102 热重载落地 ==");
+        {
+            String prop = read(dir.resolve("../../../../../resources/META-INF/xposed/module.prop").normalize());
+            check(prop.trim().endsWith("autoHotReload=true") || prop.contains("autoHotReload=true"),
+                    "T-91-A1 module.prop 声明 autoHotReload=true（缺这条覆盖安装不会自动热重载）", prop);
+
+            String e91 = read(dir.resolve("LibXposedEntry.java"));
+            String loading = slice(e91, "public boolean onHotReloading(", "public void onHotReloaded(");
+            check(loading.contains("return true;"),
+                    "T-91-A2 onHotReloading 返回 true（默认 false = 取消热重载）", loading);
+            check(loading.contains("setSavedInstanceState("),
+                    "T-91-A3 onHotReloading 把宿主 Application 跨代传下去", "");
+
+            String reloaded = slice(e91, "public void onHotReloaded(", "private void noteHotReload(");
+            check(reloaded.contains("getOldHookHandles()") && reloaded.contains(".unhook()"),
+                    "T-91-A4 onHotReloaded 撤掉上一代全部 HookHandle（避免两代同时生效）", "");
+            check(reloaded.contains("AppContextHolder.capture("),
+                    "T-91-A5 用保存的 Application 重建上下文（不靠构造器 Hook 重抓）", "");
+            check(reloaded.contains("new XposedInit().handleLoadPackage(lp)"),
+                    "T-91-A6 重新向业务引擎派发（框架不会重放 onPackageReady）", "");
+            check(reloaded.contains("app.getClassLoader()"),
+                    "T-91-A7 用宿主类加载器组装 LoadPackageParam", "");
+
+            String note91 = slice(e91, "private void noteHotReload(", "hot reload noted to app");
+            check(note91.contains("METHOD_PUT_RELOAD"),
+                    "T-91-A8 热重载成功后向 App 写标记（橙卡据此自动消失）", "");
+
+            String hookCon = read(dir.resolve("ConfigProvider.java"));
+            check(hookCon.contains("METHOD_PUT_RELOAD") && hookCon.contains("KEY_RELOAD_AT")
+                            && hookCon.contains("putLong(KEY_RELOAD_AT"),
+                    "T-91-A9 provider 提供热重载记账通道并落盘 prefs", "");
+
+            String st91 = read(dir.resolve("HookState.java"));
+            check(st91.contains("public static int decide(long apkUpdateMs, long procStartMs, long reloadMs)")
+                            && st91.contains("Math.max(procStartMs, reloadMs)"),
+                    "T-91-B1 decide 三参：生效时刻 = max(进程启动, 热重载时刻)", "");
+            check(st91.contains("decide(s.apkUpdateMs, s.procStartMs, s.hotReloadMs)"),
+                    "T-91-B2 probe 使用三参判定（热重载后不再误报 STALE）", "");
+            check(st91.contains("reloadAt(") && st91.contains("sLastReload"),
+                    "T-91-B3 热重载时间变化时立刻作废 30 秒缓存", "");
+
+            String ui91 = read(dir.resolve("MainActivity.kt"));
+            check(ui91.contains("首次安装需要重启一次系统界面") && ui91.contains("不会再要求你重启系统界面"),
+                    "T-91-C1 文案改为「仅首次安装要重启，之后自动换代码」", "");
+        }
+
+        // ---------- T-92 v3.2.27 热重载退役（不做退役会留下双引擎） ----------
+        System.out.println();
+        System.out.println("== T-92 热重载退役总闸 ==");
+        {
+            String hrGuard = read(dir.resolve("HotReloadGuard.java"));
+            String[] must = {"Controller.shutdownForReload()", "DouyinHook.shutdownForReload()",
+                    "SysOverlay.release()", "PixelShift.shutdown()", "Config.stopForReload()",
+                    "LivePause.stopForReload()", "XposedInit.stopForReload()"};
+            int hit = 0;
+            for (String m : must) {
+                if (hrGuard.contains(m)) {
+                    hit++;
+                }
+            }
+            check(hit == must.length,
+                    "T-92-A1 退役总闸覆盖 7 处长生命周期资源（Controller/Douyin/浮层/微移/配置/直播/日志）",
+                    "hit=" + hit + "/" + must.length);
+
+            String entry92 = read(dir.resolve("LibXposedEntry.java"));
+            String loading92 = slice(entry92, "public boolean onHotReloading(", "public void onHotReloaded(");
+            int guardAt = loading92.indexOf("HotReloadGuard.shutdown()");
+            int saveAt = loading92.indexOf("setSavedInstanceState(");
+            int rejectAt = loading92.indexOf("return false;");
+            check(guardAt >= 0 && saveAt >= 0 && saveAt < guardAt && rejectAt > 0,
+                    "T-92-A2 先验证可交接（保存 Application）再退役；不可交接直接取消重载", "");
+
+            String ctrl92 = read(dir.resolve("Controller.java"));
+            check(ctrl92.contains("private static volatile boolean retired = false;")
+                            && ctrl92.contains("static void shutdownForReload()")
+                            && ctrl92.contains("handler.removeCallbacksAndMessages(null)")
+                            && ctrl92.contains("restoreStatusChildren()"),
+                    "T-92-B1 Controller 退役：置位 + 撤周期任务 + 还原状态栏子视图", "");
+            String tick92 = slice(ctrl92, "private static void tick() {", "\n    }");
+            check(tick92.contains("if (retired)"),
+                    "T-92-B2 tick 入口对退役标记早退（防止正在跑的一轮又把循环排回来）", "");
+
+            String dy92 = read(dir.resolve("DouyinHook.java"));
+            check(dy92.contains("static void shutdownForReload()")
+                            && dy92.contains("removeOnGlobalLayoutListener(glListener)")
+                            && dy92.contains("((ViewGroup) ballView.getParent()).removeView(ballView)")
+                            && dy92.contains("releaseAll(rightList, null)")
+                            && dy92.contains("releaseAll(dramaTargetList, null)"),
+                    "T-92-B3 视频侧退役：撤监听 / 摘悬浮球 / 还原全部隐藏控件", "");
+
+            String cfg92 = read(dir.resolve("Config.java"));
+            check(cfg92.contains("while (!fetcherStop)") && cfg92.contains("stopForReload()"),
+                    "T-92-C1 配置预取线程可停（否则每代泄漏一条旧类加载器线程）", "");
+            String xi92 = read(dir.resolve("XposedInit.java"));
+            check(xi92.contains("LOG_WRITER.shutdownNow()"),
+                    "T-92-C2 日志写线程可停", "");
+        }
+
+        // ---------- T-93 v3.2.28 模块自换代码（覆盖安装不再重启系统界面） ----------
+        System.out.println();
+        System.out.println("== T-93 自换代码（SelfReload） ==");
+        {
+            String sr = read(dir.resolve("SelfReload.java"));
+            check(sr.contains("new DexClassLoader(loadPath") && sr.contains("XposedModule.class.getClassLoader()"),
+                    "T-93-A1 新代码从新 APK 载入，父加载器用框架加载器（不在 loader 链上套娃）", "");
+            check(sr.contains("Class.forName(ENTRY, true, child)"),
+                    "T-93-A2 先预检能载入 SelfEntry，再动旧代（避免退役后装不上）", "");
+            check(sr.contains("stageApk(ctx)") && sr.contains("METHOD_GET_APK")
+                            && sr.contains("ParcelFileDescriptor"),
+                    "T-93-A2b 读不到模块 APK 时经 provider 只读 FD 拷贝再载（SELinux 兜底）", "");
+            String reload = slice(sr, "private static void reload(", "private static String dexDir(");
+            check(reload.indexOf("XposedBridge.unhookAll()") > 0
+                            && reload.indexOf("HotReloadGuard.shutdown()") > reload.indexOf("XposedBridge.unhookAll()")
+                            && reload.indexOf("install\", XposedModule.class") > reload.indexOf("Class.forName("),
+                    "T-93-A3 顺序：撤钩 → 退役 → 装新代", "");
+            check(reload.contains("if (!Boolean.TRUE.equals(ok))")
+                            && sr.contains("genApkTime = apkTime;")
+                            && sr.contains("CHECK_MS = 20_000L"),
+                    "T-93-A4 安装失败不记账、20 秒自动重试", "");
+            check(sr.contains("pi.lastUpdateTime") && sr.contains("needsReload(")
+                            && sr.contains("frameworkReloadAt") && sr.contains("genApkPath"),
+                    "T-93-A5 按 lastUpdateTime + APK 路径判断更新，并与框架热重载互斥", "");
+
+            String se = read(dir.resolve("SelfEntry.java"));
+            check(se.contains("XposedBridge.bind(module)") && se.contains("AppContextHolder.capture(app)")
+                            && se.contains("new XposedInit().handleLoadPackage(lp)")
+                            && se.contains("public static boolean install("),
+                    "T-93-B1 新代入口：绑定 + 接管 Application + 重派发 + 返回成败", "");
+
+            String xb = read(dir.resolve("compat/XposedBridge.java"));
+            check(xb.contains("HANDLES") && xb.contains("public static int unhookAll()")
+                            && xb.contains("public static void registerHandle("),
+                    "T-93-B2 兼容壳记录全部 HookHandle（含 Application 抓取钩子），可整体撤销", "");
+
+            String hk = read(dir.resolve("HookState.java"));
+            check(hk.contains("firstInstallStale()") && hk.contains("everRan") && hk.contains("seenAt("),
+                    "T-93-C1 只有「从没跑过」才算首次安装", "");
+            String ui93 = read(dir.resolve("MainActivity.kt"));
+            check(ui93.contains("hook.firstInstallStale()") && ui93.contains("h.firstInstallStale()"),
+                    "T-93-C2 两处重启提示都只对首次安装显示", "");
+            check(ui93.contains("首次安装需要重启一次系统界面"),
+                    "T-93-C3 文案如实说明：仅首次安装要重启", "");
+
+            String xi93 = read(dir.resolve("XposedInit.java"));
+            check(xi93.contains("SelfReload.arm(XposedBridge.currentModule())")
+                            && xi93.contains("QUEUED.decrementAndGet();")
+                            && xi93.contains("执行器已被退役"),
+                    "T-93-D1 SystemUI 注入即记基线；日志写入器退役后不抛异常", "");
         }
 
         System.out.println();

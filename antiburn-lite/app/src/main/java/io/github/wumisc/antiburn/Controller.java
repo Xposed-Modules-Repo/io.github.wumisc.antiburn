@@ -23,9 +23,9 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Random;
 
-import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedHelpers;
-import de.robv.android.xposed.callbacks.XC_LoadPackage;
+import io.github.wumisc.antiburn.compat.XC_MethodHook;
+import io.github.wumisc.antiburn.compat.XposedHelpers;
+import io.github.wumisc.antiburn.compat.callbacks.XC_LoadPackage;
 
 /**
  * 核心控制器：
@@ -48,6 +48,8 @@ public final class Controller {
     private static final Handler handler = new Handler(Looper.getMainLooper());
     private static boolean hidden = false;
     private static boolean started = false;
+    /** 热重载退役标记：一旦置位，本轮 tick 与重排全部退出，绝不再抢新一代的活。 */
+    private static volatile boolean retired = false;
     private static long lastWlDiag = 0; // 白名单诊断日志节流
     /** v2.7.5：上一轮诊断签名。只有状态真的变了才立刻写一条，其余走 30 秒心跳。 */
     private static volatile String lastDiagSig = "";
@@ -73,6 +75,7 @@ public final class Controller {
     }
 
     static void init(XC_LoadPackage.LoadPackageParam lpparam) {
+        retired = false;
         ClassLoader cl = lpparam.classLoader;
         // v2.7.6：识别 ColorOS / 其它可能移除 StatusBarWindowView 的 ROM，
         // 便于日志里直接确认「是不是走了全局扫描兜底」。
@@ -298,6 +301,13 @@ public final class Controller {
                 }
             }
         }, 5000);
+
+        // v3.2.7：焦点通知 / 超级岛联动入口。装不上只影响联动，不影响主周期。
+        try {
+            IslandWatch.init(cl);
+        } catch (Throwable t) {
+            hookFail("IslandWatch.init", t);
+        }
     }
 
     /**
@@ -803,6 +813,9 @@ public final class Controller {
 
     /** 唯一周期调度入口，避免多路径重复排队。 */
     private static void scheduleCycle(long delayMs) {
+        if (retired) {
+            return;
+        }
         cycleScheduled = true;
         handler.postDelayed(cycleRunnable, delayMs);
     }
@@ -819,6 +832,9 @@ public final class Controller {
             } finally {
                 // v2.7.3 核心修复：SystemUI 侧同样不能让一次异常停掉整个周期，
                 // 否则状态栏 / 导航栏的隐藏与像素微移会永久静止。
+                if (retired) {
+                    return;
+                }
                 if (!cycleScheduled && handler != null) {
                     scheduleCycle(2000);
                 }
@@ -956,6 +972,20 @@ public final class Controller {
     }
 
     private static void tick() {
+        if (retired) {
+            return;
+        }
+        try {
+            // 覆盖安装后即使管理器不给热重载，也由模块自己把新代码换进来（20s 节流）。
+            SelfReload.check();
+        } catch (Throwable ignored) {
+        }
+        // v3.2.30：SelfReload 换代码成功后，本代已在 reload() 里被 HotReloadGuard 退役。
+        // 旧版这里不复查 retired，会带着旧 View 引用继续跑完这一轮（恢复/隐藏各一次），
+        // 与刚装好的新一代抢同一批控件 —— 真机表现就是换代码瞬间状态栏抽一下。
+        if (retired) {
+            return;
+        }
         checkViewsAlive();
         // 拿到宿主 Context 才能经 ConfigProvider 跨进程读配置（SELinux 挡住直接读 /data/local/tmp）
         View ctxView = statusView != null ? statusView : navView;
@@ -1073,6 +1103,9 @@ public final class Controller {
         // 统一周期相位：与抖音/红果（DouyinHook）共用「系统单调时钟对周期取模」判断此刻该隐藏还是显示，
         // 并在同一相位边界切换——状态栏/导航栏/抖音/红果四者完全同步，不再"这个隐藏完了那个才显示"。
         long now = SystemClock.elapsedRealtime();
+        // v3.2.8：本轮歌词命中先清零，隐藏相位里由 isLyricView 重新置位
+        lyricSeen = false;
+        lyricOwner = "";
         long hideMs = Math.max(1, Config.hideSec) * 1000L;
         long showMs = Math.max(1, Config.showSec) * 1000L;
         long pos = now % (hideMs + showMs);
@@ -1083,21 +1116,41 @@ public final class Controller {
         boolean cfgChanged = lastStatusBarSwitch != Config.enableStatusBar
                 || lastNavSwitch != Config.enableNav;
 
+        // v3.2.7：超级岛 / 焦点通知联动。岛在屏幕上的这段时间里，即使处在「显示相位」，
+        // 也只把状态栏静态元素（时钟 / 信号 / 电量）透明掉，导航栏保持不动。
+        //
+        // 为什么不是 applyHide()：那个会把导航栏一起藏，岛悬浮在顶部时底部导航栏消失
+        // 属于误伤；而且岛本身是 SystemUI 里的独立窗口，不在这条透明化链路里。
+        boolean islandNow = islandActive(now);
         if (shouldHide) {
+            islandHid = false;
             if (!hidden || cfgChanged) {
                 applyHide();
                 hidden = true;
+            }
+        } else if (islandNow) {
+            if (!islandHid || cfgChanged) {
+                if (Config.enableStatusBar) {
+                    hideStatusKeepNotify();
+                }
+                islandHid = true;
             }
         } else {
             if (hidden) {
                 applyShow();
                 hidden = false;
+            } else if (islandHid) {
+                // 岛消失、且当前本来就是显示相位 → 把静态图标点亮
+                applyShow();
+                islandHid = false;
             }
         }
         // v2.8.3：应用内区域覆盖层与系统栏共用同一相位。
         // 真机日志证明视频 App 进程零注入、无障碍零连接，这条是那些设备上
         // 唯一可用的 App 内防护通道：SystemUI 自己 addView，盖在 App 之上。
         updateOverlay(top, shouldHide);
+        // v3.2.8：歌词命中日志（60 秒去抖）。放在相位块之后，岛分支与隐藏相位都能记到
+        lyricDiag(now);
         // 像素偏移（与 AOSP BurnInProtectionController 同思路）：把状态栏 item 缓慢平移 1~2px，
         // 视觉几乎无感，但轮廓边缘不再固定压在同一批像素上。与「隐藏」互补 ——
         // 隐藏减少点亮时间，偏移分摊轮廓，两者叠加才接近厂商级防护。
@@ -1178,6 +1231,209 @@ public final class Controller {
     private static boolean lastStatusBarSwitch = true;
     private static boolean lastNavSwitch = false;
 
+    /**
+     * v3.2.7：超级岛 / 焦点通知的保持窗口。
+     *
+     * <p>岛本身没有「关闭」回调可信（HyperIsland 更新同一通知、原生岛也会反复刷新），
+     * 所以用「最后一次看到焦点通知 + 10 秒」的滑动窗口：岛在更新就一直续期，
+     * 停止更新 10 秒后按当前相位恢复。比 hook onNotificationRemoved 更稳 ——
+     * 后者在「同一 id 反复更新」「岛被折叠」时容易提前结束。</p>
+     */
+    private static final long ISLAND_HOLD_MS = 10_000L;
+    private static volatile long islandUntil = 0L;
+    /** 岛期间是否已把状态栏静态元素遮掉。与 hidden 互斥：岛只管状态栏，导航栏不参与。 */
+    private static boolean islandHid = false;
+    /** ISLAND 日志 60 秒一条，避免岛每次刷新都写盘。 */
+    private static long lastIslandDiag = 0L;
+
+    /**
+     * v3.2.7：SystemUI 收到焦点通知（超级岛）时由 {@link IslandWatch} 调用。
+     *
+     * <p>只做两件事：续期窗口 + 立刻插一帧。具体遮/放由 {@link #tick()} 里的
+     * {@code islandActive()} 分支决定 —— 岛在显示相位里也只遮状态栏静态图标，
+     * 导航栏照常，岛窗口本身是独立视图，不会被这条链路误伤。</p>
+     */
+    static void onIslandDetected(String pkg) {
+        try {
+            if (!Config.enableIslandLink) {
+                return;
+            }
+            long now = SystemClock.elapsedRealtime();
+            islandUntil = Math.max(islandUntil, now + ISLAND_HOLD_MS);
+            if (now - lastIslandDiag >= 60_000L) {
+                lastIslandDiag = now;
+                XposedInit.diag("ISLAND focus pkg=" + pkg
+                        + " hold=" + (ISLAND_HOLD_MS / 1000L) + "s");
+            }
+            // 岛已经在屏幕上了，不能等下一轮 3 秒 tick
+            handler.removeCallbacks(cycleRunnable);
+            scheduleCycle(0);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** 岛窗口是否仍然有效（开关关掉时永远 false，等价于没有这个功能）。 */
+    private static boolean islandActive(long now) {
+        return Config.enableIslandLink && islandUntil > now;
+    }
+
+    /**
+     * v3.2.8：系统级歌词联动（HyperLyric / SuperLyric）。
+     *
+     * <p>HyperLyric 的包名是 {@code com.lidesheng.hyperlyric}（app/build.gradle.kts 的
+     * namespace，v7.11 / vc1944）：Xposed 侧的类在 SystemUI 进程里加载，类名保留原包名；
+     * SuperLyric 同理。Lyricon 只是歌词数据源、自己不画视图，不需要列。</p>
+     *
+     * <p>联动语义只有一条 —— **歌词视图不参与隐藏**：状态栏歌词落在 statusView 子树里时，
+     * 逐叶透明 / 除通知外全透明 / 整层兜底三条路径都会把它一起抹掉，用户看到的是
+     * 「防烧屏把歌词也藏了」。这里把整棵歌词子树跳过，其余静态图标照常隐藏，
+     * 防烧屏与歌词共存。超级岛歌词走焦点通知，由 {@link IslandWatch} 那条链路负责。</p>
+     */
+    private static final String[] LYRIC_PKGS = {
+            "com.lidesheng.hyperlyric", "com.hchen.superlyric", "com.limczhh."
+    };
+    /** 本轮隐藏相位里是否遇到歌词视图（写进 SYS 行的 ly=，便于用户抓 log 核对）。 */
+    private static boolean lyricSeen = false;
+    /** 本轮命中的歌词归属（包名或视图/资源名），日志用。 */
+    private static String lyricOwner = "";
+    /** LYRIC 日志 60 秒一条，避免每轮写盘。 */
+    private static long lastLyricDiag = 0L;
+
+    /**
+     * 这个视图是不是系统级歌词注入的？
+     *
+     * <p>两条判据，宁可漏判也不误伤：</p>
+     * <ol>
+     * <li>类全名以歌词模块包名开头 → 一定是（最准，HyperLyric 自带 view 都在这个包下）；</li>
+     * <li>类名/资源名含 lyric 且类全名不属于 SystemUI / MIUI / android 系统包 →
+     *     其他歌词模块（SuperLyric 改包名、第三方注入）也能覆盖。</li>
+     * </ol>
+     * 开关关掉时恒 false —— 等价于 v3.2.7 的旧行为。
+     */
+    private static boolean isLyricView(View v) {
+        if (v == null || !Config.enableLyricLink) {
+            return false;
+        }
+        try {
+            String cn = v.getClass().getName();
+            for (int i = 0; i < LYRIC_PKGS.length; i++) {
+                if (cn.startsWith(LYRIC_PKGS[i])) {
+                    markLyric(LYRIC_PKGS[i]);
+                    return true;
+                }
+            }
+            // v3.2.9：HyperLyric 状态栏歌词宿主（MaxWidthFrameLayout → LinearLayout → RichLyricLineView）
+            // 全在它自己的包名下，上面已命中。但它的封面 ImageView / 容器可能是系统类
+            // （android.widget.ImageView / LinearLayout），包名判据够不到 ——
+            // 用「父链上是否有歌词模块视图」兜：有就整支保留。
+            if (parentIsLyric(v, 0)) {
+                markLyric("parent:hyperlyric");
+                return true;
+            }
+            if (cn.startsWith("com.android.systemui") || cn.startsWith("com.miui")
+                    || cn.startsWith("miui.") || cn.startsWith("android.")) {
+                return false;   // 系统自身的 *Lyric* 装饰不豁免
+            }
+            String sn = v.getClass().getSimpleName();
+            if (sn != null && sn.toLowerCase(java.util.Locale.ROOT).contains("lyric")) {
+                markLyric("view:" + cn);
+                return true;
+            }
+            if (idName(v).contains("lyric")) {
+                markLyric("res:" + idName(v));
+                return true;
+            }
+        } catch (Throwable ignored) {
+        }
+        return false;
+    }
+
+    /** 资源名归一（小写）；拿不到返回空串。 */
+    private static String idName(View v) {
+        try {
+            if (v.getId() == 0) {
+                return "";
+            }
+            return v.getResources().getResourceName(v.getId())
+                    .toLowerCase(java.util.Locale.ROOT);
+        } catch (Throwable ignored) {
+            return "";
+        }
+    }
+
+    /**
+     * v3.2.9：父链（最多 4 层）上是否有歌词模块的视图。
+     *
+     * <p>HyperLyric 的歌词宿主是 {@code MaxWidthFrameLayout}（它自己的类）→ 系统类
+     * {@code LinearLayout} → 系统类 {@code ImageView}（封面）+ {@code RichLyricLineView}。
+     * 包名判据能认出容器和歌词，认不出系统类的封面；用父链反查补齐。</p>
+     */
+    private static boolean parentIsLyric(View v, int depth) {
+        if (v == null || depth > 4) {
+            return false;
+        }
+        try {
+            android.view.ViewParent p = v.getParent();
+            if (!(p instanceof View)) {
+                return false;
+            }
+            String cn = p.getClass().getName();
+            for (int i = 0; i < LYRIC_PKGS.length; i++) {
+                if (cn.startsWith(LYRIC_PKGS[i])) {
+                    return true;
+                }
+            }
+            return parentIsLyric((View) p, depth + 1);
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    private static void markLyric(String owner) {
+        lyricSeen = true;
+        if (lyricOwner.isEmpty()) {
+            lyricOwner = owner;
+        }
+    }
+
+    /** 整栏里是否存在歌词视图（整层透明 f4 的前置否决条件）。 */
+    private static boolean hasLyricView(android.view.ViewGroup g, int depth) {
+        if (g == null || depth > HEADS_UP_SCAN_MAX_DEPTH) {
+            return false;
+        }
+        for (int i = 0; i < g.getChildCount(); i++) {
+            View c = g.getChildAt(i);
+            if (c == null || c.getVisibility() != View.VISIBLE) {
+                continue;
+            }
+            if (isLyricView(c)) {
+                return true;
+            }
+            if (c instanceof android.view.ViewGroup) {
+                android.view.ViewGroup cg = (android.view.ViewGroup) c;
+                if (cg.getChildCount() > 0 && hasLyricView(cg, depth + 1)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** 歌词命中日志（60 秒去抖）；没有命中就把归属清空。 */
+    private static void lyricDiag(long now) {
+        if (!lyricSeen) {
+            lyricOwner = "";
+            return;
+        }
+        if (!Config.enableLyricLink) {
+            return;
+        }
+        if (now - lastLyricDiag >= 60_000L) {
+            lastLyricDiag = now;
+            XposedInit.diag("LYRIC 跳过歌词视图 owner=" + lyricOwner + "（静态图标照常隐藏）");
+        }
+    }
+
 
 
     /**
@@ -1202,6 +1458,7 @@ public final class Controller {
         return " hid=" + hidden + " cyc=" + Config.hideSec + "/" + Config.showSec
                 + " sv=" + s + " nv=" + n + " dim=" + dimmed.size()
                 + " zone=" + lastZone
+                + " ly=" + (!Config.enableLyricLink ? "off" : (lyricSeen ? "1" : "0"))
                 + " svok=" + isPlausibleStatusBar(statusView);
     }
 
@@ -1228,11 +1485,11 @@ public final class Controller {
         if (navView != null) {
             if (Config.enableNav) {
                 if (navView.getVisibility() != View.GONE && navView.getAlpha() != 0f) {
-                    navView.setAlpha(0f);
+                    setAlphaSafe(navView, 0f);
                     Log.i(TAG, "nav transparent");
                 }
             } else if (navView.getAlpha() != 1f) {
-                navView.setAlpha(1f);
+                setAlphaSafe(navView, 1f);
                 Log.i(TAG, "nav shown (switch off)");
             }
         }
@@ -1248,7 +1505,7 @@ public final class Controller {
         }
         // P-1（R1）：绝不整窗透明。S2：先把旧版残留的整窗透明恢复（这是"恢复"非"隐藏"）。
         if (sv.getAlpha() != 1f) {
-            sv.setAlpha(1f);
+            setAlphaSafe(sv, 1f);
         }
         if (!Config.statusClockOn && !Config.statusIconsOn) {
             return;      // v3.0.20：时间与图标都关 → 整条栏保持不动
@@ -1304,6 +1561,14 @@ public final class Controller {
     private static int lastZoneH = 0;
     /** v3.0.36：最近一次几何分区「实际遮掉的横向像素宽度」，用于判定命中是否真的有效 */
     private static int lastDimW = 0;
+    /**
+     * v3.2.9：本轮降级链里是否已遮住「关键节点」（时钟 / 电池 / 信号 / wifi）。
+     *
+     * <p>真机日志（HyperOS，w1280）里 f2 已经遮了 19 个节点、通知图标还在，
+     * 但因为宽度判据失败又上了第 4 级整层透明，通知图标跟着一起没了。
+     * 只要 f0/f2 阶段确实遮到关键节点，就不该再上整层 —— 这条是 f4 的否决项。</p>
+     */
+    private static boolean lastKeyHit = false;
 
     private static int dimByZone(android.view.ViewGroup root) {
         int w = root.getWidth();
@@ -1312,10 +1577,19 @@ public final class Controller {
         }
         lastZoneH = 0;
         lastDimW = 0;
+        lastKeyHit = false;
         int n = dimLeaves(root, 0, w, 0,
                 (int) (w * 0.34f), (int) (w * 0.62f), w);
         lastZone = "w" + w + "/n" + n + "/h" + lastZoneH + "/aw" + lastDimW;
         return n;
+    }
+
+    /** 关键静态图标：时钟 / 电池 / 信号 / 网络。类名与 hideKnownStaticIconsOnly 同一套词表。 */
+    private static boolean isKeyStaticIcon(View v) {
+        String n = v.getClass().getSimpleName();
+        return n.contains("Clock") || n.contains("Signal") || n.contains("Battery")
+                || n.contains("Wifi") || n.contains("Network") || n.contains("Mobile")
+                || n.contains("Carrier") || n.contains("Operator");
     }
 
     private static int dimLeaves(View v, int left, int right, int depth,
@@ -1324,6 +1598,10 @@ public final class Controller {
             return 0;
         }
         if (v.getVisibility() != View.VISIBLE || v.getAlpha() <= 0.01f) {
+            return 0;
+        }
+        // v3.2.8：歌词视图整棵跳过 —— 逐叶透明会把 HyperLyric 的状态栏歌词一起抹掉
+        if (isLyricView(v)) {
             return 0;
         }
         // v3.2.1：无子 ViewGroup（ComposeView / 自绘容器）当叶子处理。
@@ -1359,13 +1637,19 @@ public final class Controller {
                 return 0;      // 该侧开关关掉：保留
             }
             setAlphaTracked(v, 0f, true);
+            if (isKeyStaticIcon(v)) {
+                lastKeyHit = true;   // v3.2.9：关键节点（时钟/电池/信号）已遮
+            }
             // v3.0.36：记下实际遮掉的横向像素宽度。判定成败要靠「盖住多宽」，
             // 不能靠「遮了几个」——一个占满整条的时钟只算 1 个，两个装饰小球算 2 个。
             // v3.2：真机日志里 aw 恒为 0（叠算出来的 right-left 在某些 ROM 上是 0），
             // 导致「宽度够不够」永远判失败、每轮都多跑一遍兜底。这里用 View 自身宽度兜底。
-            int aw = right - left;
+            // v3.2.9：反过来了 —— 先取 View 自身宽度，right-left 只在宽度不可信时兜底。
+            // 真机日志（HyperOS，w1280）里 aw 恒 0 正是「两个值都是 0」，优先 getWidth()
+            // 才拿得到真实宽度；否则 f2 遮了 19 个节点仍判「不够宽」，硬走整层兜底。
+            int aw = v.getWidth();
             if (aw <= 0) {
-                aw = v.getWidth();
+                aw = right - left;
             }
             lastDimW += Math.max(0, aw);
             return 1;
@@ -1389,6 +1673,9 @@ public final class Controller {
             if (c == null || c.getVisibility() == View.GONE) {
                 continue;
             }
+            if (isLyricView(c)) {
+                continue;          // v3.2.8：歌词视图整棵保留
+            }
             if (c instanceof android.view.ViewGroup
                     && ((android.view.ViewGroup) c).getChildCount() > 0) {
                 if (isHeadsUpBanner(c) && isHeadsUpVisible(c)) {
@@ -1403,6 +1690,9 @@ public final class Controller {
                 }
                 if (!sideAllowed((c.getLeft() + c.getRight()) / 2, w)) {
                     continue;          // v3.0.20：该侧开关关掉 → 保留
+                }
+                if (isKeyStaticIcon(c)) {
+                    lastKeyHit = true;  // v3.2.9：f2 已遮到关键节点
                 }
                 setAlphaTracked(c, 0f, true);
                 n++;
@@ -1419,6 +1709,9 @@ public final class Controller {
             if (c == null || c.getVisibility() == View.GONE) {
                 continue;
             }
+            if (isLyricView(c)) {
+                continue;          // v3.2.8：歌词视图整棵保留
+            }
             int cl = left + c.getLeft();
             int cr = left + c.getRight();
             if (c instanceof android.view.ViewGroup
@@ -1434,6 +1727,9 @@ public final class Controller {
                 }
                 if (!sideAllowed((cl + cr) / 2, w)) {
                     continue;
+                }
+                if (isKeyStaticIcon(c)) {
+                    lastKeyHit = true;  // v3.2.9：f2 已遮到关键节点
                 }
                 setAlphaTracked(c, 0f, true);
                 n++;
@@ -1500,6 +1796,9 @@ public final class Controller {
             if (c == null || c.getVisibility() == View.GONE) {
                 continue;
             }
+            if (isLyricView(c)) {
+                continue;          // v3.2.8：歌词视图整棵保留
+            }
             if (isHeadsUpBanner(c) && isHeadsUpVisible(c)) {
                 continue;
             }
@@ -1525,6 +1824,9 @@ public final class Controller {
             View c = g.getChildAt(i);
             if (c == null || c.getVisibility() == View.GONE) {
                 continue;
+            }
+            if (isLyricView(c)) {
+                continue;          // v3.2.8：歌词视图整棵保留
             }
             int cl = left + c.getLeft();
             int cr = left + c.getRight();
@@ -1573,13 +1875,26 @@ public final class Controller {
         if (z >= 2 && w > 0 && lastDimW >= w * 0.55f) {
             return z;
         }
+        // v3.2.9：几何阶段是否已遮到关键节点，先留一份快照（f2 会继续累加 lastKeyHit）
+        boolean keyZone = lastKeyHit;
         z = dimAllExceptNotify(svg);
         lastZone += "/f2=" + z;
+        boolean keyNotify = lastKeyHit;
         if (z < 2) {
             z = dimAllExceptBanner(svg);
             lastZone += "/f3=" + z;
         }
         hideKnownStaticIconsOnly(sv, 0);
+        // v3.2.9：f4 否决项 —— f0/f2 只要确实遮到时钟/电池/信号，就到此为止。
+        //
+        // 真机（HyperOS，w1280）的 zone=w1280/n1/h0/aw0/f2=19/f4=1 就是反例：
+        // f2 已经遮了 19 个节点、通知图标还在，宽度判据却因 aw=0 失败，于是又走整层
+        // 透明，把通知图标一起抹掉 —— 与「通知绝不误伤」冲突。现在有这条守卫，
+        // HyperOS 停在 f2（通知保留），Pixel 上关键节点没命中时 f4 照旧兜底。
+        if (z >= 2 && (keyZone || keyNotify)) {
+            lastZone += "/f4key";
+            return z;
+        }
         // v3.2.1：上面几段都只作用在「能遍历到的节点」上。AOSP 16 的时钟与系统图标
         // 若由 Compose 直接绘制（无子 View），或 alpha 被 SystemUI 每帧重置，
         // 全部落空 —— 真机 v3.0.27 的 dim=3 / zone=w1080/n1/h0/f2=3 正是这个现场。
@@ -1612,6 +1927,9 @@ public final class Controller {
     private static void hideKnownStaticIconsOnly(View v, int depth) {
         if (v == null || depth > ICON_SCAN_MAX_DEPTH) {
             return;
+        }
+        if (isLyricView(v)) {
+            return;                    // v3.2.8：歌词子树整支跳过
         }
         if (containsHeadsUp(v, 0)) {
             return;                    // 该子树含 heads-up → 整支跳过（祖先链保护）
@@ -1675,6 +1993,9 @@ public final class Controller {
                 if (c != notifyArea) {
                     dimAlong(path, idx + 1);
                 }
+            } else if (isLyricView(c)) {
+                // v3.2.8：歌词视图与横幅同级 —— 保持原样，不透明、不记账
+                setAlphaTracked(c, 1f, false);
             } else if (containsHeadsUp(c, 0)) {
                 // P-1（R2）：c 自身或子树含横幅 → 整支保持原样，不透明、不记账（INV-1）
                 setAlphaTracked(c, 1f, false);
@@ -1686,11 +2007,34 @@ public final class Controller {
 
     /** 改 alpha 并记账：只有我们改过的视图才会在恢复时被点亮。 */
     private static void setAlphaTracked(View v, float alpha, boolean track) {
-        if (v.getAlpha() != alpha) {
-            v.setAlpha(alpha);
-        }
+        setAlphaSafe(v, alpha);
         if (track && !dimmed.contains(v)) {
             dimmed.add(v);
+        }
+    }
+
+    /**
+     * v3.2.32：Vector 注入的 SystemUI 里，状态栏 {@code RegionInterceptingFrameLayout}
+     * 可能由非主线程创建；从主线程直接 {@code setAlpha()} 会触发
+     * {@code CalledFromWrongThreadException}（异常被 ViewRootImpl 吞掉，但隐藏不生效）。
+     * 有 AttachInfo 时走该 View 自己的 Handler，没有则仍直接改。
+     */
+    private static void setAlphaSafe(View v, float alpha) {
+        if (v == null || v.getAlpha() == alpha) {
+            return;
+        }
+        Handler h = v.getHandler();
+        if (h != null && h.getLooper() != Looper.myLooper()) {
+            h.post(() -> {
+                try {
+                    if (v.getAlpha() != alpha) {
+                        v.setAlpha(alpha);
+                    }
+                } catch (Throwable ignored) {
+                }
+            });
+        } else {
+            v.setAlpha(alpha);
         }
     }
 
@@ -1724,6 +2068,10 @@ public final class Controller {
         if (hasLiveHeadsUp(svg, 0)) {
             return false;
         }
+        if (hasLyricView(svg, 0)) {
+            // v3.2.8：整层透明必然把状态栏歌词一起抹掉 —— 宁可不遮也不误伤歌词
+            return false;
+        }
         if (sv.getAlpha() <= 0.01f) {
             return true;
         }
@@ -1755,8 +2103,9 @@ public final class Controller {
 
     private static void applyShow() {
         restoreStatusChildren();
+        islandHid = false;
         if (navView != null && navView.getAlpha() != 1f) {
-            navView.setAlpha(1f);
+            setAlphaSafe(navView, 1f);
             Log.i(TAG, "nav shown");
         }
     }
@@ -1784,14 +2133,14 @@ public final class Controller {
             View v = dimmed.get(i);
             try {
                 if (v != null && v.getAlpha() != 1f) {
-                    v.setAlpha(1f);
+                    setAlphaSafe(v, 1f);
                 }
             } catch (Throwable ignored) {
             }
         }
         dimmed.clear();
         if (statusView != null && statusView.getAlpha() != 1f) {
-            statusView.setAlpha(1f);
+            setAlphaSafe(statusView, 1f);
             Log.i(TAG, "status shown");
         }
     }
@@ -2048,4 +2397,47 @@ public final class Controller {
         String p = in.getComponent().getPackageName();
         return (p == null || p.isEmpty()) ? null : p;
     }
+
+    /**
+     * 热重载退役（旧一代代码里执行）。
+     *
+     * <p>框架只会 unhook 方法钩子，**不会**帮我们撤掉已经排进主线程 Looper 的
+     * 周期任务、也不会把已经 setAlpha(0) 的视图点亮 —— 不主动退役的话，
+     * 热重载后旧一代的循环继续跑、新一代又起一套，表现是日志翻倍、状态栏反复闪，
+     * 而且旧类加载器永远回收不掉。</p>
+     */
+    static void shutdownForReload() {
+        retired = true;
+        try {
+            handler.removeCallbacksAndMessages(null);
+        } catch (Throwable ignored) {
+        }
+        cycleScheduled = false;
+        try {
+            restoreStatusChildren();
+        } catch (Throwable ignored) {
+        }
+        try {
+            if (navView != null && navView.getAlpha() != 1f) {
+                setAlphaSafe(navView, 1f);
+            }
+        } catch (Throwable ignored) {
+        }
+        try {
+            PixelShift.shutdown();
+        } catch (Throwable ignored) {
+        }
+        try {
+            SysOverlay.release();
+        } catch (Throwable ignored) {
+        }
+        hidden = false;
+        islandHid = false;
+        started = false;
+        statusView = null;
+        navView = null;
+        notifyArea = null;
+        XposedInit.diag("HOTRELOAD retire SystemUI controller");
+    }
+
 }

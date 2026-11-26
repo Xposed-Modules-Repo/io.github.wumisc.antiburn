@@ -5,6 +5,7 @@ import android.app.ActivityManager
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -72,6 +73,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.PathParser
@@ -95,14 +98,14 @@ import androidx.lifecycle.LifecycleEventObserver
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import com.kyant.backdrop.catalog.components.LiquidBottomTab
 import com.kyant.backdrop.catalog.components.LiquidBottomTabs
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 /**
  * 设置页注入状态轮询间隔（v3.0.10 P2）：新鲜度以 24h 为粒度，15s 刷新对判定无实质影响。
@@ -133,6 +136,7 @@ private const val STATUS_REFRESH_MS = 15_000L
 private const val PAGE_HOME_ENGINE = "home-engine"
 private const val PAGE_HOME_INJECT = "home-inject"
 private const val PAGE_HOME_LIST = "home-list"
+private const val PAGE_HOME_ALL = "home-all"
 
 /**
  * 界面适配可选方案：六大厂商 + 原生（id 与 conf 里的 ui_style 一一对应）。
@@ -201,6 +205,10 @@ data class AbState(
     val enableAppOverlay: Boolean = true,
     /** v3.2.2：无障碍模式下通知弹出时顶部区让开（默认开）。 */
     val enableA11yYieldNotify: Boolean = true,
+    /** v3.2.7：超级岛 / 焦点通知联动（出现岛时隐藏状态栏静态图标，岛消失后恢复）。 */
+    val enableIslandLink: Boolean = true,
+    // v3.2.8：系统级歌词联动（HyperLyric / SuperLyric 的状态栏歌词不随静态图标一起隐藏）
+    val enableLyricLink: Boolean = true,
     /** v2.8.6：SystemUI 覆盖层同上，恒 false。 */
     val enableSysOverlay: Boolean = false,
     val enableDouyinTop: Boolean = false,
@@ -306,7 +314,9 @@ private val AbStateSaver = listSaver(
             // v3.0.20：索引 47/48，状态栏左右两侧独立开关。
             s.statusClockOn, s.statusIconsOn,
             // v3.2.2：索引 49，无障碍通知让开（旧存档缺项时 restore 取默认 true）
-            s.enableA11yYieldNotify,
+            s.enableA11yYieldNotify, s.enableIslandLink,
+            // v3.2.8：索引 51，系统级歌词联动
+            s.enableLyricLink,
         )
     },
     restore = { l: List<Any> ->
@@ -382,6 +392,8 @@ private val AbStateSaver = listSaver(
                 statusIconsOn = Bool(48, true),
                 // v3.2.2：无障碍通知让开，缺键按开（否则老用户升级后横幅继续被盖）
                 enableA11yYieldNotify = Bool(49, true),
+                enableIslandLink = Bool(50, true),
+                enableLyricLink = Bool(51, true),
             )
         }
     },
@@ -450,6 +462,8 @@ object AbConf {
             enableAppOverlay = b(map["enable_app_overlay"], true),
             // v3.2.2：缺键默认开
             enableA11yYieldNotify = b(map["enable_a11y_yield_notify"], true),
+            enableIslandLink = b(map["enable_island_link"], true),
+            enableLyricLink = b(map["enable_lyric_link"], true),
             enableSysOverlay = false,
             enableDouyinTop = b(map["enable_douyin_top"]),
             enableDouyinBottom = b(map["enable_douyin_bottom"]),
@@ -541,6 +555,8 @@ object AbConf {
         // AbState 默认 false、Saver 默认 false 三条路都是 false），所以这里恒写 0。
         lines["enable_app_overlay"] = if (s.enableAppOverlay) "1" else "0"
         lines["enable_a11y_yield_notify"] = if (s.enableA11yYieldNotify) "1" else "0"
+        lines["enable_island_link"] = if (s.enableIslandLink) "1" else "0"
+        lines["enable_lyric_link"] = if (s.enableLyricLink) "1" else "0"
         lines["enable_sys_overlay"] = if (s.enableSysOverlay) "1" else "0"
         lines["enable_douyin_top"] = if (s.enableDouyinTop) "1" else "0"
         lines["enable_douyin_bottom"] = if (s.enableDouyinBottom) "1" else "0"
@@ -626,6 +642,8 @@ object AbConf {
         putB("enable_log", old.enableLog, new.enableLog)
         putB("enable_app_overlay", old.enableAppOverlay, new.enableAppOverlay)
         putB("enable_a11y_yield_notify", old.enableA11yYieldNotify, new.enableA11yYieldNotify)
+        putB("enable_island_link", old.enableIslandLink, new.enableIslandLink)
+        putB("enable_lyric_link", old.enableLyricLink, new.enableLyricLink)
         putB("enable_sys_overlay", old.enableSysOverlay, new.enableSysOverlay)
         putB("enable_douyin_top", old.enableDouyinTop, new.enableDouyinTop)
         putB("enable_douyin_bottom", old.enableDouyinBottom, new.enableDouyinBottom)
@@ -710,12 +728,35 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         ConfStore.init(this)
+        // v3.2.7：升级即重建 —— 旧配置（含已废弃的键）与旧日志一律不带过来。
+        // v3.2.15：清空动作已前移到 AbApplication（装完不打开模块也能触发），这里只负责
+        // 复用同一入口（幂等）并把「已清空」这件事用一次性标记提示给用户。
+        run {
+            val meta = getSharedPreferences("antiburn_meta", MODE_PRIVATE)
+            val pendingToast = meta.getBoolean("cleared_pending", false)
+            if (pendingToast) {
+                meta.edit().putBoolean("cleared_pending", false).apply()
+                Toast.makeText(
+                    this,
+                    "v" + BuildConfig.VERSION_NAME + "：配置已保留，旧日志已清空",
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
+            Thread {
+                try { ConfStore.clearLogsIfUpgraded(this) } catch (t: Throwable) { }
+            }.start()
+        }
         setContent { BurnInProtectApp() }
         // v3.0.11 P2：冷启动时按 prefs 真值对本任务栈幂等生效（onResume 亦会再校正一次）。
         applyRecentsVisibility(this)
         // v3.0.24：常驻运行通知。在用户可见时启动前台服务才不受后台启动限制，
         // 所以放在这里而不是 Application；重复调用只改同一条通知。
         GuardService.ensure(this)
+        // v3.2.14：打开模块就把日志补到最新，不必再点「日志」按钮等 toast。
+        // 只补镜像里还没进公开日志的行，没新行时是一次空读；全程无提示。
+        Thread {
+            try { ConfStore.autoSyncLog() } catch (t: Throwable) { }
+        }.start()
         if (Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission("android.permission.POST_NOTIFICATIONS") !=
             android.content.pm.PackageManager.PERMISSION_GRANTED
@@ -781,7 +822,17 @@ private fun BurnInProtectApp() {
     // 二级菜单栈：null=主界面；thanks/donate/cycle 各是一个独立二级页。
     // 用 saveable 保存，旋转/深浅色切换后不会退回主页。
     var subPage by rememberSaveable { mutableStateOf<String?>(null) }
-    val openSub: (String) -> Unit = { subPage = it }
+    // v3.2.10：二级页里再进三级页（功能设置 → 注入状态/白名单/运行方式）时记住来路，
+    // 返回回到上一级而不是直接跳回首页。只有一层来路，够覆盖现有导航深度。
+    var subParent by rememberSaveable { mutableStateOf<String?>(null) }
+    val openSub: (String) -> Unit = {
+        if (subPage != null && subPage != it) subParent = subPage
+        subPage = it
+    }
+    val closeSub: () -> Unit = {
+        subPage = subParent
+        subParent = null
+    }
     val navMicroSec = 45
     // 旋转/深浅色切换后保留未落盘的改动
     var state by rememberSaveable(stateSaver = AbStateSaver) { mutableStateOf(AbState()) }
@@ -790,6 +841,8 @@ private fun BurnInProtectApp() {
     var rootOk by remember { mutableStateOf(false) }
     var saving by remember { mutableStateOf(false) }
     var restarting by remember { mutableStateOf(false) }
+    // v3.2.38：上传日志同意弹窗。首次同意后记住；未同意绝不发起上传。
+    var showUploadConsent by remember { mutableStateOf(false) }
     // 尚未落盘的最新状态；Activity onStop 时用它补一次
     var pendingSave by remember { mutableStateOf<AbState?>(null) }
     // v2.7.4：配置还没加载完时用户点过的改动，按「增量」记录。
@@ -1058,12 +1111,29 @@ private fun BurnInProtectApp() {
         }
     }
 
+    fun doUpload() {
+        scope.launch {
+            val msg = withContext(Dispatchers.IO) { LogUploader.uploadBlocking(context) }
+            status = msg
+            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    /** v3.2.38：首页「上传日志」入口。未同意先弹确认；同意过则直接上传。 */
+    fun uploadLogs() {
+        if (!LogUploader.hasConsent(context)) {
+            showUploadConsent = true
+            return
+        }
+        doUpload()
+    }
+
     val saveBar: @Composable () -> Unit = {
         SaveBar(
             status = status,
             restarting = restarting,
             onRestart = { restartSystemUi() },
-            onExportLog = { exportLogs() },
+            onUploadLog = { uploadLogs() },
         )
     }
 
@@ -1116,7 +1186,7 @@ private fun BurnInProtectApp() {
 
     MaterialTheme(colorScheme = scheme) {
         // 系统返回键先回二级页，不直接退出 App
-        BackHandler(enabled = subPage != null) { subPage = null }
+        BackHandler(enabled = subPage != null) { closeSub() }
         Box(
             Modifier
                 .fillMaxSize()
@@ -1125,6 +1195,21 @@ private fun BurnInProtectApp() {
         ) {
             // 柔光叠层：极淡的径向高光，深色近黑、浅色近白，细腻半透不刺眼
             Box(Modifier.fillMaxSize().background(UiPalette.sheen(dark)))
+
+            if (showUploadConsent) {
+                UploadConsentDialog(
+                    dark = dark,
+                    onAgree = {
+                        LogUploader.setConsent(context, true)
+                        showUploadConsent = false
+                        doUpload()
+                    },
+                    onDeny = {
+                        LogUploader.setConsent(context, false)
+                        showUploadConsent = false
+                    },
+                )
+            }
 
             if (subPage == null) {
                 // v2.7：左右滑动切换首页/功能/关于。selectedTab 派生自 pagerState.currentPage，
@@ -1140,8 +1225,6 @@ private fun BurnInProtectApp() {
                         0 -> HomeTilePage(
                             enabled = state.enableStatus,
                             onToggle = { on -> onStateChange { s -> s.copy(enableStatus = on) } },
-                            engineState = state,
-                            onStateChange = onStateChange,
                             onOpen = openSub,
                             saveBar = saveBar,
                         )
@@ -1200,7 +1283,8 @@ private fun BurnInProtectApp() {
             } else {
                 SubPageHost(
                     page = subPage!!,
-                    onBack = { subPage = null },
+                    onBack = closeSub,
+                    onOpen = openSub,
                     onOpenUrl = openUrl,
                     state = state,
                     onStateChange = onStateChange,
@@ -1220,7 +1304,7 @@ private fun SaveBar(
     status: String,
     restarting: Boolean,
     onRestart: () -> Unit,
-    onExportLog: () -> Unit,
+    onUploadLog: () -> Unit,
 ) {
     // 自动保存可靠之后，「保存设置」「重新读取」就是多余负担 —— 用户不该需要记得点保存。
     Card(
@@ -1243,9 +1327,9 @@ private fun SaveBar(
                 modifier = Modifier.weight(1f),
             )
             TextButton(
-                onClick = onExportLog,
+                onClick = onUploadLog,
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp),
-            ) { Text("日志", style = MaterialTheme.typography.labelMedium) }
+            ) { Text("上传日志", style = MaterialTheme.typography.labelMedium) }
             FilledTonalButton(
                 onClick = onRestart,
                 enabled = !restarting,
@@ -1521,6 +1605,14 @@ private fun EngineCard(
                 modifier = Modifier.padding(top = 6.dp),
             )
 
+            // v3.2.11：无障碍引擎下面写清它要的权限与边界（只读视图尺寸，不读内容）。
+            PermNote(
+                "无障碍权限（用户到系统设置里手动开启）只用于创建遮盖窗口：盖住系统栏，" +
+                        "并按周期真隐藏应用内固定控件。只读屏幕上的视图尺寸与类名，不读屏幕内容、" +
+                        "不记录输入、不上传；关掉服务，遮盖窗口立刻销毁。",
+                dark,
+            )
+
             // v3.2.2：把无障碍引擎的固有缺陷直接写在卡片上，不让用户自己撞出来。
             if (overlay) {
                 Text(
@@ -1584,36 +1676,7 @@ private fun EngineCard(
                 }
             }
 
-            // 「系统界面里还是旧版」与选哪条引擎无关，所以放在两条引擎各自的区块之前：
-            // 用户切引擎时最容易被这条误导，提示必须在切换点之前出现。
-            HookStaleNotice(
-                hook = hook,
-                dark = dark,
-                busy = busy,
-                onRestart = {
-                    if (busy.isNotEmpty()) return@HookStaleNotice
-                    scope.launch {
-                        busy = "restart"
-                        try {
-                            val out = withContext(Dispatchers.IO) { HookState.restartSystemUi() }
-                            if (out != null && out.contains("ab-restart-ok")) {
-                                HookState.invalidate()
-                                toast(
-                                    "已发出重启指令。屏幕会黑一下、通知栏消失几秒，系统界面会自动恢复；" +
-                                            "等通知栏回来后这里是新版状态才算真正加载。"
-                                )
-                                delay(5000)
-                                refreshTick++
-                            } else {
-                                toast("重启失败，可在终端执行：su -c \"killall com.android.systemui\"")
-                            }
-                        } finally {
-                            busy = ""
-                        }
-                    }
-                },
-            )
-
+            // v3.2.11：橙色旧版提醒已迁到首页一级（HomeStaleCard），二级页不再重复渲染。
             if (overlay) {
                 Spacer(Modifier.height(10.dp))
                 val a11yOn = c?.a11yEnabled == true
@@ -1850,7 +1913,8 @@ private fun MasterOffNotice(dark: Boolean, onEnable: () -> Unit) {
  * 还是旧 dex —— 所有新增开关都表现为「点了没反应」，而界面上没有任何地方能看出来。
  * 该现象在真机反馈里出现过三次，与其每次让用户贴日志，不如自己算出来直接给按钮。</p>
  *
- * <p>判定不靠日志：拿系统界面进程的启动时刻和本 APK 的安装时刻比大小，进程更老就是旧版。
+ * <p>判定不靠日志：拿「进程启动时刻」与「最近一次热重载成功时刻」里较晚的那个，和本 APK
+ * 的安装时刻比大小，仍然更老就是旧版（热重载成功后时间戳会被置新，卡片自动消失）。
  * 探不到（没 root、ROM 改了进程名）时整块不显示，不猜也不误报。</p>
  */
 @Composable
@@ -1860,7 +1924,8 @@ private fun HookStaleNotice(
     busy: String,
     onRestart: () -> Unit,
 ) {
-    if (hook == null || !hook.stale()) return
+    // 只有「从没跑过」的首次安装才提示重启；更新一律交给模块自换代码，不再骚扰
+    if (hook == null || !hook.firstInstallStale()) return
     Column(
         Modifier
             .fillMaxWidth()
@@ -1870,16 +1935,16 @@ private fun HookStaleNotice(
             .padding(horizontal = 10.dp, vertical = 9.dp),
     ) {
         Text(
-            "系统界面里跑的还是旧版",
+            "首次安装需要重启一次系统界面",
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.Bold,
             color = UiPalette.warn(dark),
         )
         Text(
-            "隐藏逻辑注入在系统界面进程里，而它是常驻进程 —— 装包不会让它重启。" +
-                    "它现在这份是 " + agoText(hook.runningForMs()) + "启动的，比你装这一版更早，" +
-                    "所以这次改的东西点了不会有反应。" +
-                    (if (hook.pid > 0) "（pid " + hook.pid + "）" else ""),
+            "这是本机第一次装上本模块：SystemUI 里还没有任何一代钩子，必须重启一次才能注入。" +
+                    "之后所有覆盖安装都由模块自己换代码（把新 APK 就地载入、退役旧一代），" +
+                    "不会再要求你重启系统界面。" +
+                    (if (hook.pid > 0) "（当前 pid " + hook.pid + "）" else ""),
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 3.dp),
@@ -1896,6 +1961,107 @@ private fun HookStaleNotice(
                 color = UiPalette.warn(dark),
             )
         }
+    }
+}
+
+/**
+ * v3.2.11：首页一级的「系统界面里跑的还是旧版」橙卡。
+ *
+ * <p>从二级页（运行方式卡）提到首页：装完新版点开 App 第一眼就能看到，
+ * 一键重启系统界面，不必先点进「功能设置」才发现自己点的开关没反应。
+ * 自己的探测独立于任何二级页 —— 首页不依赖用户是否进过功能设置。
+ * 不 stale 时整块不渲染，平时不占空间。</p>
+ */
+@Composable
+private fun HomeStaleCard(dark: Boolean) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var hook by remember { mutableStateOf<HookState?>(null) }
+    var busy by remember { mutableStateOf("") }
+    var tick by remember { mutableIntStateOf(0) }
+
+    fun toast(msg: String) {
+        Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+    }
+
+    LaunchedEffect(tick) {
+        hook = withContext(Dispatchers.IO) {
+            val cap = Capability.probe(context)
+            if (cap.rootState == Capability.ROOT_GRANTED) HookState.probe(context) else null
+        }
+    }
+    val owner = LocalLifecycleOwner.current
+    DisposableEffect(owner) {
+        val obs = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) tick++
+        }
+        owner.lifecycle.addObserver(obs)
+        onDispose { owner.lifecycle.removeObserver(obs) }
+    }
+
+    val h = hook
+    if (h == null || !h.firstInstallStale()) return
+    Card(
+        Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = UiPalette.surface(dark)),
+    ) {
+        // 视觉与文案复用二级页原有那一个提示块，不另写一套（只有一处真源）
+        HookStaleNotice(hook = h, dark = dark, busy = busy, onRestart = {
+            if (busy.isNotEmpty()) return@HookStaleNotice
+            scope.launch {
+                busy = "restart"
+                try {
+                    val out = withContext(Dispatchers.IO) { HookState.restartSystemUi() }
+                    if (out != null && out.contains("ab-restart-ok")) {
+                        HookState.invalidate()
+                        toast(
+                            "已发出重启指令。屏幕会黑一下、通知栏消失几秒，系统界面会自动恢复；" +
+                                    "等通知栏回来后这里不再提示才算真正加载。"
+                        )
+                        delay(5000)
+                        tick++
+                    } else {
+                        toast("重启失败，可在终端执行：su -c \"killall com.android.systemui\"")
+                    }
+                } finally {
+                    busy = ""
+                }
+            }
+        })
+    }
+}
+
+/**
+ * v3.2.11：功能内的权限说明块。
+ *
+ * <p>每个功能下面直接写清「要哪个权限、拿来干什么、不给会怎样」——
+ * 用户不必翻设置、也不必猜为什么一个防烧屏模块要读应用列表。
+ * 统一用灰字 + 「权限：」前缀，和普通帮助文案区分开，但不抢视觉。</p>
+ */
+@Composable
+private fun PermNote(text: String, dark: Boolean) {
+    Row(
+        Modifier.fillMaxWidth().padding(top = 8.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Text(
+            "权限",
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+            color = UiPalette.accent(dark),
+            modifier = Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .background(UiPalette.accent(dark).copy(alpha = 0.12f))
+                .padding(horizontal = 6.dp, vertical = 2.dp),
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
     }
 }
 
@@ -2010,41 +2176,7 @@ private fun EngineStyleCard(
     ) {
         Column(Modifier.padding(14.dp)) {
 
-            // ---------- 系统界面旧版提示（一级页面，必须第一眼看到） ----------
-            //
-            // 这是本卡片最重要的一块，所以放在最上面、在「运行方式」标题之前。
-            // 机制：隐藏逻辑注入在系统界面进程里，而它是常驻进程 —— 装包不会让它重启。
-            // 用户装完新版、点开 App 发现「怎么没反应」，几乎全是卡在这里。
-            // 旧版这个提示只在二级页里，等于让人先点进去才知道自己白点了。
-            // 不 stale 时整块不渲染，平时不占任何空间。
-            HookStaleNotice(
-                hook = hook,
-                dark = dark,
-                busy = busy,
-                onRestart = {
-                    if (busy.isNotEmpty()) return@HookStaleNotice
-                    scope.launch {
-                        busy = "restart"
-                        try {
-                            val out = withContext(Dispatchers.IO) { HookState.restartSystemUi() }
-                            if (out != null && out.contains("ab-restart-ok")) {
-                                HookState.invalidate()
-                                toast(
-                                    "已发出重启指令。屏幕会黑一下、通知栏消失几秒，系统界面会自动恢复；" +
-                                            "等通知栏回来后这里是新版状态才算真正加载。"
-                                )
-                                delay(5000)
-                                refreshTick++
-                            } else {
-                                toast("重启失败，可在终端执行：su -c \"killall com.android.systemui\"")
-                            }
-                        } finally {
-                            busy = ""
-                        }
-                    }
-                },
-            )
-
+            // ---------- v3.2.11：橙色旧版提醒已迁到首页一级（HomeStaleCard） ----------
             // ---------- 运行方式 ----------
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("运行方式", style = MaterialTheme.typography.titleMedium,
@@ -2146,9 +2278,17 @@ private fun EngineStyleCard(
                 color = sub,
                 modifier = Modifier.padding(top = 6.dp),
             )
+
+            PermNote(
+                "root（su）只用在两处：读系统界面进程的启动时刻判断「跑的是不是旧版」、" +
+                        "重启一次系统界面让新 Hook 生效。界面适配只是把厂商名写进本机配置，不申请任何系统权限。" +
+                        "没有 root 就切「无障碍遮盖」，那条路径不需要 root。",
+                dark,
+            )
         }
     }
 }
+
 
 /**
  * v3.0.12 P1/P3：首页只保留入口与两个可见性开关，四张详情大卡片下沉到二级菜单。
@@ -2160,19 +2300,10 @@ private fun EngineStyleCard(
 private fun HomeTilePage(
     enabled: Boolean,
     onToggle: (Boolean) -> Unit,
-    // v3.1：运行方式与界面适配合到一张一级卡片，所以首页需要整份 state 与写入口。
-    engineState: AbState,
-    onStateChange: ((AbState) -> AbState) -> Unit,
     onOpen: (String) -> Unit,
     saveBar: @Composable () -> Unit,
 ) {
     val dark = isSystemInDarkTheme()
-    // ===== v3.0.12 P3：两个可见性开关从 AboutPage 迁入（真源=独立 prefs，非 AbState） =====
-    val context = LocalContext.current
-    // 用 remember 而非 rememberSaveable：切换即落盘，重建时从 prefs 重读，避免 v3.0.9 那种
-    // saveable 旧快照覆盖 prefs 真值的事故（G13）。
-    var hideLauncher by remember { mutableStateOf(AppVisibilityStore.isHideLauncherIcon(context)) }
-    var hideRecents by remember { mutableStateOf(AppVisibilityStore.isHideRecents(context)) }
     Column(
         Modifier
             .fillMaxSize()
@@ -2231,13 +2362,51 @@ private fun HomeTilePage(
             }
         }
 
+        // v3.2.11：橙色「系统界面里跑的还是旧版」提醒从二级页提到首页一级菜单 ——
+        // 装完新版点开 App 第一眼就能看到并一键重启，不用先点进「功能设置」才发现自己白点了。
+        // 排在总开关之后：总闸关着是第一顺位原因，旧版是第二顺位。不 stale 时整块不渲染。
+        Spacer(Modifier.height(12.dp))
+        HomeStaleCard(dark = dark)
+
         Spacer(Modifier.height(12.dp))
 
+        // v3.2.10：运行方式 / 界面适配 / 注入状态 / 白名单 / 隐身 五张卡
+        // 全部收进「功能设置」一个二级入口，首页只留总开关与公益板块，不再一屏堆卡。
+        ListRow("功能设置", "运行方式 · 界面适配 · 注入状态 · 白名单 · 隐身",
+            { onOpen(PAGE_HOME_ALL) }, dark)
+
+        Spacer(Modifier.height(12.dp))
+
+        // v3.2.11：公益找孩子板块（首页底部）两张卡，每 24 小时各换一位、最新发布优先；
+        // 数据走自建接口 + 缓存 + 内置快照三级回落，每天最多联网拉取一次。
+        WelfareCard(slot = 0, onOpen = { onOpen("welfare") }, dark = dark)
+        Spacer(Modifier.height(10.dp))
+        WelfareCard(slot = 1, onOpen = { onOpen("welfare-1") }, dark = dark)
+    }
+}
+
+/**
+ * v3.2.10：功能设置二级页（home-all）。
+ * 首页五张卡（运行方式+界面适配 / 注入状态 / 白名单 / 隐身）原样搬到这里，
+ * 控件、副作用、prefs 真源一律不变，只是换了一屏摆放。
+ */
+@Composable
+private fun HomeAllPage(
+    state: AbState,
+    onStateChange: ((AbState) -> AbState) -> Unit,
+    onOpen: (String) -> Unit,
+) {
+    val dark = isSystemInDarkTheme()
+    // 两个可见性开关真源=独立 prefs，非 AbState；remember 而非 rememberSaveable（G13）。
+    val context = LocalContext.current
+    var hideLauncher by remember { mutableStateOf(AppVisibilityStore.isHideLauncherIcon(context)) }
+    var hideRecents by remember { mutableStateOf(AppVisibilityStore.isHideRecents(context)) }
+    Column(Modifier.fillMaxWidth()) {
         // v3.1：运行方式 + 界面适配合并成一张一级卡片，两个功能都能直接调，不用点进二级页。
         // 运行方式的「详情」（root / LSPosed 检测、Hook 版本、重启系统界面）仍在二级页，
         // 从卡片右上角「详情 ›」进。
         EngineStyleCard(
-            state = engineState,
+            state = state,
             onStateChange = onStateChange,
             onOpenDetail = { onOpen(PAGE_HOME_ENGINE) },
             dark = dark,
@@ -2247,6 +2416,10 @@ private fun HomeTilePage(
 
         ListRow("注入状态", "四个 App 注入情况", { onOpen(PAGE_HOME_INJECT) }, dark)
         ListRow("白名单", "名单内应用不干预", { onOpen(PAGE_HOME_LIST) }, dark)
+
+        // v3.2.39：诊断日志开关从功能页移到首页 › 功能设置（与上传授权 / 清日志同屏）。
+        OptionRow("诊断日志", "写 diag.log 排查，出问题请先打开它", checked = state.enableLog, dark = dark,
+            onCheckedChange = { on -> onStateChange { s -> s.copy(enableLog = on) } })
 
         Spacer(Modifier.height(12.dp))
 
@@ -2292,7 +2465,18 @@ private fun HomeTilePage(
                             // setHideLauncherIcon 内部已含 applyLauncherVisibility(DONT_KILL_APP)：
                             // 写 prefs + 切组件别名，App 不重启；setHideRecents 只写 prefs，
                             // 生效由 applyRecentsVisibility 立即触发，不等 onResume。
-                            AppVisibilityStore.setHideLauncherIcon(context, on)
+                            //
+                            // v3.2.25：返回值必须判。组件切换失败（别名解析不到 / ROM 拒绝）时
+                            // 必须把两个开关一起退回原值，否则界面写着「已隐藏」而图标还在。
+                            val ok = AppVisibilityStore.setHideLauncherIcon(context, on)
+                            if (!ok && on) {
+                                AppVisibilityStore.setHideRecents(context, false)
+                                applyRecentsVisibility(context)
+                                hideLauncher = false
+                                hideRecents = false
+                                Toast.makeText(context, "桌面入口切换失败，请重试或重启桌面", Toast.LENGTH_SHORT).show()
+                                return@LiquidToggle
+                            }
                             AppVisibilityStore.setHideRecents(context, on)
                             applyRecentsVisibility(context)
                             hideLauncher = on
@@ -2307,6 +2491,10 @@ private fun HomeTilePage(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 8.dp),
+                )
+                PermNote(
+                    "不需要任何额外权限：只切换本应用自己的桌面入口组件（DONT_KILL_APP），不读别人、不写系统。",
+                    dark,
                 )
             }
         }
@@ -2331,7 +2519,15 @@ private fun InjectStatusPage(
     dark: Boolean,
     onEnableAll: () -> Unit,
 ) {
-    InjectStatusCard(dark = dark, onEnableAll = onEnableAll)
+    Column {
+        InjectStatusCard(dark = dark, onEnableAll = onEnableAll)
+        PermNote(
+            "读「已安装应用」用包可见性权限（QUERY_ALL_PACKAGES）：只为了告诉你这四个 App 装没装、装的是哪个渠道包。" +
+                    "读 LSPosed 作用域与进程注入状态要 root（su）打开 /data/adb/lspd 与 /proc。" +
+                    "两处都只读，不改任何应用、不上传。",
+            dark,
+        )
+    }
 }
 
 /** 白名单二级页（home-list）：原首页内联 Card 原样搬入，模式 chips + 包名输入 + 自检一项不删（G5）。 */
@@ -2357,6 +2553,11 @@ private fun WhitelistPage(
                 TextButton(onClick = onOpenList) { Text("选择应用") }
             }
             ListModeChips(listMode, onListModeChange)
+            PermNote(
+                "「选择应用」要枚举已安装应用，用包可见性权限（QUERY_ALL_PACKAGES）；" +
+                        "不授权也能用，只是选择页可能列不全，此时可直接粘贴包名。名单只存在本机，不上传。",
+                dark,
+            )
             Text(listSummary(listMode, activeList),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -2424,9 +2625,9 @@ private fun InjectStatusCard(dark: Boolean, onEnableAll: () -> Unit) {
         Column(Modifier.padding(16.dp)) {
             Text("注入状态", style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold, color = UiPalette.ink(dark))
-            Text("「未检测到」= 模块代码没进这个 App 进程：LSPosed 里没勾它的作用域，或勾了但没重启该 App。" +
-                "若是覆盖安装/更新了本模块，需重启手机一次（不是只重启系统界面）：SystemUI 会自动重注，" +
-                "但抖音/快手等三方 App 只有重启手机后才会重新加载新 dex。",
+            Text("「未检测到」= 模块代码没进这个 App 进程：LSPosed 里没勾它的作用域，或勾了但该 App 还没重新启动。" +
+                "更新安装后第一次打开本应用会自动停止抖音/红果/快手/B站（日志有一行 KILL），" +
+                "重新打开这几 App 就会重新注入，不用重启手机。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp))
@@ -2545,10 +2746,12 @@ private fun FeaturesPage(
         ListRow("周期时间", "藏 ${state.hideSec}s · 显 ${state.showSec}s · 状态栏与视频控件共用",
             { showCycleDialog = true }, dark, trailing = "›")
 
+        // 诊断日志开关在「首页 › 功能设置」（HomeAllPage），功能页不再重复。
+
         val generalOn = listOf(
-            state.enableStatusBar, state.enableNav, state.enableLog, state.enableBall,
+            state.enableStatusBar, state.enableNav, state.enableBall,
         ).count { it }
-        ListRow("通用", "系统栏 / 日志 / 悬浮球 · 已开启 $generalOn/4 项",
+        ListRow("通用", "系统栏 / 悬浮球 · 已开启 $generalOn/3 项",
             { onOpen("feat-general") }, dark)
 
         val douyinOn = listOf(
@@ -2722,6 +2925,8 @@ private fun GeneralFeaturePage(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var scopeText by remember { mutableStateOf<String?>(null) }
+    // v3.2.38：上传日志同意状态，供「通用」页撤回 / 重新授权。
+    var uploadConsent by remember { mutableStateOf(LogUploader.hasConsent(context)) }
     GroupTitle("系统栏与通用")
     OptionRow("状态栏", "顶部图标周期性隐藏", checked = state.enableStatusBar, dark = dark,
         onCheckedChange = { on -> onStateChange { s -> s.copy(enableStatusBar = on) } })
@@ -2732,10 +2937,82 @@ private fun GeneralFeaturePage(
     OptionRow("隐藏右侧图标", "信号 / 网络 / 电量 / 网速", checked = state.statusIconsOn, dark = dark,
         enabled = state.enableStatusBar,
         onCheckedChange = { on -> onStateChange { s -> s.copy(statusIconsOn = on) } })
+    // v3.2.7：超级岛联动。HyperIsland 与原生岛都用小米焦点通知（miui.focus.*），
+    // 只认这个标志，不看包名 —— HyperIsland 升级 / 换实现都不用改这边。
+    OptionRow("超级岛联动",
+        "焦点通知 / 超级岛出现时立即隐藏状态栏静态图标，岛停止更新 10 秒后按周期恢复（LSPosed 引擎）",
+        checked = state.enableIslandLink, dark = dark,
+        enabled = state.enableStatusBar,
+        onCheckedChange = { on -> onStateChange { s -> s.copy(enableIslandLink = on) } })
+    // v3.2.8：系统级歌词联动。HyperLyric / SuperLyric 把歌词画在状态栏里，
+    // 逐叶透明会把歌词一起抹掉 —— 这里把整棵歌词子树豁免，静态图标照常隐藏。
+    OptionRow("系统级歌词联动",
+        "HyperLyric / SuperLyric 状态栏歌词不参与隐藏：防烧屏照常，歌词不被遮（LSPosed 引擎）",
+        checked = state.enableLyricLink, dark = dark,
+        enabled = state.enableStatusBar,
+        onCheckedChange = { on -> onStateChange { s -> s.copy(enableLyricLink = on) } })
     OptionRow("导航栏", "底部系统导航栏", checked = state.enableNav, dark = dark,
         onCheckedChange = { on -> onStateChange { s -> s.copy(enableNav = on) } })
-    OptionRow("诊断日志", "写 diag.log 排查，出问题请先打开它", checked = state.enableLog, dark = dark,
-        onCheckedChange = { on -> onStateChange { s -> s.copy(enableLog = on) } })
+    // v3.2.38：诊断日志开关已上移到功能设置首页（HomeAllPage），此处不再重复。
+    // v3.2.7：升级不再沿用旧配置/旧日志，这里再给两颗手动入口。
+    Row(
+        Modifier.fillMaxWidth().padding(top = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "旧配置和旧日志都可一键清掉；重建后需重启系统界面",
+            style = MaterialTheme.typography.labelSmall,
+            color = if (dark) androidx.compose.ui.graphics.Color(0xFF9AA0A6)
+            else androidx.compose.ui.graphics.Color(0xFF6B7280),
+            modifier = Modifier.weight(1f),
+        )
+        TextButton(
+            onClick = {
+                val next = !uploadConsent
+                LogUploader.setConsent(context, next)
+                uploadConsent = next
+                Toast.makeText(
+                    context,
+                    if (next) "已同意上传诊断日志" else "已撤回上传授权",
+                    Toast.LENGTH_SHORT,
+                ).show()
+            },
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp),
+        ) {
+            Text(if (uploadConsent) "撤回上传授权" else "上传授权：关",
+                style = MaterialTheme.typography.labelMedium)
+        }
+        TextButton(
+            onClick = {
+                scope.launch {
+                    withContext(Dispatchers.IO) { ConfStore.clearLogs() }
+                    Toast.makeText(
+                        context,
+                        "日志已清空，之后只写 v" + BuildConfig.VERSION_NAME,
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
+            },
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp),
+        ) {
+            Text("清空日志", style = MaterialTheme.typography.labelMedium)
+        }
+        TextButton(
+            onClick = {
+                scope.launch {
+                    val ok = withContext(Dispatchers.IO) { ConfStore.resetAll() }
+                    Toast.makeText(
+                        context,
+                        if (ok) "已重建默认配置，请重启系统界面" else "重建失败：root 不可用",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+            },
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp),
+        ) {
+            Text("重建配置", style = MaterialTheme.typography.labelMedium)
+        }
+    }
     OptionRow("悬浮球", "点击切换隐藏控件", checked = state.enableBall, dark = dark,
         onCheckedChange = { on -> onStateChange { s -> s.copy(enableBall = on) } })
     // v3.0.16：无障碍模式的应用内遮盖开关。仅 overlay 引擎生效，LSPosed 引擎不铺黑。
@@ -2753,6 +3030,11 @@ private fun GeneralFeaturePage(
     // LSPosed 没给视频 App 勾作用域 —— 模块代码根本没进那个进程，
     // 真隐藏 / 位置微移都不存在。以前只能靠导日志看 LSPDB 行猜，
     // 现在点一下就把「哪几个 App 没勾」直接列出来，并给一个跳转管理器的按钮。
+    PermNote(
+        "通知权限（POST_NOTIFICATIONS）只用于那条常驻运行提示，拒绝也不影响防烧屏本身；" +
+                "开机广播（RECEIVE_BOOT_COMPLETED）只用于开机后恢复配置镜像并提示你补授权，不等于自启动。",
+        dark,
+    )
     ListRow("作用域自检", "查 LSPosed 是否给抖音 / 红果 / 快手 / B站 勾了作用域", {
         scopeText = "正在读取 LSPosed 配置…"
         scope.launch {
@@ -3225,6 +3507,10 @@ private val THANKS = listOf(
     Thanks("酷安@bzm123123", "B", "帮忙测试 ColorOS 15 环境"),
     // v3.0.36 新增：Pixel 10 Pro XL 状态栏适配（日志与真机验证）
     Thanks("酷安@大侠史塔克1", "侠", "帮忙适配谷歌 Pixel 10 Pro XL"),
+    // v3.2.8 新增：长期反馈与建议（超级岛 / 歌词联动期间的实测）
+    Thanks("酷安@人间极品米其林", "米", "支持与反馈"),
+    // v3.2.25 新增：资金支持
+    Thanks("酷安@不羁", "羁", "资金支持"),
 )
 
 /** 项目仓库地址（GitHub）——关于页「项目地址」点击跳转。 */
@@ -3253,6 +3539,65 @@ private val CREDITS = listOf(
         "https://developer.android.com/jetpack/compose"),
     Credit("kotlinx.coroutines · Kotlin", "协程与异步调度",
         "https://github.com/Kotlin/kotlinx.coroutines"),
+)
+
+/**
+ * v3.2.9：兼容名单 —— 与本模块同机共存、已确认不打架的 Xposed / LSPosed 模块。
+ *
+ * 「兼容」不等于「联动」：HyperLyric / HyperIsland 有各自的联动开关，开关关了也只是
+ * 各管各的；另外两个与本模块没有视图交集。营销拦截器这类常驻 system_server 的模块
+ * 一开就在工作，所以兼容不是某次联动时才成立，而是任何时候都成立。
+ * 只做说明，不做检测（不读对方配置、不按包名判定）。
+ */
+private data class Link(
+    val name: String,
+    val kind: String,
+    val what: String,
+    val ours: String,
+    val url: String,
+)
+
+private val LINKS = listOf(
+    Link("HyperLyric · limczhh", "联动 · 开关「系统级歌词联动」",
+        "系统级歌词：歌词放状态栏，或走超级岛 / 焦点通知",
+        "开关开：状态栏歌词视图整棵保留、不透明、不记账；整层兜底遇歌词放弃。开关关：各管各的，不互碰",
+        "https://github.com/limczhh/HyperLyric"),
+    Link("HyperIsland · 1812z", "联动 · 开关「超级岛联动」",
+        "把通知改写成小米焦点通知，extras 写 miui.focus.*",
+        "开关开：岛出现时只隐藏状态栏静态图标，10 秒滑动窗口。开关关：各管各的，不互碰",
+        "https://github.com/1812z/HyperIsland"),
+    Link("LumaCurve / HyperLux · RongShangs", "兼容 · 无交集",
+        "HyperOS 亮度曲线工具：管亮度链路与控制中心",
+        "它管亮度，我们管状态栏 / 导航栏 / 应用内固定元素的显隐，不碰对方的视图",
+        "https://github.com/RongShangs/LumaCurve"),
+    // v3.2.12：真机截图实锤——它的作用域同时勾了「系统框架」与「系统界面」，和我们在
+    // SystemUI 里是有交集的，不能再说「无交集」。分工写清：它过滤通知本身，我们只动静态图标。
+    Link("MarketingNotificationBlocker · lm060719", "兼容 · 同进程分工",
+        "营销通知拦截：作用域含系统框架 + 系统界面，在通知生成与展示环节过滤营销推送，常驻开启",
+        "同一个 SystemUI 进程里各改各的：它过滤的是通知本身，我们动的是状态栏静态图标（时钟/信号/电量）的 alpha，" +
+                "通知区整块保留、横幅弹出时让开，从不隐藏或改写任何通知",
+        "https://github.com/lm060719/io.mo.mnblocker"),
+    // v3.2.11：同作者项目 —— 全部能同机共存，逐条写清各自边界；没有公开仓库的不给链接。
+    Link("SafeWalk · 安全出行", "同作者 · 共存",
+        "步态检测与出行提醒，自己跑前台服务与悬浮提示",
+        "我们只改系统栏静态图标与四个视频 App 内的固定元素；通知区永远保留、横幅弹出时让开，它的提醒不会被盖",
+        ""),
+    Link("RGBBeat", "同作者 · 共存",
+        "通知栏 / 悬浮窗炫彩效果，往状态栏、通知栏画颜色",
+        "我们判显隐只看视图尺寸与类名，不看颜色，也不碰它的绘制层；两边同时改系统界面互不影响",
+        ""),
+    Link("我来帮你 · 无障碍", "同作者 · 共存",
+        "独立无障碍服务：读屏与代操作",
+        "我们的遮盖窗口触摸穿透、不抢焦点、不吞无障碍事件；同机两个无障碍服务可同时启用，互不拦截",
+        ""),
+    Link("天眼输入法", "同作者 · 共存",
+        "输入法进程与自绘候选栏",
+        "我们不注入输入法进程：作用域只有系统界面与四个视频 App，输入法那条链路完全不进",
+        ""),
+    Link("情侣加热", "同作者 · 共存",
+        "hook 本地生活类 App 页面",
+        "我们只处理四个视频 App 的应用内固定元素与系统栏，不碰它的目标页面，同开互不干扰",
+        ""),
 )
 
 @Composable
@@ -3291,6 +3636,8 @@ private fun AboutPage(onOpen: (String) -> Unit, onOpenUrl: (String) -> Unit) {
         ListRow("感谢名单", "${THANKS.size} 位朋友的支持与建议", { onOpen("thanks") }, dark)
         ListRow("支持捐赠", "支付宝 / 微信 · 金额随意，心意最重", { onOpen("donate") }, dark)
         ListRow("致敬名单", "${CREDITS.size} 个借鉴过的开源项目 · 点击查看", { onOpen("credit") }, dark)
+        // v3.2.9：兼容名单（与哪些模块共存、各自边界）
+        ListRow("兼容名单", "${LINKS.size} 个已确认共存不打架的模块", { onOpen("links") }, dark)
         ListRow("功能建议", "想加功能、适配新机型？来 GitHub 提一个", { onOpen("suggest") }, dark)
         // v2.7：项目地址单独一行，点击直接跳 GitHub；不进二级菜单，减少一层跳转
         ListRow("项目地址", "github.com/Xposed-Modules-Repo/…", { onOpenUrl(PROJECT_URL) }, dark,
@@ -3316,6 +3663,7 @@ private fun AboutPage(onOpen: (String) -> Unit, onOpenUrl: (String) -> Unit) {
 private fun SubPageHost(
     page: String,
     onBack: () -> Unit,
+    onOpen: (String) -> Unit,
     onOpenUrl: (String) -> Unit,
     state: AbState,
     onStateChange: ((AbState) -> AbState) -> Unit,
@@ -3330,10 +3678,14 @@ private fun SubPageHost(
         "thanks" -> "感谢名单"
         "donate" -> "支持捐赠"
         "credit" -> "致敬名单"
+        "links" -> "兼容名单"
+        "welfare" -> "寻人启事"
+        "welfare-1" -> "寻人启事"
         "suggest" -> "功能建议"
         PAGE_HOME_ENGINE -> "运行方式"
         PAGE_HOME_INJECT -> "注入状态"
         PAGE_HOME_LIST -> "白名单"
+        PAGE_HOME_ALL -> "功能设置"
         "feat-general" -> "通用"
         "feat-douyin" -> "抖音"
         "feat-drama" -> "红果短剧"
@@ -3374,7 +3726,11 @@ private fun SubPageHost(
                 "thanks" -> ThanksPage(dark)
                 "donate" -> DonatePage(dark)
                 "credit" -> CreditPage(dark, onOpenUrl)
+                "links" -> LinksPage(dark, onOpenUrl)
+                "welfare" -> WelfarePage(slot = 0, dark = dark, onOpenUrl = onOpenUrl)
+                "welfare-1" -> WelfarePage(slot = 1, dark = dark, onOpenUrl = onOpenUrl)
                 "suggest" -> SuggestPage(dark, onOpenUrl)
+                PAGE_HOME_ALL -> HomeAllPage(state = state, onStateChange = onStateChange, onOpen = onOpen)
                 PAGE_HOME_ENGINE -> EnginePage(state = state, onStateChange = onStateChange, dark = dark)
                 PAGE_HOME_INJECT -> InjectStatusPage(dark = dark, onEnableAll = onEnableAll)
                 PAGE_HOME_LIST -> WhitelistPage(
@@ -3417,7 +3773,7 @@ private fun SuggestPage(dark: Boolean, onOpenUrl: (String) -> Unit) {
     listOf(
         "适配新机型" to "写清机型、系统版本与 ROM（如 ColorOS 15、Flyme 11），附一张状态栏截图最好",
         "新增功能" to "说清想解决什么问题、期望怎么开关，比只写「加个 XX」更容易实现",
-        "问题反馈" to "附首页「日志」按钮导出的诊断日志与复现步骤，能省掉大量来回确认",
+        "问题反馈" to "附诊断日志（首页「上传日志」按钮，或 diag.log）与复现步骤，能省掉大量来回确认",
         "能力边界" to "LSPosed 真隐藏必须由模块注入目标 App 进程，前提是在 LSPosed 里给本模块勾选那个 App；没勾时该 App 内不会有任何效果，请先在「通用」里做一次作用域自检",
     ).forEach { (itemTitle, desc) ->
         Column(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 10.dp)) {
@@ -3543,6 +3899,214 @@ private fun QrCard(label: String, resId: Int, dark: Boolean) {
  * 名称用主色 + 下划线 + ↗ 明确「可点」，点击用系统浏览器打开仓库；
  * 深色模式下主色是浅雾青，不会出现黑字看不清。
  */
+/** v3.2.10：首页公益找孩子卡：照片 + 姓名 + 走失时间地点，点进二级页看全文与官方联系方式。 */
+@Composable
+private fun WelfareCard(slot: Int, onOpen: () -> Unit, dark: Boolean) {
+    val ctx = LocalContext.current
+    var doc by remember { mutableStateOf<WelfareStore.Doc?>(null) }
+    var bmp by remember { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(Unit) {
+        val d = withContext(Dispatchers.IO) { WelfareStore.load(ctx) }
+        doc = d
+        val k = d?.items?.getOrNull(
+            WelfareStore.currentIndex(ctx, d, System.currentTimeMillis(), slot))
+        bmp = withContext(Dispatchers.IO) {
+            // v3.2.12：当天两卡先落盘（资料 + 照片），换人时才删旧的；照片已有就不再联网
+            if (d != null) WelfareStore.syncToday(ctx, d, System.currentTimeMillis())
+            WelfareStore.photoCached(ctx, k?.photo, k?.id ?: 0, 320)
+        }
+    }
+    val kid = doc?.let {
+        it.items.getOrNull(WelfareStore.currentIndex(ctx, it, System.currentTimeMillis(), slot))
+    }
+    Card(
+        Modifier.fillMaxWidth().clickable { onOpen() },
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = UiPalette.surface(dark)),
+    ) {
+        Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.size(72.dp).clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.15f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                val b = bmp
+                if (b != null) {
+                    Image(b.asImageBitmap(), contentDescription = null,
+                        modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                } else {
+                    Text("寻", style = MaterialTheme.typography.titleLarge,
+                        color = UiPalette.accent(dark))
+                }
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                if (kid != null) {
+                    // v3.2.12：卡面上不再出现板块名，第一行就是姓名与缘由（走失），
+                    // 让人先看到「谁、怎么回事」，公益属性靠内容本身表达。
+                    Text(kid.name + "，" + kid.gender + "，" + kid.type,
+                        style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold,
+                        color = UiPalette.ink(dark))
+                    Text(kid.lostTime + " 走失 · " + kid.lostPlace,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2, modifier = Modifier.padding(top = 3.dp))
+                } else {
+                    Text("正在加载寻亲信息…", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 4.dp))
+                }
+            }
+            Text("›", style = MaterialTheme.typography.headlineSmall, color = UiPalette.accent(dark))
+        }
+    }
+}
+
+/** v3.2.10：公益找孩子二级页：启事全文 + 原文跳转 + 宝贝回家官方联系方式。 */
+@Composable
+private fun WelfarePage(slot: Int, dark: Boolean, onOpenUrl: (String) -> Unit) {
+    val ctx = LocalContext.current
+    var doc by remember { mutableStateOf<WelfareStore.Doc?>(null) }
+    var bmp by remember { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(Unit) {
+        val d = withContext(Dispatchers.IO) { WelfareStore.load(ctx) }
+        doc = d
+        val k = d?.items?.getOrNull(
+            WelfareStore.currentIndex(ctx, d, System.currentTimeMillis(), slot))
+        bmp = withContext(Dispatchers.IO) {
+            if (d != null) WelfareStore.syncToday(ctx, d, System.currentTimeMillis())
+            WelfareStore.photoCached(ctx, k?.photo, k?.id ?: 0, 640)
+        }
+    }
+    val d = doc
+    val kid = d?.let {
+        it.items.getOrNull(WelfareStore.currentIndex(ctx, it, System.currentTimeMillis(), slot))
+    }
+    if (kid == null) {
+        Text("正在加载寻亲信息…若长时间无内容，请检查网络后重进。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        return
+    }
+    val b = bmp
+    if (b != null) {
+        Image(b.asImageBitmap(), contentDescription = kid.name,
+            modifier = Modifier.fillMaxWidth().height(280.dp).clip(RoundedCornerShape(16.dp)),
+            contentScale = ContentScale.Crop)
+        Spacer(Modifier.height(12.dp))
+    }
+    Text(kid.name + " · " + kid.gender + " · " + kid.type,
+        style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold,
+        color = UiPalette.ink(dark))
+    Spacer(Modifier.height(8.dp))
+    listOf(
+        "出生日期" to kid.birth,
+        "失踪时身高" to kid.height,
+        "走失时间" to kid.lostTime,
+        "走失地点" to kid.lostPlace,
+        "体貌特征" to kid.feature,
+        "登记日期" to kid.regDate,
+    ).forEach { (k, v) ->
+        if (v.isNotEmpty() && v != "未知CM") {
+            Text(k + "：" + v, style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
+        }
+    }
+    Spacer(Modifier.height(12.dp))
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        OutlinedButton(onClick = { onOpenUrl(kid.url) }, modifier = Modifier.weight(1f)) {
+            Text("查看原文 ↗")
+        }
+        OutlinedButton(onClick = { onOpenUrl(d!!.sourceUrl) }, modifier = Modifier.weight(1f)) {
+            Text("宝贝回家官网 ↗")
+        }
+    }
+    Spacer(Modifier.height(12.dp))
+    Card(
+        Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = UiPalette.surface(dark)),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Text("有线索请联系官方", style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold, color = UiPalette.accent(dark))
+            Text("电话：" + d!!.tel + "（工作日） / " + d.mobile + "（节假日）",
+                style = MaterialTheme.typography.bodySmall,
+                color = UiPalette.ink(dark), modifier = Modifier.padding(top = 6.dp))
+            Text("QQ 接待群：" + d.qqGroup + " · 信箱：" + d.email,
+                style = MaterialTheme.typography.bodySmall,
+                color = UiPalette.ink(dark), modifier = Modifier.padding(top = 4.dp))
+            Text("服务时间：" + d.serviceTime,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp))
+            Text("发现疑似被拐儿童请第一时间拨 110。",
+                style = MaterialTheme.typography.labelSmall,
+                color = UiPalette.warn(dark), modifier = Modifier.padding(top = 6.dp))
+        }
+    }
+    Spacer(Modifier.height(10.dp))
+    Text(d!!.notice, style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant)
+    PermNote(
+        "联网权限（INTERNET）只给这一个板块用：每天最多拉一次启事；照片按需下载后存在本机，" +
+                "只有换人时才删掉旧的、再拉新的；只读、不上传本机任何信息；" +
+                "断网就用本机缓存与内置快照，板块照常可看。",
+        dark,
+    )
+    Text("数据：" + d.source + " · 更新于 " + d.updated + " · 每 24 小时各换一位、最新优先",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.outline,
+        modifier = Modifier.fillMaxWidth().padding(top = 10.dp), textAlign = TextAlign.Center)
+}
+
+/** v3.2.9：兼容名单二级页 —— 谁负责什么、我们怎么让，一屏看清边界。 */
+@Composable
+private fun LinksPage(dark: Boolean, onOpenUrl: (String) -> Unit) {
+    Text("这些模块与防烧屏装在同一台设备上已确认不打架。带「联动」的有各自开关，关掉也只是各管各的；「无交集」「同进程分工」「同作者」的任何时候都互不影响。带 ↗ 的点名称跳转仓库。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Spacer(Modifier.height(8.dp))
+    LINKS.forEach { l ->
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .then(if (l.url.isEmpty()) Modifier else Modifier.clickable { onOpenUrl(l.url) })
+                .padding(horizontal = 4.dp, vertical = 13.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (l.url.isEmpty()) l.name else l.name + "  ↗",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = UiPalette.accent(dark),
+                    textDecoration = if (l.url.isEmpty()) null else TextDecoration.Underline,
+                )
+            }
+            Text(l.kind,
+                style = MaterialTheme.typography.labelSmall,
+                color = UiPalette.accent(dark),
+                modifier = Modifier.padding(top = 4.dp))
+            Text("对方：" + l.what,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 3.dp))
+            Text("我们：" + l.ours,
+                style = MaterialTheme.typography.labelSmall,
+                color = UiPalette.ink(dark),
+                modifier = Modifier.padding(top = 3.dp))
+        }
+        Box(Modifier.fillMaxWidth().height(1.dp)
+            .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.18f)))
+    }
+    Text("只做说明，不做检测：不读对方配置、不按包名判定",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.outline,
+        modifier = Modifier.fillMaxWidth().padding(top = 18.dp),
+        textAlign = TextAlign.Center)
+}
+
 @Composable
 private fun CreditPage(dark: Boolean, onOpenUrl: (String) -> Unit) {
     Text("本模块站在这些开源项目的肩膀上。点击名称可跳转对应仓库，感谢每一位作者。",
@@ -3678,6 +4242,43 @@ private fun ScopeDialog(
                     Spacer(Modifier.weight(1f))
                     TextButton(onClick = onOpenLsposed) { Text("打开 LSPosed") }
                     TextButton(onClick = onDismiss) { Text("关闭") }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * v3.2.38：上传日志同意弹窗。首次同意后记住选择；拒绝则不上传，也不记账同意。
+ */
+@Composable
+private fun UploadConsentDialog(
+    dark: Boolean,
+    onAgree: () -> Unit,
+    onDeny: () -> Unit,
+) {
+    Dialog(onDismissRequest = onDeny) {
+        Card(
+            Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(22.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        ) {
+            Column(Modifier.padding(horizontal = 20.dp, vertical = 18.dp)) {
+                Text("上传诊断日志", style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold, color = UiPalette.ink(dark))
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "上传内容仅用于排查问题：机型 / 品牌 / 系统版本 / 模块版本，以及诊断日志正文。" +
+                            "不含账号、昵称等个人信息。日志将发送到云端（Cloudflare D1）保存。\n\n" +
+                            "本次同意后会记住选择；之后可在「功能 › 通用」里撤回。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(12.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = onDeny) { Text("暂不") }
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = onAgree) { Text("同意并上传") }
                 }
             }
         }

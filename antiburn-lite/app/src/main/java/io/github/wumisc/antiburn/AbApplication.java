@@ -31,13 +31,27 @@ public final class AbApplication extends Application {
             ConfStore.migrateIfNeededAsync();
         } catch (Throwable ignored) {
         }
+        // v3.2.15：覆盖安装后第一件事就是把旧日志清空重建 —— 放在 Application 里，
+        // 用户装完直接开快手也能触发（旧版只在打开模块时清，那条路径常常走不到）。
+        // su 可能等授权，绝不能放主线程；清完会在新日志第一行写起始标记。
+        try {
+            new Thread(() -> {
+                try {
+                    ConfStore.clearLogsIfUpgraded(this);
+                } catch (Throwable ignored) {
+                }
+            }, "ab-clear-logs").start();
+        } catch (Throwable ignored) {
+        }
         // v3.0.11 P1：覆盖安装会按 Manifest 重置 android:enabled，可能让已禁用的 alias 复活；
         // 这里读独立 prefs 幂等校正。组件校正失败不阻断启动（用户仍可从 LSPosed 进入后手动切开关恢复）。
         try {
             AppVisibilityStore.syncOnStartup(this);
         } catch (Throwable ignored) {
         }
-        // v3.0.33：装完新版自动把四个视频 App 杀掉，逼 LSPosed 重新注入新 dex。
+        // v3.0.33 / v3.2.11：装完新版自动把四个视频 App 杀掉，逼 LSPosed 重新注入新 dex。
+        // 判重口径从 versionName 改成 versionCode —— 只有「更新安装后的第一次启动」才做，
+        // 同版本反复打开不会再打断用户；升级清配置也不会误触发（标记与 last_vc 同库）。
         try {
             restartTargetAppsOnce();
         } catch (Throwable ignored) {
@@ -45,7 +59,7 @@ public final class AbApplication extends Application {
     }
 
     /**
-     * v3.0.33：每个版本只做一次 —— 用 root 把抖音 / 红果 / 快手 / B站的进程杀掉。
+     * v3.0.33 / v3.2.11：每次更新安装后的第一次启动，用 root 杀掉抖音 / 红果 / 快手 / B站进程。
      *
      * <p><b>这是「改了十几个版本，快手还是老样子」的真正解法。</b>
      * LSPosed 只在进程启动时注入一次：用户覆盖安装 APK 后，快手后台进程一直活着，
@@ -53,24 +67,25 @@ public final class AbApplication extends Application {
      * {@code HOOK-STALE app_ver=3.0.17}，也就是 3.0.18 到 3.0.32 的所有改动
      * 对快手一次都没生效过。用户被要求「重启手机」，但没人会为一个模块天天重启。</p>
      *
-     * <p>这里改成：打开模块 App 就自动杀一次（按 versionName 判重，同版本不重复杀）。
-     * 用户装完点开模块 → 后台已杀干净 → 再打开快手就是新代码，不需要重启手机。</p>
+     * <p>判重：按 versionCode 记账，同版本只做一次。**只有真的杀成功才记账**——
+     * su 没授权 / 被拒绝时不记账，下次启动会再试一次（用户刚授权就能补上），
+     * 不会出现「第一次没 root 就永远不再杀」的死局。</p>
      *
      * <p>非 root / 未授权时 execSu 返回 false，静默跳过，不影响任何主流程。</p>
      */
     private void restartTargetAppsOnce() {
+        final int vc = BuildConfig.VERSION_CODE;
         final String ver = BuildConfig.VERSION_NAME;
         android.content.SharedPreferences sp =
                 getSharedPreferences("antiburn_app", MODE_PRIVATE);
-        if (ver.equals(sp.getString("killed_for", ""))) {
+        if (sp.getInt("killed_for_vc", -1) == vc) {
             return;      // 这个版本已经杀过，别每次启动都打断用户
         }
-        sp.edit().putString("killed_for", ver).apply();
         new Thread(() -> {
             try {
                 String list = ConfStore.execSuCapture("pm list packages", 8_000L);
                 if (list == null) {
-                    Diag.force("KILL ver=" + ver + " 跳过：无 root 或授权被拒");
+                    Diag.force("KILL ver=" + ver + " 跳过：无 root 或授权被拒（下次启动重试）");
                     return;
                 }
                 StringBuilder killed = new StringBuilder();
@@ -87,7 +102,9 @@ public final class AbApplication extends Application {
                         killed.append(p).append(' ');
                     }
                 }
-                Diag.force("KILL ver=" + ver + " " + killed);
+                sp.edit().putInt("killed_for_vc", vc).apply();
+                Diag.force("KILL ver=" + ver + " 更新后首次启动，已杀：" + killed
+                        + "（重新打开 App 即加载新 dex）");
             } catch (Throwable ignored) {
             }
         }, "ab-restart-targets").start();

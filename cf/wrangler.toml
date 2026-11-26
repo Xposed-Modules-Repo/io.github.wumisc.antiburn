@@ -1,0 +1,12 @@
+# Cloudflare Pages 配置：antiburn 诊断日志接收端。
+# 目录：public/ 静态占位（无业务页面），functions/api/log.js 为接收函数。
+# 部署：在 cf/ 目录执行 `wrangler pages deploy public --project-name antiburn-log`。
+
+name = "antiburn-log"
+pages_build_output_dir = "public"
+compatibility_date = "2026-11-24"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "antiburn-logs"
+database_id = "98d63e4e-b34a-413c-87b9-b6de26a57630"

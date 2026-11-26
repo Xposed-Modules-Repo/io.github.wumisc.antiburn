@@ -48,13 +48,20 @@ public final class HookState {
     public long apkUpdateMs = 0L;
     /** SystemUI 进程启动时间（毫秒） */
     public long procStartMs = 0L;
+    /** 最近一次热重载成功时间（毫秒）；0 表示没发生过 */
+    public long hotReloadMs = 0L;
+    /** 模块是否曾经在本机系统界面里跑过；空 = 首次安装，此时才允许提示重启 */
+    public boolean everRan = false;
     /** 给界面直接展示的原因，只在 UNKNOWN 时有内容 */
     public String note = "";
 
     private static volatile HookState sLast;
+    /** 上次结果对应的热重载时间戳：热重载刚发生时要立刻作废缓存，不能拿 30 秒内的旧 STALE 继续骗用户。 */
+    private static volatile long sLastReload;
     private static volatile long sAt;
 
-    private HookState() {
+    /** 包内可建：JVM 沙盒直接构造状态对象钉判定，不对外暴露。 */
+    HookState() {
     }
 
     /** 作废缓存。「重新检测」按钮用。 */
@@ -78,16 +85,21 @@ public final class HookState {
 
     public static HookState probe(Context ctx) {
         long now = System.currentTimeMillis();
+        long reload = reloadAt(ctx);
+        boolean everRan = seenAt(ctx) > 0L;
         HookState cached = sLast;
-        if (cached != null && sAt != 0L && now - sAt < CACHE_MS) {
+        if (cached != null && sAt != 0L && now - sAt < CACHE_MS && reload == sLastReload) {
             return cached;
         }
 
         HookState s = new HookState();
+        s.hotReloadMs = reload;
+        s.everRan = everRan;
         s.apkUpdateMs = apkUpdateTime(ctx);
         if (s.apkUpdateMs <= 0L) {
             s.note = "读不到本应用的安装时间";
             sAt = now;
+            sLastReload = reload;
             sLast = s;
             return s;
         }
@@ -100,13 +112,18 @@ public final class HookState {
             // 不猜，按「探不到」处理，界面不提示。
             s.note = "没找到系统界面进程";
             sAt = now;
+            sLastReload = reload;
             sLast = s;
             return s;
         }
         s.pid = (int) hit[0];
         s.procStartMs = hit[1] * 1000L;
-        s.state = decide(s.apkUpdateMs, s.procStartMs);
+        s.state = decide(s.apkUpdateMs, s.procStartMs, s.hotReloadMs);
+        if (s.state == FRESH && s.hotReloadMs > s.procStartMs) {
+            s.note = "已热重载，无需重启";
+        }
         sAt = now;
+        sLastReload = reload;
         sLast = s;
         return s;
     }
@@ -130,10 +147,50 @@ public final class HookState {
      */
     /** public 仅为让 JVM 回归测试能直接钉住判定结果，不对外承诺 API。 */
     public static int decide(long apkUpdateMs, long procStartMs) {
-        if (apkUpdateMs <= 0L || procStartMs <= 0L) {
+        return decide(apkUpdateMs, procStartMs, 0L);
+    }
+
+    /**
+     * 三参判定：进程启动时刻与「最近一次热重载成功时刻」取较晚者作为这一代代码的生效时刻。
+     *
+     * <p>覆盖安装后管理器可以直接热重载模块而不重启 SystemUI，此时进程仍是旧的，
+     * 但进程里跑的已经是新代码 —— 只看 pid 启动时间会一直误报「跑的是旧版」。
+     * 热重载时间由 hook 进程通过 provider 写进 App 私有 prefs，读不到即当 0 处理。</p>
+     */
+    public static int decide(long apkUpdateMs, long procStartMs, long reloadMs) {
+        if (apkUpdateMs <= 0L) {
             return UNKNOWN;
         }
-        return procStartMs + TOLERANCE_MS >= apkUpdateMs ? FRESH : STALE;
+        long effective = Math.max(procStartMs, reloadMs);
+        if (effective <= 0L) {
+            return UNKNOWN;
+        }
+        return effective + TOLERANCE_MS >= apkUpdateMs ? FRESH : STALE;
+    }
+
+    /** 只有从没跑过（首次安装）才返回 true —— 更新后一律不再要求重启。 */
+    public boolean firstInstallStale() {
+        return state == STALE && !everRan;
+    }
+
+    /** 读「模块跑过」标记；没有就返回 0。 */
+    public static long seenAt(Context ctx) {
+        try {
+            return ctx.getSharedPreferences(ConfigProvider.HOOK_PREFS, Context.MODE_PRIVATE)
+                    .getLong(ConfigProvider.KEY_SEEN_AT, 0L);
+        } catch (Throwable t) {
+            return 0L;
+        }
+    }
+
+    /** 读热重载标记；没有就返回 0。 */
+    public static long reloadAt(Context ctx) {
+        try {
+            return ctx.getSharedPreferences(ConfigProvider.HOOK_PREFS, Context.MODE_PRIVATE)
+                    .getLong(ConfigProvider.KEY_RELOAD_AT, 0L);
+        } catch (Throwable t) {
+            return 0L;
+        }
     }
 
     // ---- 探测脚本 ----

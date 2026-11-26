@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- v3.2.10：新图标（插画）。前景缩到 62%（66dp 安全区）居中，圆形/方形蒙版都不裁人物，背景用同图模糊填满，不用单色以免边缘生硬。
+     彩色插画不做 monochrome：主题图标会把整张图当剪影，效果是方块，宁可不给。 -->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-    <background android:drawable="@color/ic_launcher_background" />
+    <background android:drawable="@drawable/ic_launcher_bg" />
     <foreground android:drawable="@drawable/ic_launcher_fg" />
-    <monochrome android:drawable="@drawable/ic_launcher_fg" />
 </adaptive-icon>
