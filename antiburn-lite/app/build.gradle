@@ -12,8 +12,8 @@ android {
         applicationId "io.github.wumisc.antiburn"
         minSdk 33
         targetSdk 37
-        versionCode 139
-        versionName "3.3.0"
+        versionCode 142
+        versionName "3.4.0"
     }
 
     compileOptions {
@@ -39,12 +39,31 @@ android {
         /**
          * 历史发布包一直用 debug.keystore 签（模块本身不要求上架商店）。
          * 这里显式声明成 shared，release 与 debug 共用同一把，用户升级不用卸载。
+         *
+         * v3.4.0 起正式版改用独立 release key（见下方 release 配置），shared 保留给
+         * 「没有 keystore.properties 的开源编译者」兜底。
          */
         shared {
             storeFile file('../debug.keystore')
             storePassword 'android'
             keyAlias 'androiddebugkey'
             keyPassword 'android'
+        }
+        /**
+         * v3.4.0 正式版签名：key 与口令都放在工程根的 keystore.properties（**不入库**，
+         * .gitignore 已挡）。源码公开时别人拿不到 key，也签不出「同签名」的包。
+         * Cloudflare KV 里有一份加密备份，见 发布说明「签名密钥」一节。
+         */
+        release {
+            def propsFile = rootProject.file('keystore.properties')
+            if (propsFile.exists()) {
+                def props = new Properties()
+                propsFile.withInputStream { props.load(it) }
+                storeFile rootProject.file(props.getProperty('storeFile'))
+                storePassword props.getProperty('storePassword')
+                keyAlias props.getProperty('keyAlias')
+                keyPassword props.getProperty('keyPassword')
+            }
         }
     }
 
@@ -58,8 +77,11 @@ android {
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'),
                     'proguard-rules.pro'
-            // 与历史发布包同一把钥匙（指纹 761ef2ac…），保证可覆盖安装
-            signingConfig signingConfigs.shared
+            // 有 keystore.properties 用正式 key；没有就退回 shared（debug），
+            // 保证 clone 下来直接 gradle assembleRelease 也能出包
+            signingConfig rootProject.file('keystore.properties').exists()
+                    ? signingConfigs.release
+                    : signingConfigs.shared
         }
     }
 }

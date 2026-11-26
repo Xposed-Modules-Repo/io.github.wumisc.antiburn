@@ -20,3 +20,7 @@ captures/
 # 系统
 .DS_Store
 Thumbs.db
+
+# 正式版签名密钥（v3.4.0 起，绝不入库）
+*.jks
+keystore.properties

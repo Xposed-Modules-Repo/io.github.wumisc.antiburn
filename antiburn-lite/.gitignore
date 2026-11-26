@@ -1,0 +1,4 @@
+
+# v3.4.0 正式版签名（不入库）
+*.jks
+keystore.properties

@@ -76,13 +76,30 @@ final class LogUploader {
         return env;
     }
 
-    /** 汇总日志正文：私有镜像优先，补读公共日志文件；截断到上限。 */
+    /** 汇总日志正文：v3.4.0 起交给 {@link ConfStore#uploadLogText()} 合并三份来源；截断到上限。 */
     private static String collectLog(Context c) {
+        String text;
+        try {
+            text = ConfStore.uploadLogText();
+        } catch (Throwable t) {
+            text = "";
+        }
+        if (text == null || text.isEmpty()) {
+            // 极端兜底：合并失败时至少把公共日志带上去（原来是「只有配置快照」）
+            text = collectLogFallback();
+        }
+        if (text.length() > LOG_CAP) {
+            text = text.substring(text.length() - LOG_CAP);
+        }
+        return text;
+    }
+
+    private static String collectLogFallback() {
         StringBuilder sb = new StringBuilder();
         try {
             String mirror = ConfStore.readMirror();
             if (mirror != null && !mirror.isEmpty()) {
-                sb.append(mirror);
+                sb.append("[config]\n").append(mirror).append('\n');
             }
         } catch (Throwable ignored) {
         }
@@ -99,11 +116,7 @@ final class LogUploader {
             }
         } catch (Throwable ignored) {
         }
-        String text = sb.toString();
-        if (text.length() > LOG_CAP) {
-            text = text.substring(text.length() - LOG_CAP);
-        }
-        return text;
+        return sb.toString();
     }
 
     /**

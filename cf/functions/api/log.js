@@ -2,6 +2,12 @@
 // 路由：POST /api/log  ；绑定名 DB 指向 D1 数据库（见 wrangler.toml）。
 
 const MAX_LOG = 120_000;
+/** 请求体上限：正常一条日志远小于这个数，超出直接拒绝，别让免费额度被刷爆。 */
+const MAX_BODY = 256 * 1024;
+/** moduleCode 合理区间：0..999。v3.4.0 起用于钳制删除范围（实际版本号才 142，留足余量）。 */
+const MAX_CODE = 999;
+/** ts 合理区间：允许前后 30 天偏差，防止伪造时间戳把日志排到几百年后。 */
+const TS_WINDOW = 30 * 24 * 3600 * 1000;
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -19,6 +25,12 @@ export async function onRequestPost(context) {
     return json({ ok: false, error: "D1 binding missing" }, 500);
   }
 
+  // v3.4.0 修：以前不限体积，request.json() 会被超大 body 拖住
+  const len = Number(request.headers.get("content-length") || 0);
+  if (len > MAX_BODY) {
+    return json({ ok: false, error: "body too large" }, 413);
+  }
+
   let body;
   try {
     body = await request.json();
@@ -28,7 +40,7 @@ export async function onRequestPost(context) {
 
   const e = body.env && typeof body.env === "object" ? body.env : {};
   const log = String(body.log || "").slice(-MAX_LOG);
-  const ts = Number(body.ts) || Date.now();
+  const ts = clampTs(Number(body.ts) || Date.now());
   const code = num(e.moduleCode);
 
   try {
@@ -49,9 +61,11 @@ export async function onRequestPost(context) {
     // 版本挂钩的旧日志清理：本次落库成功后，只保留不低于当前 versionCode 的记录，
     // 清掉更早版本（以及历史上没带 module_code 的未知版本）。同版本、更新版本保留；
     // 旧设备回传旧版本号不会反向删掉更新版本的行。module_code 缺失时跳过清理，避免误删。
+    // v3.4.0 修：以前 code 直接来自请求体，一个 POST 带上 code=999999 就能把整表清空。
+    // 现在只接受 0..MAX_CODE 的合理版本号，越界一律不清理。
     let purged = 0;
     let purgeWarning = null;
-    if (code != null) {
+    if (code != null && code >= 0 && code <= MAX_CODE) {
       try {
         const del = await env.DB.prepare(
           `DELETE FROM logs WHERE module_code IS NULL OR module_code < ?`
@@ -87,4 +101,16 @@ function str(v) {
 function num(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
+}
+
+function clampTs(v) {
+  const now = Date.now();
+  const n = Number(v);
+  if (!Number.isFinite(n)) {
+    return now;
+  }
+  if (Math.abs(n - now) > TS_WINDOW) {
+    return now;
+  }
+  return n;
 }

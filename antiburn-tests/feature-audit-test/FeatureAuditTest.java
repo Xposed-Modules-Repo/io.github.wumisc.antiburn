@@ -1807,8 +1807,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 139
-                    && "3.3.0".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 142
+                    && "3.4.0".equals(nm.group(1));
             check(ok, "T-42b 版本锚点恰为 99 / 3.2（非区间，锁死发布锚点）", "");
         }
         check(hook297raw.contains("SAFE_RESTORE") && hook297raw.contains("DRAMA_PAYWALL_HIDE"),
@@ -1883,8 +1883,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 139
-                    && "3.3.0".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 142
+                    && "3.4.0".equals(nm.group(1));
             // 与 T-42b 断言同源，是发布前的双重防回退锁，不冒充新增不变量（评审建议改标签）。
             check(ok, "T-43c P3 版本锚点与 T-42b 双重锁定（99/3.2）（发布前防回退，非新增不变量）", "");
         }
@@ -1922,8 +1922,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 139
-                    && "3.3.0".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 142
+                    && "3.4.0".equals(nm.group(1));
             check(ok, "T-44c 版本号恰为 99 / 3.2（发布锚点）", "");
         }
 
@@ -1965,8 +1965,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 139
-                    && "3.3.0".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 142
+                    && "3.4.0".equals(nm.group(1));
             check(ok, "T-45c 版本号恰为 99 / 3.2（发布锚点）", "");
         }
 
@@ -2042,8 +2042,8 @@ public class FeatureAuditTest {
             // ⑤ 版本锚点 + 辅助方法只读性
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
-            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 139
-                    && "3.3.0".equals(nm.group(1));
+            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 142
+                    && "3.4.0".equals(nm.group(1));
             String helper = stripComments(slice(dy304raw, "private static boolean hasChildByClass(View v, String target)",
                     "private static int scoreRight(ViewGroup g)"));
             boolean readonly = helper.contains("MAX_DEPTH") && helper.contains("catch (Throwable")
@@ -2087,8 +2087,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 139
-                    && "3.3.0".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 142
+                    && "3.4.0".equals(nm.group(1));
             check(ok, "T-47c 版本号恰为 99 / 3.2（v3.0.13 发布锚点）", "");
         }
 
@@ -2355,7 +2355,7 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ver = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 139 && "3.3.0".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 142 && "3.4.0".equals(nm.group(1));
             check(ver, "T-48-VER 版本锚点 99/3.2（T-42b~T-47c 六处已同步）", "");
         }
 
@@ -3022,7 +3022,7 @@ public class FeatureAuditTest {
                     // v3.2.14 授权改动：autoSyncLog 常驻静默补录 + 补录改先直写后 su，基线重锁
                     // v3.2.16 授权改动：appendHookLine/appendDirectText + clearLogs 直删优先，基线重锁
                     // v3.2.17 审计修正：appendDirectText 直写失败补 su 追加（10s 节流），基线重锁
-                    {"ConfStore.java", "6e1753f3f61a6ec056b043847fa7fc5666394aebdb82afb66f86622041611261"},
+                    {"ConfStore.java", "2f118352562f68a4df002aca7377580eef19f5a9ad6b9f34ce434c2efff18d94"},
                     {"ThhLiveGate.java", "09903e9bb86f1f9f044c04a869df71a9c6e31ea8d8e4746aa7381c0e81226c5f"},
                     // v3.0.16 授权改动：应用内遮盖通道重开（仅 overlay 引擎）
                     // v3.2.16 授权改动：无障碍探针 NDUMP（免 root 采集红点/右侧列/底栏节点），基线重锁
@@ -3190,7 +3190,7 @@ public class FeatureAuditTest {
                     // v3.2.14 授权改动：autoSyncLog 常驻静默补录 + 补录改先直写后 su，基线重锁
                     // v3.2.16 授权改动：appendHookLine/appendDirectText + clearLogs 直删优先，基线重锁
                     // v3.2.17 审计修正：appendDirectText 直写失败补 su 追加（10s 节流），基线重锁
-                    {"ConfStore.java",   "6e1753f3f61a6ec056b043847fa7fc5666394aebdb82afb66f86622041611261"},
+                    {"ConfStore.java",   "2f118352562f68a4df002aca7377580eef19f5a9ad6b9f34ce434c2efff18d94"},
                     {"ThhLiveGate.java", "09903e9bb86f1f9f044c04a869df71a9c6e31ea8d8e4746aa7381c0e81226c5f"},
                     {"VideoApps.java",   "a2d2e5d5d3ccd65e6dc2960a2e80d7237ede53230161fdf790f6812327dddea4"},
                     {"VideoAppProbe.java","339431f7762ed59befe066a22da5a0049ada5c8c88c3452a7c277687967de0b1"},
@@ -3296,8 +3296,8 @@ public class FeatureAuditTest {
             java.util.regex.Matcher nm313 = java.util.regex.Pattern
                     .compile("versionName\\s+\"([^\"]+)\"").matcher(gradle313);
             boolean ver313 = cm313.find() && nm313.find()
-                    && Integer.parseInt(cm313.group(1)) == 139
-                    && "3.3.0".equals(nm313.group(1));
+                    && Integer.parseInt(cm313.group(1)) == 142
+                    && "3.4.0".equals(nm313.group(1));
             check(ver313, "T-55-A5 版本锚点 99 / 3.2", "");
 
             // A6 · 变异实证：把 INFO 类目改坏，A1 守卫必须失效（证明断言非空转）
@@ -4264,15 +4264,16 @@ public class FeatureAuditTest {
             String isl83 = read(dir.resolve("IslandNotify.java"));
             String gs83 = read(dir.resolve("GuardService.java"));
             String apply83 = slice(isl83, "static boolean apply(Context ctx, Notification n", "static String param(");
-            check(isl83.contains("\"miui.focus.param\"") && !isl83.contains("n.extras.putBundle("),
-                    "T-83-A1 只用公开协议字段 miui.focus.param，不往 extras 塞图片 Bundle", "");
+            check(isl83.contains("\"miui.focus.param\""),
+                    "T-83-A1 只用公开协议字段 miui.focus.param", "");
             // v3.2.19：pics 的 key 必须带 miui.focus.pic_ 前缀（kit 的 PIC_PREFIX），
             // 旧版 key_island_icon 这种自造名 SystemUI 找不到图，会整条焦点通知渲染失败
-            // v3.2.20：不再写 miui.focus.pics —— 真机上那张图会被焦点卡片画到右侧，
-            // 左侧 App 图标反而让位消失。图标统一交给 smallIcon。
+            // v3.2.20 曾整条撤掉 pics；v3.3.2 又回来了 —— 但这次只放**我们自己的图标**
+            // （picInfo.type=2 引用），不再用 baseInfo.picFunction 引功能图，
+            // 那种写法在 3.2.20 的真机上是「左边空、右边飘图」。
             check(apply83.contains("n.extras.putString(K_PARAM")
-                            && !apply83.contains("putBundle(K_PICS"),
-                    "T-83-A2 只写 miui.focus.param，不再塞 pics（那张图会顶掉左侧 App 图标）", "");
+                            && apply83.contains("putBundle(K_PICS"),
+                    "T-83-A2 焦点参数 + pics 图片池同时下发（图只给左格用，不被 baseInfo 引用）", "");
             String build83 = slice(gs83, "private static Notification build(Context ctx)", "private static String statusText(");
             check(build83.contains("if (Config.enableIslandLink)"),
                     "T-83-A3 复用「超级岛联动」开关门控，关掉即回到纯普通通知", "");
@@ -4357,11 +4358,21 @@ public class FeatureAuditTest {
             check(ap85.contains("if (ctx == null || n == null)"),
                     "T-85-A3 apply 对空 context / 空通知直接返回，不写半个字段", "");
             String bd85 = slice(gs85, "private static Notification build(Context ctx)", "private static String statusText(");
-            // v3.2.19：图标与岛解耦 —— smallIcon 固定是应用图标，永远只有一个；
-            // 岛能不能上另算，绝不再用 largeIcon 去「补一个」
-            check(bd85.contains("baseBuilder(ctx, smallIconRes(ctx), text)")
-                            && !bd85.contains("setLargeIcon("),
-                    "T-85-A4 图标走 baseBuilder(smallIconRes)，不再用 largeIcon", "");
+            // v3.3.2：图走 miui.focus.pics（picInfo.type=2 引用），largeIcon 一律不设 ——
+            // 3.3.1 设了 largeIcon，焦点卡左侧 + 通知行行尾各画一次，一张图变两个（真机复现）。
+            check(gs85.contains("baseBuilder(ctx, smallIconRes(ctx), text)")
+                            && !gs85.contains(".setLargeIcon("),
+                    "T-85-A4 通知统一走 baseBuilder(smallIconRes)，且不再设 largeIcon（避免一图两画）", "");
+            String pics85 = slice(isl85, "static Bundle pics(Context ctx)", "static String param(");
+            String ci85 = slice(gs85, "static android.graphics.drawable.Icon cardIcon(Context ctx)", "private static Notification quickBuild");
+            check(isl85.contains("putBundle(K_PICS") && isl85.contains("\"miui.focus.pics\""),
+                    "T-85-A4b 图片池写进 miui.focus.pics", "");
+            check(isl85.contains("\"miui.focus.pic_antiburn\"")
+                            && isl85.contains("\"type\", 2")
+                            && pics85.contains("GuardService.cardIcon(ctx)")
+                            && ci85.contains("Icon.createWithResource(ctx, R.drawable.notif_large)")
+                            && !ci85.contains("Bitmap.createBitmap("),
+                    "T-85-A4c pics 的 key 带 miui.focus.pic_ 前缀、picInfo 用 type=2 引用，值是资源引用而非手画位图", "");
             check(bd85.contains("if (Config.enableIslandLink)")
                             && bd85.contains("IslandNotify.apply(ctx, n, title, text)"),
                     "T-85-A5 联动开启才写岛 extras，且写在 build() 之后", "");

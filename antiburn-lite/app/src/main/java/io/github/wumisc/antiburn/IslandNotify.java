@@ -34,6 +34,10 @@ public final class IslandNotify {
 
     /** 焦点通知渲染参数。 */
     static final String K_PARAM = "miui.focus.param";
+    /** 焦点通知图片池（Bundle，key 必须 {@code miui.focus.pic_} 前缀）。 */
+    static final String K_PICS = "miui.focus.pics";
+    /** 我们那张图在 pics 里的 key。 */
+    static final String PIC_KEY = "miui.focus.pic_antiburn";
     /** 岛的短标题（小岛上只放得下几个字）。 */
     static final String ISLAND_TEXT = "防烧屏";
     /** 业务标识：SystemUI 用它区分来源，同一 business 同 id 的通知会原地更新。 */
@@ -90,16 +94,37 @@ public final class IslandNotify {
             return false;
         }
         try {
-            // v3.2.20：**不再写 miui.focus.pics**。
-            // 真机截图里通知行左侧空着、右边却飘着一张图 —— 那就是 pics 里被
-            // baseInfo.picFunction 引用的功能图标，SystemUI 把它画在焦点卡片右侧，
-            // 而左侧的 App 图标因此让位消失。图标统一交给 smallIcon（安全出行写法），
-            // 岛只保留文字模板，不再往卡片里塞第二张图。
+            // v3.3.2：左侧彩色图标改由 pics 提供（见 pics()），大岛左格用 picInfo.type=2 指过去。
+            // 3.3.1 走的是 largeIcon，结果焦点卡左侧画一次、普通通知行行尾又画一次 —— 两个图标。
             n.extras.putString(K_PARAM, param(title, content));
+            Bundle pics = pics(ctx);
+            if (pics != null) {
+                n.extras.putBundle(K_PICS, pics);
+            }
             return true;
         } catch (Throwable ignored) {
             // 岛是锦上添花：任何异常都退化成普通通知，不影响常驻与点击
             return false;
+        }
+    }
+
+    /**
+     * 焦点通知的图片池：key 必须带 {@code miui.focus.pic_} 前缀，由 param 里的 picInfo 引用。
+     *
+     * <p>图标用资源引用（{@code Icon.createWithResource}），不在我们这边画位图 ——
+     * 3.2.17 现场画 192px 位图的写法会构造失败、被吞掉后退成不可见图，真机「时有时无」。</p>
+     */
+    static Bundle pics(Context ctx) {
+        try {
+            android.graphics.drawable.Icon icon = GuardService.cardIcon(ctx);
+            if (icon == null) {
+                return null;
+            }
+            Bundle b = new Bundle();
+            b.putParcelable(PIC_KEY, icon);
+            return b;
+        } catch (Throwable ignored) {
+            return null;
         }
     }
 
@@ -121,11 +146,15 @@ public final class IslandNotify {
 
             // v3.2.21：结构照抄「安全出行」的 FocusNotifyParam.json（真机上岛的那一份），
             // 关键差异：protocol=1（不是 kit 默认的 3）、内容区走
-            // bigIslandArea.imageTextInfoLeft + smallIslandArea，而 picInfo 只写 type=1
-            // —— 意思是"用 App 自己的图标"，所以不需要 miui.focus.pics 里任何图。
+            // bigIslandArea.imageTextInfoLeft + smallIslandArea。
+            // v3.3.2：picInfo 由 type=1（用系统解析的应用图标，会时有时无）改成 type=2
+            // 引用 pics 里的 key —— 图由我们自己给，不再依赖系统去解自适应图标。
+            JSONObject leftPic = new JSONObject()
+                    .put("type", 2)
+                    .put("pic", PIC_KEY);
             JSONObject left = new JSONObject()
                     .put("type", 1)
-                    .put("picInfo", new JSONObject().put("type", 1))
+                    .put("picInfo", leftPic)
                     .put("textInfo", new JSONObject()
                             .put("frontTitle", ISLAND_TEXT)
                             .put("title", tag)
@@ -137,7 +166,7 @@ public final class IslandNotify {
                     .put("islandProperty", 1)
                     .put("bigIslandArea", new JSONObject().put("imageTextInfoLeft", left))
                     .put("smallIslandArea", new JSONObject()
-                            .put("picInfo", new JSONObject().put("type", 1)));
+                            .put("picInfo", leftPic));
 
             JSONObject v2 = new JSONObject()
                     .put("protocol", 1)

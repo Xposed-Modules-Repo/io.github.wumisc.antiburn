@@ -368,6 +368,21 @@ public final class GuardService extends Service {
         return R.drawable.ic_tile;
     }
 
+    /**
+     * 通知左侧彩色图标（资源引用），由 {@link IslandNotify#pics(Context)} 塞进
+     * {@code miui.focus.pics}，交给焦点卡左侧那一格去画。
+     *
+     * <p>v3.3.2：不再作为 {@code setLargeIcon} 使用 —— 那样焦点卡左侧和普通通知行行尾
+     * 会各画一次，一张图变两个（12:16 真机截图）。</p>
+     */
+    static android.graphics.drawable.Icon cardIcon(Context ctx) {
+        try {
+            return android.graphics.drawable.Icon.createWithResource(ctx, R.drawable.notif_large);
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
     /** 最小可用的常驻通知：不读 prefs、不跨进程、不加岛参数，用来抢 5 秒窗口。 */
     private static Notification quickBuild(Context ctx) {
         return baseBuilder(ctx, smallIconRes(ctx), "守护中").build();
@@ -386,6 +401,11 @@ public final class GuardService extends Service {
                 PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
         Notification.Builder b = new Notification.Builder(ctx, CHANNEL_ID)
                 .setSmallIcon(icon)
+                // v3.3.2：**不设 largeIcon**。
+                // 3.3.1 加了 setLargeIcon，结果焦点卡左侧有图、右侧又飘出一个同款缩略图
+                // （12:16 截图，黄圈）。原因：HyperOS 焦点卡左侧那格吃 largeIcon，
+                // 而普通通知行又把 largeIcon 画成行尾的「大图」——一张图被画了两遍。
+                // 现在改成「图走 miui.focus.pics，largeIcon 不设」，见 IslandNotify.pics()。
                 .setContentTitle("防烧屏 · 运行中")
                 .setContentText(text)
                 .setOngoing(true)

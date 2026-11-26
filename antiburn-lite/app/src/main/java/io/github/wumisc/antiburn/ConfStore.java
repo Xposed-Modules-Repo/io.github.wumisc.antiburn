@@ -1275,6 +1275,100 @@ public final class ConfStore {
     }
 
     /** 直读当前公开日志（本进程）；读不到再走 su 兜底，供镜像补录做整行去重比对。 */
+    /**
+     * v3.4.0：给「上传到云端」用的日志快照。
+     *
+     * <p><b>修的是什么 bug</b>：上传走的是 {@code LogUploader.collectLog()}，它只读
+     * 配置镜像 {@link #readMirror()} 与公共 {@code antiburn.log}。前者是配置快照
+     * （{@code rev= / enable_...}），后一条路径在应用进程里往往读不到
+     * （分区存储拦着，只能靠 su）。真机上持续上传上来的都是 900 多字符的「纯配置」，
+     * 一条 {@code SYS / MASK / NDUMP / INJECTED} 都没有 —— 远端排查等于没有证据。
+     * 3.3.1/3.3.2 那两轮通知栏问题就是卡在这里：日志里看不到一句话。</p>
+     *
+     * <p>这里把三份来源合起来（本进程直读，不依赖 su）：注入进程镜像
+     * {@link #readHookMirror()}、公共日志 {@link #readPublicLogDirect()}、写盘审计
+     * {@link #auditFile()}，按行首时间戳排序、整行去重，只留最近 4000 行，
+     * 配置快照单独放在最前面并加 {@code [config]} 头。</p>
+     */
+    public static String uploadLogText() {
+        StringBuilder out = new StringBuilder();
+        try {
+            String cfg = readMirror();
+            if (cfg != null && !cfg.isEmpty()) {
+                out.append("[config]\n").append(cfg).append('\n');
+            }
+        } catch (Throwable ignored) {
+        }
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        java.util.List<String> lines = new java.util.ArrayList<>();
+        addUploadLines(lines, seen, readPublicLogDirect());
+        addUploadLines(lines, seen, readHookMirror());
+        try {
+            File a = auditFile();
+            if (a != null && a.exists() && a.length() > 0) {
+                addUploadLines(lines, seen, readTextFile(a));
+            }
+        } catch (Throwable ignored) {
+        }
+        // 按行首时间戳稳定排序（毫秒/秒两种都按数值比），没有时间戳的行排在最后
+        lines.sort((x, y) -> Long.compare(leadTs(x), leadTs(y)));
+        if (lines.size() > 4000) {
+            lines = lines.subList(lines.size() - 4000, lines.size());
+        }
+        if (!lines.isEmpty()) {
+            out.append("[log]\n");
+            for (String l : lines) {
+                out.append(l).append('\n');
+            }
+        }
+        return out.toString();
+    }
+
+    private static void addUploadLines(java.util.List<String> into,
+                                       java.util.Set<String> seen, String text) {
+        if (text == null || text.isEmpty()) {
+            return;
+        }
+        for (String l : text.split("\\r?\\n")) {
+            if (l.isEmpty() || !seen.add(l)) {
+                continue;
+            }
+            if (l.contains("] SELF ver=")) {
+                continue; // 每次导出都会追加的汇总行，重复进来只会干扰时间线
+            }
+            into.add(l);
+        }
+    }
+
+    /** 行首时间戳（10 位以上的纯数字），用于排序；没有则视为 0（排最后）。 */
+    private static long leadTs(String line) {
+        int n = 0;
+        while (n < line.length() && n < 18 && Character.isDigit(line.charAt(n))) {
+            n++;
+        }
+        if (n < 10) {
+            return 0L;
+        }
+        try {
+            return Long.parseLong(line.substring(0, n));
+        } catch (Throwable t) {
+            return 0L;
+        }
+    }
+
+    private static String readTextFile(File f) {
+        try (java.io.BufferedReader br = new java.io.BufferedReader(new java.io.FileReader(f))) {
+            StringBuilder sb = new StringBuilder();
+            String line;
+            while ((line = br.readLine()) != null) {
+                sb.append(line).append('\n');
+            }
+            return sb.toString();
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
     private static String readPublicLogDirect() {
         try {
             File f = new File(LOG_FILE);
