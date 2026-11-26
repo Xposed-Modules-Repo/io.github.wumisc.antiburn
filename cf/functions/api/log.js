@@ -2,6 +2,11 @@
 // 路由：POST /api/log  ；绑定名 DB 指向 D1 数据库（见 wrangler.toml）。
 
 const MAX_LOG = 120_000;
+/** 反馈正文上限：一句话足够，超了截断而不是拒绝。 */
+const MAX_MSG = 600;
+const MAX_CONTACT = 120;
+/** 反馈自带日志上限：够看现场就行，别把反馈表也撑着。 */
+const MAX_FEEDBACK_LOG = 40_000;
 /** 请求体上限：正常一条日志远小于这个数，超出直接拒绝，别让免费额度被刷爆。 */
 const MAX_BODY = 256 * 1024;
 /** moduleCode 合理区间：0..999。v3.4.0 起用于钳制删除范围（实际版本号才 142，留足余量）。 */
@@ -42,6 +47,32 @@ export async function onRequestPost(context) {
   const log = String(body.log || "").slice(-MAX_LOG);
   const ts = clampTs(Number(body.ts) || Date.now());
   const code = num(e.moduleCode);
+
+  // v3.4.1：带 msg 的请求是「用户反馈」，落到 feedback 表，不参与按版本清理。
+  // 反馈的正文比日志正文重要得多，所以先入库、失败也回 500，让用户知道没送达。
+  const msg = String(body.msg || "").trim().slice(0, MAX_MSG);
+  if (msg) {
+    const contact = String(body.contact || "").trim().slice(0, MAX_CONTACT);
+    try {
+      await env.DB.prepare(
+        `INSERT INTO feedback
+          (ts, model, brand, manufacturer, device, product, release, sdk,
+           module, module_code, msg, contact, log)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+        .bind(
+          ts,
+          str(e.model), str(e.brand), str(e.manufacturer), str(e.device),
+          str(e.product), str(e.release), num(e.sdk),
+          str(e.module), code, msg, contact,
+          String(body.log || "").slice(-MAX_FEEDBACK_LOG)
+        )
+        .run();
+      return json({ ok: true, feedback: true });
+    } catch (err) {
+      return json({ ok: false, error: String(err && err.message || err) }, 500);
+    }
+  }
 
   try {
     await env.DB.prepare(

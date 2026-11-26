@@ -31,6 +31,10 @@ final class LogUploader {
     private static final String PREF = "antiburn_upload";
     private static final String KEY_CONSENT = "consent_given";
     /** 单次上传日志字符上限（约 120KB 文本）。 */
+    /** v3.4.1：反馈正文 / 联系方式 / 附带日志上限。 */
+    static final int FEEDBACK_MAX = 600;
+    static final int CONTACT_MAX = 120;
+    static final int FEEDBACK_LOG_MAX = 40_000;
     private static final int LOG_CAP = 120_000;
     private static final int CONNECT_MS = 8_000;
     private static final int READ_MS = 10_000;
@@ -157,6 +161,70 @@ final class LogUploader {
             return "上传失败：服务端返回 " + code;
         } catch (Throwable t) {
             return "上传失败：" + t.getClass().getSimpleName();
+        } finally {
+            if (cn != null) {
+                cn.disconnect();
+            }
+        }
+    }
+
+    /**
+     * v3.4.1：用户反馈。正文由用户输入，连同最近日志一起送到同一个云端接口。
+     *
+     * <p>与 {@link #uploadBlocking} 走同一条路，只是多带 {@code msg}/{@code contact}：
+     * 服务端见到 msg 就落 feedback 表（不参与按版本清理），否则仍是纯日志。</p>
+     *
+     * <p>日志上限比纯日志上传小，反馈的价值在正文与现场，不在 120KB 的刷屏尾巴。</p>
+     *
+     * @return 给界面提示的结果文案；失败不抛异常。
+     */
+    static String uploadFeedback(Context c, String msg, String contact) {
+        String text = msg == null ? "" : msg.trim();
+        if (text.isEmpty()) {
+            return "请先写下遇到的问题";
+        }
+        if (text.length() > FEEDBACK_MAX) {
+            text = text.substring(0, FEEDBACK_MAX);
+        }
+        if (!hasConsent(c)) {
+            // 反馈本身就是用户主动送出的内容，但日志仍属诊断数据：没同意过就只发正文。
+            return "请先在上传日志处同意诊断信息共享";
+        }
+        HttpURLConnection cn = null;
+        try {
+            JSONObject payload = new JSONObject();
+            payload.put("env", new JSONObject(collectEnv()));
+            payload.put("ts", System.currentTimeMillis());
+            payload.put("msg", text);
+            String cc = contact == null ? "" : contact.trim();
+            if (cc.length() > CONTACT_MAX) {
+                cc = cc.substring(0, CONTACT_MAX);
+            }
+            payload.put("contact", cc);
+            String log = ConfStore.uploadLogText();
+            if (log != null && log.length() > FEEDBACK_LOG_MAX) {
+                log = log.substring(log.length() - FEEDBACK_LOG_MAX);
+            }
+            payload.put("log", log == null ? "" : log);
+            byte[] body = payload.toString().getBytes(StandardCharsets.UTF_8);
+
+            cn = (HttpURLConnection) new URL(ENDPOINT).openConnection();
+            cn.setRequestMethod("POST");
+            cn.setConnectTimeout(CONNECT_MS);
+            cn.setReadTimeout(READ_MS);
+            cn.setRequestProperty("Content-Type", "application/json;charset=utf-8");
+            cn.setRequestProperty("Content-Length", String.valueOf(body.length));
+            cn.setDoOutput(true);
+            try (OutputStream os = cn.getOutputStream()) {
+                os.write(body);
+            }
+            int code = cn.getResponseCode();
+            if (code >= 200 && code < 300) {
+                return "反馈已送达，谢谢";
+            }
+            return "反馈发送失败：服务端返回 " + code;
+        } catch (Throwable t) {
+            return "反馈发送失败：" + t.getClass().getSimpleName();
         } finally {
             if (cn != null) {
                 cn.disconnect();

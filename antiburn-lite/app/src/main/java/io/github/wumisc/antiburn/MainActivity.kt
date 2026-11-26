@@ -2421,6 +2421,13 @@ private fun HomeAllPage(
         OptionRow("诊断日志", "写 diag.log 排查，出问题请先打开它", checked = state.enableLog, dark = dark,
             onCheckedChange = { on -> onStateChange { s -> s.copy(enableLog = on) } })
 
+        // v3.4.1：反馈入口。诊断日志只解决「我看不到现场」，用户说不清的问题还得靠一句话。
+        var showFeedback by remember { mutableStateOf(false) }
+        ListRow("反馈问题", "一句话描述现象，自动附上最近日志", { showFeedback = true }, dark)
+        if (showFeedback) {
+            FeedbackDialog(dark = dark, onDismiss = { showFeedback = false })
+        }
+
         Spacer(Modifier.height(12.dp))
 
         // ===== v3.1：两个可见性开关合并成一张「本应用隐身」卡 =====
@@ -4242,6 +4249,91 @@ private fun ScopeDialog(
                     Spacer(Modifier.weight(1f))
                     TextButton(onClick = onOpenLsposed) { Text("打开 LSPosed") }
                     TextButton(onClick = onDismiss) { Text("关闭") }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * v3.4.1：用户反馈弹窗。
+ *
+ * <p>只收一句话 + 可选联系方式，日志自动带上：让用户去描述「哪个页面点哪里错了」是强人所难，
+ * 现场由日志说话，正文只补一句人话。</p>
+ *
+ * <p>复用 {@code POST /api/log}，服务端见到 msg 落 feedback 表；未同意日志共享时不发送，
+ * 因为正文与日志在用户眼里是一件事，拆开反而更难解释。</p>
+ */
+@Composable
+private fun FeedbackDialog(dark: Boolean, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var text by remember { mutableStateOf("") }
+    var contact by remember { mutableStateOf("") }
+    var sending by remember { mutableStateOf(false) }
+    var hint by remember { mutableStateOf<String?>(null) }
+    Dialog(onDismissRequest = { if (!sending) onDismiss() }) {
+        Card(
+            Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(22.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        ) {
+            Column(Modifier.padding(horizontal = 20.dp, vertical = 18.dp)) {
+                Text("反馈问题", style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold, color = UiPalette.ink(dark))
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "写下遇到的问题（在哪个 App、哪个页面、点了什么）。" +
+                            "会自动附上机型、系统版本与最近日志，方便定位。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it.take(LogUploader.FEEDBACK_MAX) },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 4,
+                    maxLines = 8,
+                    placeholder = { Text("例如：快手直播间底部按钮没隐藏") },
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = contact,
+                    onValueChange = { contact = it.take(LogUploader.CONTACT_MAX) },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    placeholder = { Text("联系方式（可选，留空也能收到）") },
+                )
+                hint?.let {
+                    Spacer(Modifier.height(8.dp))
+                    Text(it, style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error)
+                }
+                Spacer(Modifier.height(10.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = { if (!sending) onDismiss() }) { Text("取消") }
+                    Spacer(Modifier.weight(1f))
+                    TextButton(
+                        enabled = !sending && text.isNotBlank(),
+                        onClick = {
+                            if (sending) return@TextButton
+                            sending = true
+                            hint = null
+                            scope.launch {
+                                val msg = withContext(Dispatchers.IO) {
+                                    LogUploader.uploadFeedback(context, text, contact)
+                                }
+                                sending = false
+                                if (msg.startsWith("反馈已送达")) {
+                                    Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                    onDismiss()
+                                } else {
+                                    hint = msg
+                                }
+                            }
+                        },
+                    ) { Text(if (sending) "发送中…" else "发送") }
                 }
             }
         }
