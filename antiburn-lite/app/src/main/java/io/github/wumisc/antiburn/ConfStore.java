@@ -1312,6 +1312,10 @@ public final class ConfStore {
         }
         // 按行首时间戳稳定排序（毫秒/秒两种都按数值比），没有时间戳的行排在最后
         lines.sort((x, y) -> Long.compare(leadTs(x), leadTs(y)));
+        // v3.4.1：MASK 心跳折叠。真机上 266 行 MASK 里 241 行只在两种 fg 之间来回，
+        // 120KB 的额度被 com.miui.notes / miui.systemui.plugin 吃光，[config]/[log]/[probe]
+        // 三个段头全被挤掉 —— 远端看不到任何有用信息。同一签名留首末两条 + 一行计数即可。
+        lines = foldMaskHeartbeats(lines);
         if (lines.size() > 4000) {
             lines = lines.subList(lines.size() - 4000, lines.size());
         }
@@ -1333,6 +1337,65 @@ public final class ConfStore {
         } catch (Throwable ignored) {
         }
         return out.toString();
+    }
+
+    /** v3.4.1：同一 MASK 签名重复到第三次，写盘成本就已超过它的排障价值。 */
+    private static final int FOLD_MIN = 3;
+
+    /**
+     * 折叠重复的 MASK 心跳行：同一签名（去时间戳、pid 归一化、{@code fg=*}）出现
+     * {@link #FOLD_MIN} 次以上时，只保留第一条与最后一条，中间换成一行
+     * {@code [fold] <签名> ×<次数>}。
+     *
+     * <p>保留首末是有意的：首条交代「什么时候开始这样」，末条交代「最后一次是什么时候」，
+     * 中间几十条只差一个时间戳，重复留全是纯噪声。非 MASK 行一律原样通过。</p>
+     */
+    static java.util.List<String> foldMaskHeartbeats(java.util.List<String> lines) {
+        java.util.Map<String, Integer> total = new java.util.HashMap<>();
+        for (String l : lines) {
+            if (!l.contains("] MASK ")) {
+                continue;
+            }
+            String k = maskKey(l);
+            Integer c = total.get(k);
+            total.put(k, c == null ? 1 : c + 1);
+        }
+        java.util.List<String> out = new java.util.ArrayList<>(lines.size());
+        java.util.Map<String, Integer> seen = new java.util.HashMap<>();
+        for (String l : lines) {
+            if (!l.contains("] MASK ")) {
+                out.add(l);
+                continue;
+            }
+            String k = maskKey(l);
+            Integer t = total.get(k);
+            if (t == null || t < FOLD_MIN) {
+                out.add(l);
+                continue;
+            }
+            Integer s0 = seen.get(k);
+            int n = s0 == null ? 1 : s0 + 1;
+            seen.put(k, n);
+            if (n == 1) {
+                out.add(l);
+                out.add("[fold] " + k + " ×" + t);
+            } else if (n == t) {
+                out.add(l); // 末条留时间戳，别把「最后一次」也吞掉
+            }
+        }
+        return out;
+    }
+
+    /** MASK 行的比较签名：去行首毫秒时间戳，pid 与前台包名归一化。 */
+    private static String maskKey(String line) {
+        int i = 0;
+        while (i < line.length() && Character.isDigit(line.charAt(i))) {
+            i++;
+        }
+        String rest = line.substring(i).trim();
+        rest = rest.replaceAll("\\[mask/\\d+\\]", "[mask]");
+        rest = rest.replaceAll("fg=\\S+", "fg=*");
+        return rest;
     }
 
     /**

@@ -3022,7 +3022,7 @@ public class FeatureAuditTest {
                     // v3.2.14 授权改动：autoSyncLog 常驻静默补录 + 补录改先直写后 su，基线重锁
                     // v3.2.16 授权改动：appendHookLine/appendDirectText + clearLogs 直删优先，基线重锁
                     // v3.2.17 审计修正：appendDirectText 直写失败补 su 追加（10s 节流），基线重锁
-                    {"ConfStore.java", "db16b2460b542529812e03ad4e40317ab3a3363d72aebfc31cfcbf6b9336bc5c"},
+                    {"ConfStore.java", "67f560fc1d37991146c6f0e102787c3b836b3367c43859add41ca03168e83fb7"},
                     {"ThhLiveGate.java", "09903e9bb86f1f9f044c04a869df71a9c6e31ea8d8e4746aa7381c0e81226c5f"},
                     // v3.0.16 授权改动：应用内遮盖通道重开（仅 overlay 引擎）
                     // v3.2.16 授权改动：无障碍探针 NDUMP（免 root 采集红点/右侧列/底栏节点），基线重锁
@@ -3190,7 +3190,7 @@ public class FeatureAuditTest {
                     // v3.2.14 授权改动：autoSyncLog 常驻静默补录 + 补录改先直写后 su，基线重锁
                     // v3.2.16 授权改动：appendHookLine/appendDirectText + clearLogs 直删优先，基线重锁
                     // v3.2.17 审计修正：appendDirectText 直写失败补 su 追加（10s 节流），基线重锁
-                    {"ConfStore.java",   "db16b2460b542529812e03ad4e40317ab3a3363d72aebfc31cfcbf6b9336bc5c"},
+                    {"ConfStore.java",   "67f560fc1d37991146c6f0e102787c3b836b3367c43859add41ca03168e83fb7"},
                     {"ThhLiveGate.java", "09903e9bb86f1f9f044c04a869df71a9c6e31ea8d8e4746aa7381c0e81226c5f"},
                     {"VideoApps.java",   "a2d2e5d5d3ccd65e6dc2960a2e80d7237ede53230161fdf790f6812327dddea4"},
                     {"VideoAppProbe.java","339431f7762ed59befe066a22da5a0049ada5c8c88c3452a7c277687967de0b1"},
