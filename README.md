@@ -6,7 +6,9 @@ OLED 像素随点亮时长累积衰减：状态栏的时钟、信号、电量，
 
 ## 反馈
 
-遇到问题、想要功能，请到主仓库开 issue：**https://github.com/wumisc/antiburn/issues**
+遇到问题、想要功能，最快的路是 App 里点 **功能设置 › 反馈问题**（v3.4.1 起）：一句话描述现象，自动附上机型、系统版本与最近日志。
+
+也可以到主仓库开 issue：**https://github.com/wumisc/antiburn/issues**
 
 - 附上机型、ROM 版本、Android 版本、LSPosed 版本、模块版本号，以及「诊断日志」导出的 `antiburn.log`；缺日志基本只能靠猜。
 - 这里（LSPosed 镜像仓库）的 issues 被平台统一禁用，留言看不到，请不要在这里提。
