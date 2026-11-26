@@ -137,6 +137,7 @@ private const val PAGE_HOME_ENGINE = "home-engine"
 private const val PAGE_HOME_INJECT = "home-inject"
 private const val PAGE_HOME_LIST = "home-list"
 private const val PAGE_HOME_ALL = "home-all"
+private const val PAGE_FEAT_VIDEO = "feat-video"
 
 /**
  * 界面适配可选方案：六大厂商 + 原生（id 与 conf 里的 ui_style 一一对应）。
@@ -1223,6 +1224,7 @@ private fun BurnInProtectApp() {
                 ) { page ->
                     when (page) {
                         0 -> HomeTilePage(
+                            state = state,
                             enabled = state.enableStatus,
                             onToggle = { on -> onStateChange { s -> s.copy(enableStatus = on) } },
                             onOpen = openSub,
@@ -2298,12 +2300,14 @@ private fun EngineStyleCard(
  */
 @Composable
 private fun HomeTilePage(
+    state: AbState,
     enabled: Boolean,
     onToggle: (Boolean) -> Unit,
     onOpen: (String) -> Unit,
     saveBar: @Composable () -> Unit,
 ) {
     val dark = isSystemInDarkTheme()
+    val context = LocalContext.current
     Column(
         Modifier
             .fillMaxSize()
@@ -2311,23 +2315,25 @@ private fun HomeTilePage(
             .padding(horizontal = 20.dp)
             .padding(top = 24.dp, bottom = 96.dp),
     ) {
+        // v3.4.2：头部原来三行、右对齐两行，视线总在左上和右下之间来回跳。
+        // 收成左右两列、各自顶部对齐：左边标题+引擎，右边两行标语块，高度差由左边吸收。
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.Bottom) {
+            verticalAlignment = Alignment.Top) {
             Column(Modifier.weight(1f)) {
                 Text("护眼防烧屏", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold,
                     color = UiPalette.ink(dark))
-                // 不再写死「LSPosed 模块」：应用同时支持免 root 的无障碍遮盖引擎，
-                // 无 root 用户看到旧文案会以为自己用不了。
                 Text("支持 LSPosed / 无障碍遮盖双引擎", style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 2.dp))
             }
-            // v2.7.0：用户点名的首页标语；「护眼防烧屏」是项目第一目标（核心价值观）
-            Text("为人民服务", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold,
-                color = UiPalette.accent(dark))
+            Column(horizontalAlignment = Alignment.End) {
+                Text("为人民服务", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold,
+                    color = UiPalette.accent(dark))
+                Text("为天地立心", style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline,
+                    modifier = Modifier.padding(top = 2.dp))
+            }
         }
-        Text("为天地立心", style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.outline,
-            modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.End)
 
         saveBar()
 
@@ -2362,6 +2368,23 @@ private fun HomeTilePage(
             }
         }
 
+        // v3.4.2：一根「状态概览」行 —— 三件最容易白忙一场的事实：引擎、注入、日志。
+        // 全部只读现有数据（AbState + recentlyInjected），不新增采集、不发请求。
+        Spacer(Modifier.height(12.dp))
+        val injKeys = listOf("douyin", "drama", "kuaishou", "bilibili")
+        val injOn = injKeys.count { recentlyInjected(context, it) }
+        val engine = if (state.isOverlay) "无障碍遮盖" else "LSPosed"
+        val engOk = !state.isOverlay || state.enableAppOverlay
+        val healthOk = engOk && injOn >= 1 && state.enableLog
+        StatusStrip(
+            dark = dark,
+            ok = healthOk,
+            engine = engine,
+            injected = "$injOn/4",
+            logging = if (state.enableLog) "日志开" else "日志关",
+            onClick = { onOpen(PAGE_HOME_ALL) },
+        )
+
         // v3.2.11：橙色「系统界面里跑的还是旧版」提醒从二级页提到首页一级菜单 ——
         // 装完新版点开 App 第一眼就能看到并一键重启，不用先点进「功能设置」才发现自己白点了。
         // 排在总开关之后：总闸关着是第一顺位原因，旧版是第二顺位。不 stale 时整块不渲染。
@@ -2370,18 +2393,21 @@ private fun HomeTilePage(
 
         Spacer(Modifier.height(12.dp))
 
-        // v3.2.10：运行方式 / 界面适配 / 注入状态 / 白名单 / 隐身 五张卡
-        // 全部收进「功能设置」一个二级入口，首页只留总开关与公益板块，不再一屏堆卡。
-        ListRow("功能设置", "运行方式 · 界面适配 · 注入状态 · 白名单 · 隐身",
-            { onOpen(PAGE_HOME_ALL) }, dark)
+        // v3.4.2：原来这里还有一行「功能设置」，与上面的状态概览条指向同一个页面。
+        // 用户明确要求合并：概览条自己是入口，删掉重复的这一行，首页只留
+        // 总开关 + 状态概览 + 公益板块。
 
         Spacer(Modifier.height(12.dp))
 
         // v3.2.11：公益找孩子板块（首页底部）两张卡，每 24 小时各换一位、最新发布优先；
         // 数据走自建接口 + 缓存 + 内置快照三级回落，每天最多联网拉取一次。
         WelfareCard(slot = 0, onOpen = { onOpen("welfare") }, dark = dark)
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(12.dp))
         WelfareCard(slot = 1, onOpen = { onOpen("welfare-1") }, dark = dark)
+        // v3.4.2：第三张卡是「宝贝寻家」（孩子在找家）。没数据时自己整块不渲染，
+        // 不留一张写着「正在加载」的空壳。
+        Spacer(Modifier.height(12.dp))
+        WelfareCard(slot = 2, onOpen = { onOpen("welfare-2") }, dark = dark)
     }
 }
 
@@ -2402,6 +2428,9 @@ private fun HomeAllPage(
     var hideLauncher by remember { mutableStateOf(AppVisibilityStore.isHideLauncherIcon(context)) }
     var hideRecents by remember { mutableStateOf(AppVisibilityStore.isHideRecents(context)) }
     Column(Modifier.fillMaxWidth()) {
+        // v3.4.2：一列平铺改成四组。原来「引擎 / 注入 / 白名单 / 日志 / 反馈 / 隐身」
+        // 混在一列，用户找不到「日志和反馈是一件事」这种因果关系。
+        GroupTitle("引擎与界面")
         // v3.1：运行方式 + 界面适配合并成一张一级卡片，两个功能都能直接调，不用点进二级页。
         // 运行方式的「详情」（root / LSPosed 检测、Hook 版本、重启系统界面）仍在二级页，
         // 从卡片右上角「详情 ›」进。
@@ -2414,9 +2443,17 @@ private fun HomeAllPage(
 
         Spacer(Modifier.height(10.dp))
 
-        ListRow("注入状态", "四个 App 注入情况", { onOpen(PAGE_HOME_INJECT) }, dark)
+        GroupTitle("能力与拦截")
+        val injNow = listOf("douyin", "drama", "kuaishou", "bilibili")
+            .count { recentlyInjected(context, it) }
+        ListRow("注入状态", "四个 App 注入情况 · 已注入 $injNow/4",
+            { onOpen(PAGE_HOME_INJECT) }, dark)
         ListRow("白名单", "名单内应用不干预", { onOpen(PAGE_HOME_LIST) }, dark)
 
+        Spacer(Modifier.height(10.dp))
+
+        // v3.4.2：诊断与反馈合成一组、紧邻排列 —— 先开日志再反馈，反馈才带得动现场。
+        GroupTitle("诊断与反馈")
         // v3.2.39：诊断日志开关从功能页移到首页 › 功能设置（与上传授权 / 清日志同屏）。
         OptionRow("诊断日志", "写 diag.log 排查，出问题请先打开它", checked = state.enableLog, dark = dark,
             onCheckedChange = { on -> onStateChange { s -> s.copy(enableLog = on) } })
@@ -2428,7 +2465,9 @@ private fun HomeAllPage(
             FeedbackDialog(dark = dark, onDismiss = { showFeedback = false })
         }
 
-        Spacer(Modifier.height(12.dp))
+        HintText("反馈会自动带上最近日志：出问题先把上面的诊断日志打开，比远程猜快得多。")
+
+        Spacer(Modifier.height(10.dp))
 
         // ===== v3.1：两个可见性开关合并成一张「本应用隐身」卡 =====
         //
@@ -2438,6 +2477,9 @@ private fun HomeAllPage(
         // 状态文字也挪到开关左侧，与上方总开关保持同一种排版语言。
         val bothHidden = hideLauncher && hideRecents
         val partialHidden = hideLauncher != hideRecents
+        // 低频且危险：点错要把图标找回来得靠 LSPosed 或 adb。默认折叠，展开后第一眼就是恢复说明。
+        GroupTitle("本应用")
+        CollapsibleGroup(title = "本应用隐身", initiallyExpanded = false) {
         Card(
             Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(18.dp),
@@ -2504,6 +2546,7 @@ private fun HomeAllPage(
                     dark,
                 )
             }
+        }
         }
     }
 }
@@ -2761,32 +2804,11 @@ private fun FeaturesPage(
         ListRow("通用", "系统栏 / 悬浮球 · 已开启 $generalOn/3 项",
             { onOpen("feat-general") }, dark)
 
-        val douyinOn = listOf(
-            state.enableDouyinTop, state.enableDouyinBottom, state.enableDouyinLike,
-            state.enableDouyinRt, state.enableDouyinLt, state.enableLive,
-        ).count { it }
-        ListRow("抖音", "视频页五区 + 直播间 · 已开启 $douyinOn/6 项",
-            { onOpen("feat-douyin") }, dark)
-
-        val dramaOn = listOf(
-            state.enableDramaTop, state.enableDramaLike, state.enableDramaRt,
-            state.enableDramaLt, state.enableDramaSwipe,
-        ).count { it }
-        ListRow("红果", "短剧视频页五个区域 · 已开启 $dramaOn/5 项",
-            { onOpen("feat-drama") }, dark)
-
-        val ksOn = listOf(
-            state.enableKuaishou, state.enableKsRight, state.enableKsTop,
-            state.enableKsBottom, state.enableKsCorner,
-        ).count { it }
-        ListRow("快手", "总开关 + 四个区域 · 已开启 $ksOn/5 项",
-            { onOpen("feat-kuaishou") }, dark)
-
-        // v2.9.2：B站只做右侧点赞区。其余三项识别不到稳定容器，已从 UI 删除，
-        // 这里也不再计入，避免「5 项开了 3 项」这种看不出实际效果的计数。
-        val biliOn = if (state.enableBilibili && state.enableBiliRight) 1 else 0
-        ListRow("B站", if (biliOn == 1) "右侧点赞区 · 已开启" else "右侧点赞区 · 未开启",
-            { onOpen("feat-bilibili") }, dark)
+        // v3.4.2：四个视频 App 各自一行的做法，让同一件事在四个 App 里有四个名字。
+        // 现在收成一个入口，进去后按「区域槽位」统一命名，计数口径也只剩一处真源。
+        ListRow("视频应用",
+            "抖音 / 红果 / 快手 / B站 · 已开启 ${VideoSlots.openTotal(state)}/${VideoSlots.total(state)} 项",
+            { onOpen("feat-video") }, dark)
 
         Spacer(Modifier.height(14.dp))
         RoadmapCard(dark)
@@ -3060,6 +3082,95 @@ private fun GeneralFeaturePage(
             onOpenLsposed = { openLsposedManager(context) },
             onDismiss = { scopeText = null },
         )
+    }
+}
+
+/**
+ * v3.4.2：视频应用总页。
+ *
+ * <p>四款 App 一个入口进去，位置名统一（顶部栏 / 右侧互动列 / 底部栏 …），
+ * 不再分「精准隐藏」「定向隐藏」两套分组 —— 那两组里其实有一半是同一个位置的另一种实现，
+ * 用户要在同一页里理解两套术语才能知道自己开了什么。</p>
+ */
+@Composable
+private fun VideoAppsPage(
+    state: AbState,
+    onStateChange: ((AbState) -> AbState) -> Unit,
+    dark: Boolean,
+) {
+    val overlay = state.isOverlay
+    Text("同一个位置在四个 App 里都叫同一个名字；功能接近的已合并成一个开关。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant)
+    if (overlay) {
+        Spacer(Modifier.height(8.dp))
+        OverlayNotice(dark, "视频应用")
+    }
+    Spacer(Modifier.height(12.dp))
+
+    AppSlotGroup("抖音", VideoSlots.DOUYIN, state, onStateChange, dark, overlay)
+    Spacer(Modifier.height(10.dp))
+    AppSlotGroup("红果短剧", VideoSlots.DRAMA, state, onStateChange, dark, overlay)
+    Spacer(Modifier.height(10.dp))
+    AppSlotGroup("快手", VideoSlots.KUAISHOU, state, onStateChange, dark, overlay,
+        master = "快手总开关" to { s, v -> s.copy(enableKuaishou = v) },
+        masterRead = { it.enableKuaishou },
+        masterDesc = "关掉则快手所有区域都不参与隐藏")
+    Spacer(Modifier.height(10.dp))
+    AppSlotGroup("B站", VideoSlots.BILIBILI, state, onStateChange, dark, overlay)
+
+    Spacer(Modifier.height(14.dp))
+    GroupTitle("共用细节（全局）")
+    SlotRows(VideoSlots.SHARED, state, onStateChange, dark, overlay)
+    HintText("这两项在 Hook 里本来就是全局键：在抖音打开，快手与 B站 也会一起生效。以前分三个页面各写一遍，看起来像三套开关，其实是同一个。")
+
+    Spacer(Modifier.height(12.dp))
+    HintText("所有区域都是按周期真隐藏（藏 ${state.hideSec}s / 显示 ${state.showSec}s），关掉立即恢复。需要模块注入对应 App 进程才生效：首页「注入状态」显示「已注入」即正常。")
+}
+
+/** 一个 App 一组：折叠标题带「已开 N/M」，组内逐槽位渲染。 */
+@Composable
+private fun AppSlotGroup(
+    label: String,
+    slots: List<RegionSlot>,
+    state: AbState,
+    onStateChange: ((AbState) -> AbState) -> Unit,
+    dark: Boolean,
+    overlay: Boolean,
+    master: Pair<String, (AbState, Boolean) -> AbState>? = null,
+    masterRead: (AbState) -> Boolean = { false },
+    masterDesc: String = "",
+) {
+    val open = VideoSlots.openCount(slots, state)
+    CollapsibleGroup(
+        title = "$label（已开 $open/${slots.size}）",
+        initiallyExpanded = open > 0,
+    ) {
+        master?.let { (title, write) ->
+            OptionRow(title, masterDesc, checked = masterRead(state), dark = dark,
+                enabled = !overlay,
+                onCheckedChange = { v -> onStateChange { s -> write(s, v) } })
+        }
+        SlotRows(slots, state, onStateChange, dark, overlay)
+    }
+}
+
+/** 槽位清单渲染：标题/说明/勾选状态全部来自 VideoSlots，四 App 共用同一份渲染逻辑。 */
+@Composable
+private fun SlotRows(
+    slots: List<RegionSlot>,
+    state: AbState,
+    onStateChange: ((AbState) -> AbState) -> Unit,
+    dark: Boolean,
+    overlay: Boolean,
+) {
+    slots.forEach { slot ->
+        OptionRow(slot.title, slot.desc, checked = slot.read(state), dark = dark,
+            enabled = !overlay,
+            onCheckedChange = { v -> onStateChange { s -> slot.write(s, v) } })
+        if (slot.note.isNotEmpty() && slot.read(state)) {
+            HintText(slot.note)
+        }
     }
 }
 
@@ -3462,6 +3573,59 @@ private fun PendingProbeHint() {
  * 单行列表项：标题 + 副标题 + 右侧箭头，整行可点击。
  * 关于页与首页入口统一用它，去掉了大卡片堆叠，深浅色下都清爽。
  */
+/**
+ * v3.4.2：首页状态概览条。
+ *
+ * <p>首页原来只有「总开关」一个事实，用户仍要进「功能设置 › 注入状态」才知道模块到底有没有
+ * 注入到目标 App、日志有没有开。这三件事没做对的典型表现就是「开了没用」，却要翻两层页面。
+ * 这里压成一行，点一下直接进功能设置。</p>
+ *
+ * <p>样式刻意比卡片轻：一行、无阴影、只有一个小圆点和中性底色，避免和总开关抢注意力。</p>
+ */
+@Composable
+private fun StatusStrip(
+    dark: Boolean,
+    ok: Boolean,
+    engine: String,
+    injected: String,
+    logging: String,
+    onClick: () -> Unit,
+) {
+    val dot = if (ok) UiPalette.accent(dark) else UiPalette.warn(dark)
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(UiPalette.surface(dark).copy(alpha = 0.6f))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier
+                .size(6.dp)
+                .clip(RoundedCornerShape(3.dp))
+                .background(dot),
+        )
+        Text(
+            (if (ok) "运行中" else "待处理") + " · " + engine + " · 注入 " + injected + " · " + logging,
+            style = MaterialTheme.typography.bodySmall,
+            color = if (ok) {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            } else {
+                UiPalette.warn(dark)
+            },
+            modifier = Modifier.weight(1f).padding(start = 8.dp),
+        )
+        // v3.4.2：这一行本身就是入口，不再另起一行「功能设置」——
+        // 同一件事在首页出现两次，用户只会问「这两个点进去是不是不一样」。
+        Text("功能设置", style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Bold, color = UiPalette.accent(dark))
+        Text("›", style = MaterialTheme.typography.titleMedium,
+            color = UiPalette.accent(dark), modifier = Modifier.padding(start = 2.dp))
+    }
+}
+
 @Composable
 private fun ListRow(
     title: String,
@@ -3688,12 +3852,14 @@ private fun SubPageHost(
         "links" -> "兼容名单"
         "welfare" -> "寻人启事"
         "welfare-1" -> "寻人启事"
+        "welfare-2" -> "宝贝寻家"
         "suggest" -> "功能建议"
         PAGE_HOME_ENGINE -> "运行方式"
         PAGE_HOME_INJECT -> "注入状态"
         PAGE_HOME_LIST -> "白名单"
         PAGE_HOME_ALL -> "功能设置"
         "feat-general" -> "通用"
+        PAGE_FEAT_VIDEO -> "视频应用"
         "feat-douyin" -> "抖音"
         "feat-drama" -> "红果短剧"
         "feat-kuaishou" -> "快手"
@@ -3736,6 +3902,7 @@ private fun SubPageHost(
                 "links" -> LinksPage(dark, onOpenUrl)
                 "welfare" -> WelfarePage(slot = 0, dark = dark, onOpenUrl = onOpenUrl)
                 "welfare-1" -> WelfarePage(slot = 1, dark = dark, onOpenUrl = onOpenUrl)
+                "welfare-2" -> WelfarePage(slot = 2, dark = dark, onOpenUrl = onOpenUrl)
                 "suggest" -> SuggestPage(dark, onOpenUrl)
                 PAGE_HOME_ALL -> HomeAllPage(state = state, onStateChange = onStateChange, onOpen = onOpen)
                 PAGE_HOME_ENGINE -> EnginePage(state = state, onStateChange = onStateChange, dark = dark)
@@ -3755,6 +3922,7 @@ private fun SubPageHost(
                     dark = dark,
                 )
                 "feat-general" -> GeneralFeaturePage(state, onStateChange, dark)
+                PAGE_FEAT_VIDEO -> VideoAppsPage(state, onStateChange, dark)
                 "feat-douyin" -> DouyinFeaturePage(state, onStateChange, dark)
                 "feat-drama" -> DramaFeaturePage(state, onStateChange, dark)
                 "feat-kuaishou" -> VideoAppSubPage(state, onStateChange, dark, "快手",
@@ -3915,16 +4083,19 @@ private fun WelfareCard(slot: Int, onOpen: () -> Unit, dark: Boolean) {
     LaunchedEffect(Unit) {
         val d = withContext(Dispatchers.IO) { WelfareStore.load(ctx) }
         doc = d
-        val k = d?.items?.getOrNull(
-            WelfareStore.currentIndex(ctx, d, System.currentTimeMillis(), slot))
+        val list = WelfareStore.itemsFor(d, slot)
+        val k = list.getOrNull(WelfareStore.currentIndex(ctx, d, System.currentTimeMillis(), slot))
         bmp = withContext(Dispatchers.IO) {
-            // v3.2.12：当天两卡先落盘（资料 + 照片），换人时才删旧的；照片已有就不再联网
+            // v3.2.12：当天几卡先落盘（资料 + 照片），换人时才删旧的；照片已有就不再联网
             if (d != null) WelfareStore.syncToday(ctx, d, System.currentTimeMillis())
             WelfareStore.photoCached(ctx, k?.photo, k?.id ?: 0, 320)
         }
     }
-    val kid = doc?.let {
-        it.items.getOrNull(WelfareStore.currentIndex(ctx, it, System.currentTimeMillis(), slot))
+    val list = WelfareStore.itemsFor(doc, slot)
+    val kid = list.getOrNull(WelfareStore.currentIndex(ctx, doc, System.currentTimeMillis(), slot))
+    // v3.4.2：宝贝寻家这条没有数据就整块不渲染，不留空壳
+    if (slot >= 2 && doc != null && list.isEmpty()) {
+        return
     }
     Card(
         Modifier.fillMaxWidth().clickable { onOpen() },
@@ -3949,12 +4120,18 @@ private fun WelfareCard(slot: Int, onOpen: () -> Unit, dark: Boolean) {
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 if (kid != null) {
-                    // v3.2.12：卡面上不再出现板块名，第一行就是姓名与缘由（走失），
-                    // 让人先看到「谁、怎么回事」，公益属性靠内容本身表达。
+                    // v3.4.2：首页现在同时有家寻与寻家两类，必须让人一眼分清是哪一类，
+                    // 否则两条都像「孩子丢了」，方向正好相反。
+                    if (kid.category.isNotEmpty()) {
+                        Text(kid.category, style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold, color = UiPalette.accent(dark))
+                    }
                     Text(kid.name + "，" + kid.gender + "，" + kid.type,
                         style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold,
-                        color = UiPalette.ink(dark))
-                    Text(kid.lostTime + " 走失 · " + kid.lostPlace,
+                        color = UiPalette.ink(dark),
+                        modifier = Modifier.padding(top = if (kid.category.isEmpty()) 0.dp else 2.dp))
+                    val verb = if (kid.category == WelfareStore.CAT_FIND_HOME) " 失散 · " else " 走失 · "
+                    Text(kid.lostTime + verb + kid.lostPlace,
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 2, modifier = Modifier.padding(top = 3.dp))
@@ -3978,17 +4155,16 @@ private fun WelfarePage(slot: Int, dark: Boolean, onOpenUrl: (String) -> Unit) {
     LaunchedEffect(Unit) {
         val d = withContext(Dispatchers.IO) { WelfareStore.load(ctx) }
         doc = d
-        val k = d?.items?.getOrNull(
-            WelfareStore.currentIndex(ctx, d, System.currentTimeMillis(), slot))
+        val list = WelfareStore.itemsFor(d, slot)
+        val k = list.getOrNull(WelfareStore.currentIndex(ctx, d, System.currentTimeMillis(), slot))
         bmp = withContext(Dispatchers.IO) {
             if (d != null) WelfareStore.syncToday(ctx, d, System.currentTimeMillis())
             WelfareStore.photoCached(ctx, k?.photo, k?.id ?: 0, 640)
         }
     }
     val d = doc
-    val kid = d?.let {
-        it.items.getOrNull(WelfareStore.currentIndex(ctx, it, System.currentTimeMillis(), slot))
-    }
+    val kid = WelfareStore.itemsFor(d, slot)
+        .getOrNull(WelfareStore.currentIndex(ctx, d, System.currentTimeMillis(), slot))
     if (kid == null) {
         Text("正在加载寻亲信息…若长时间无内容，请检查网络后重进。",
             style = MaterialTheme.typography.bodySmall,

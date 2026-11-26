@@ -1053,8 +1053,8 @@ public class FeatureAuditTest {
         check(mainCode.contains("private fun FeaturesPage(")
                         && mainCode.contains("onOpen: (String) -> Unit"),
                 "T-23a 功能页改为路由式列表（点行进二级菜单）", "");
-        check(count(main, "onOpen\\(\"feat-") == 5,
-                "T-23b 功能页 5 个分组入口", "出现=" + count(main, "onOpen\\(\"feat-"));
+        check(count(main, "onOpen\\(\"feat-") == 2,
+                "T-23b 功能页 2 个分组入口（通用 / 视频应用）", "出现=" + count(main, "onOpen\\(\"feat-"));
         check(count(main, "\"feat-[\\w-]+\" -> \\w+Page\\(") == 5,
                 "T-23c 五个分组都有落地页（不会点出白屏）",
                 "落地=" + count(main, "\"feat-[\\w-]+\" -> \\w+Page\\("));
@@ -1069,8 +1069,8 @@ public class FeatureAuditTest {
                 "T-23f 按钮预填标题标签与正文模板（含模块版本）", "");
         check(main.contains("前往 GitHub 提交建议") && main.contains("Button("),
                 "T-23g 建议页有可见的提交按钮", "");
-        check(count(main, "OverlayNotice\\(dark, ") == 3,
-                "T-23h 抖音/红果/快手B站三处都有遮盖引擎能力提示",
+        check(count(main, "OverlayNotice\\(dark, ") == 4,
+                "T-23h 视频应用总页与三个旧子页都有遮盖引擎能力提示",
                 "出现=" + count(main, "OverlayNotice\\(dark, "));
         check(count(main, "enabled = !overlay") >= 15,
                 "T-23i App 内控件开关在遮盖引擎下统一置灰（不再放假开关）",
@@ -1807,8 +1807,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 143
-                    && "3.4.1".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 144
+                    && "3.4.2".equals(nm.group(1));
             check(ok, "T-42b 版本锚点恰为 99 / 3.2（非区间，锁死发布锚点）", "");
         }
         check(hook297raw.contains("SAFE_RESTORE") && hook297raw.contains("DRAMA_PAYWALL_HIDE"),
@@ -1883,8 +1883,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 143
-                    && "3.4.1".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 144
+                    && "3.4.2".equals(nm.group(1));
             // 与 T-42b 断言同源，是发布前的双重防回退锁，不冒充新增不变量（评审建议改标签）。
             check(ok, "T-43c P3 版本锚点与 T-42b 双重锁定（99/3.2）（发布前防回退，非新增不变量）", "");
         }
@@ -1922,8 +1922,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 143
-                    && "3.4.1".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 144
+                    && "3.4.2".equals(nm.group(1));
             check(ok, "T-44c 版本号恰为 99 / 3.2（发布锚点）", "");
         }
 
@@ -1965,8 +1965,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 143
-                    && "3.4.1".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 144
+                    && "3.4.2".equals(nm.group(1));
             check(ok, "T-45c 版本号恰为 99 / 3.2（发布锚点）", "");
         }
 
@@ -2042,8 +2042,8 @@ public class FeatureAuditTest {
             // ⑤ 版本锚点 + 辅助方法只读性
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
-            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 143
-                    && "3.4.1".equals(nm.group(1));
+            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 144
+                    && "3.4.2".equals(nm.group(1));
             String helper = stripComments(slice(dy304raw, "private static boolean hasChildByClass(View v, String target)",
                     "private static int scoreRight(ViewGroup g)"));
             boolean readonly = helper.contains("MAX_DEPTH") && helper.contains("catch (Throwable")
@@ -2087,8 +2087,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 143
-                    && "3.4.1".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 144
+                    && "3.4.2".equals(nm.group(1));
             check(ok, "T-47c 版本号恰为 99 / 3.2（v3.0.13 发布锚点）", "");
         }
 
@@ -2355,7 +2355,7 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ver = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 143 && "3.4.1".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 144 && "3.4.2".equals(nm.group(1));
             check(ver, "T-48-VER 版本锚点 99/3.2（T-42b~T-47c 六处已同步）", "");
         }
 
@@ -3296,8 +3296,8 @@ public class FeatureAuditTest {
             java.util.regex.Matcher nm313 = java.util.regex.Pattern
                     .compile("versionName\\s+\"([^\"]+)\"").matcher(gradle313);
             boolean ver313 = cm313.find() && nm313.find()
-                    && Integer.parseInt(cm313.group(1)) == 143
-                    && "3.4.1".equals(nm313.group(1));
+                    && Integer.parseInt(cm313.group(1)) == 144
+                    && "3.4.2".equals(nm313.group(1));
             check(ver313, "T-55-A5 版本锚点 99 / 3.2", "");
 
             // A6 · 变异实证：把 INFO 类目改坏，A1 守卫必须失效（证明断言非空转）
@@ -4032,12 +4032,14 @@ public class FeatureAuditTest {
             String m77 = read(dir.resolve("MainActivity.kt"));
             String home77 = slice(m77, "private fun HomeTilePage(", "private fun HomeAllPage(");
             String all77 = slice(m77, "private fun HomeAllPage(", "// ---- v3.0.12 P2");
-            check(count(m77, "ListRow\\(\"功能设置\"") == 1
+            check(count(m77, "ListRow\\(\"功能设置\"") == 0
+                            && home77.contains("StatusStrip(")
+
                             && !home77.contains("EngineStyleCard(")
                             && !home77.contains("本应用隐身")
                             && !home77.contains("ListRow(\"注入状态\"")
                             && !home77.contains("ListRow(\"白名单\""),
-                    "T-77-A1 首页只留一个功能设置入口，五卡不再摆首页", "");
+                    "T-77-A1 首页不摆功能设置行（概览条即入口），五卡仍在二级页", "");
             check(all77.contains("EngineStyleCard(") && all77.contains("ListRow(\"注入状态\"")
                             && all77.contains("ListRow(\"白名单\"") && all77.contains("本应用隐身")
                             && all77.contains("AppVisibilityStore.setHideRecents"),
@@ -4046,12 +4048,14 @@ public class FeatureAuditTest {
                             && m77.contains("BackHandler(enabled = subPage != null) { closeSub() }")
                             && m77.contains("onBack = closeSub,"),
                     "T-77-A3 二级页再进三级页记得来路，返回回上一级", "");
-            check(count(home77, "WelfareCard\\(") == 2
+            check(count(home77, "WelfareCard\\(") == 3
                             && home77.contains("WelfareCard(slot = 0, onOpen = { onOpen(\"welfare\") }")
                             && home77.contains("WelfareCard(slot = 1, onOpen = { onOpen(\"welfare-1\") }")
+                            && home77.contains("WelfareCard(slot = 2, onOpen = { onOpen(\"welfare-2\") }")
                             && m77.contains("\"welfare\" -> WelfarePage(slot = 0, dark = dark, onOpenUrl = onOpenUrl)")
-                            && m77.contains("\"welfare-1\" -> WelfarePage(slot = 1, dark = dark, onOpenUrl = onOpenUrl)"),
-                    "T-77-A4 首页两张公益卡 + 各自二级页路由接通", "");
+                            && m77.contains("\"welfare-1\" -> WelfarePage(slot = 1, dark = dark, onOpenUrl = onOpenUrl)")
+                            && m77.contains("\"welfare-2\" -> WelfarePage(slot = 2, dark = dark, onOpenUrl = onOpenUrl)"),
+                    "T-77-A4 首页三张公益卡（家寻×2 + 寻家×1）+ 各自二级页路由接通", "");
 
             String w77 = read(dir.resolve("WelfareStore.java"));
             check(w77.contains("raw.githubusercontent.com/wumisc/antiburn-missing-kids/main/kids.json")
@@ -4062,23 +4066,40 @@ public class FeatureAuditTest {
                             && w77.contains("(today - anchor) / ROTATE_DAYS")
                             && w77.contains("FETCH_DAYS = 1")
                             && w77.contains("KEY_FETCH_AT")
-                            && w77.contains("(steps * 2) % size")
+                            && w77.contains("int perDay = find ? 1 : 2")
+                            && w77.contains("(steps * perDay) % size")
                             && w77.contains("b.regDate.compareTo(a.regDate)"),
                     "T-77-B2 每 24 小时换一对（两卡各换一位）+ 每天最多联网一次 + 注册日期倒序", "");
             String assets77 = read(dir.resolve("../../../../../assets/kids.json"));
-            java.util.regex.Matcher rd77 = java.util.regex.Pattern
-                    .compile("\"reg_date\": \"(\\d{4}-\\d{2}-\\d{2})\"").matcher(assets77);
-            java.util.List<String> dates77 = new java.util.ArrayList<>();
-            while (rd77.find()) {
-                dates77.add(rd77.group(1));
-            }
-            boolean desc77 = dates77.size() >= 3;
-            for (int i = 1; i < dates77.size(); i++) {
-                if (dates77.get(i).compareTo(dates77.get(i - 1)) > 0) {
-                    desc77 = false;
+            // 家寻 / 寻家两段各自按注册日期倒序（两段之间不互比，App 也是分段轮换）
+            int split77 = assets77.indexOf("\"items_findhome\"");
+            String segHome77 = split77 < 0 ? assets77 : assets77.substring(0, split77);
+            String segStock77 = split77 < 0 ? "" : assets77.substring(split77);
+            boolean desc77 = true;
+            int nHome77 = 0, nStock77 = 0;
+            for (String seg : new String[]{segHome77, segStock77}) {
+                java.util.regex.Matcher rd77 = java.util.regex.Pattern
+                        .compile("\"reg_date\": \"(\\d{4}-\\d{2}-\\d{2})\"").matcher(seg);
+                java.util.List<String> ds = new java.util.ArrayList<>();
+                while (rd77.find()) {
+                    ds.add(rd77.group(1));
+                }
+                if (seg == segHome77) {
+                    nHome77 = ds.size();
+                    if (ds.size() < 3) {
+                        desc77 = false;
+                    }
+                } else {
+                    nStock77 = ds.size();
+                }
+                for (int i = 1; i < ds.size(); i++) {
+                    if (ds.get(i).compareTo(ds.get(i - 1)) > 0) {
+                        desc77 = false;
+                    }
                 }
             }
-            check(desc77, "T-77-B3 内置快照 ≥3 条且按注册日期倒序", "n=" + dates77.size());
+            check(desc77, "T-77-B3 内置快照家寻 ≥3 条、两段各自按注册日期倒序",
+                    "home=" + nHome77 + " findhome=" + nStock77);
 
             String mf77 = read(dir.resolve("../../../../../AndroidManifest.xml"));
             check(mf77.contains("android.permission.INTERNET"),

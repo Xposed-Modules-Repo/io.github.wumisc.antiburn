@@ -34,10 +34,17 @@ public final class WelfareStore {
     public static final String URL_CDN =
             "https://cdn.jsdelivr.net/gh/wumisc/antiburn-missing-kids@main/kids.json";
 
+    /** 两类启事的分类名，与上游 JSON 的 category 字段一致。 */
+    public static final String CAT_FAMILY = "家寻宝贝";
+    public static final String CAT_FIND_HOME = "宝贝寻家";
+
     private static final String CACHE = "welfare.json";
     private static final String PREF = "welfare_anchor";
     private static final String KEY_DAY = "anchor_day";
     private static final String KEY_SRC = "anchor_src";
+    /** v3.4.2：宝贝寻家独立锚点，免得两套数据更新时互相重置轮换。 */
+    private static final String KEY_DAY_FIND = "anchor_day_find";
+    private static final String KEY_SRC_FIND = "anchor_src_find";
     private static final long DAY_MS = TimeUnit.DAYS.toMillis(1);
     /** v3.2.11：每 24 小时换一对（两张卡各换一位）。 */
     public static final long ROTATE_DAYS = 1;
@@ -58,6 +65,8 @@ public final class WelfareStore {
         public String lostPlace = "";
         public String feature = "";
         public String regDate = "";
+        /** "家寻宝贝" / "宝贝寻家"：同一个板块里两类启事的唯一区分。 */
+        public String category = "";
         public String url = "";
         public String photo = "";
     }
@@ -73,6 +82,8 @@ public final class WelfareStore {
         public String qqGroup = "";
         public String serviceTime = "";
         public java.util.List<Kid> items = new java.util.ArrayList<>();
+        /** v3.4.2：宝贝寻家（孩子在找家）。与 items 分开轮换，互不挤占。 */
+        public java.util.List<Kid> itemsFindHome = new java.util.ArrayList<>();
     }
 
     private WelfareStore() {
@@ -240,38 +251,60 @@ public final class WelfareStore {
             if (arr == null) {
                 return null;
             }
-            for (int i = 0; i < arr.length(); i++) {
-                JSONObject k = arr.optJSONObject(i);
-                if (k == null) {
-                    continue;
-                }
-                Kid kid = new Kid();
-                kid.id = k.optInt("id");
-                kid.name = k.optString("name");
-                kid.gender = k.optString("gender");
-                kid.birth = k.optString("birth");
-                kid.height = k.optString("height");
-                kid.type = k.optString("type");
-                kid.lostTime = k.optString("lost_time");
-                kid.lostPlace = k.optString("lost_place");
-                kid.feature = k.optString("feature");
-                kid.regDate = k.optString("reg_date");
-                kid.url = k.optString("url");
-                kid.photo = k.optString("photo");
-                if (kid.name.isEmpty() && kid.lostPlace.isEmpty()) {
-                    continue;
-                }
-                d.items.add(kid);
+            readKids(arr, d.items);
+            // v3.4.2：宝贝寻家单独一段。老数据里没有这个字段，读到空列表即视为「暂无寻家启事」，
+            // 卡片整块不渲染，不影响原有两张家寻卡。
+            readKids(o.optJSONArray("items_findhome"), d.itemsFindHome);
+            if (d.items.isEmpty() && d.itemsFindHome.isEmpty()) {
+                return null;
             }
-            // 最新发布优先：注册日期倒序，同日期编号倒序（不信任上游顺序）
-            java.util.Collections.sort(d.items, (a, b) -> {
-                int c2 = b.regDate.compareTo(a.regDate);
-                return c2 != 0 ? c2 : Integer.compare(b.id, a.id);
-            });
-            return d.items.isEmpty() ? null : d;
+            return d;
         } catch (Throwable ignored) {
             return null;
         }
+    }
+
+    /** 把一段 JSON 数组读成 Kid 列表，并按「最新发布优先」排序（不信任上游顺序）。 */
+    private static void readKids(org.json.JSONArray arr, java.util.List<Kid> into) {
+        if (arr == null) {
+            return;
+        }
+        for (int i = 0; i < arr.length(); i++) {
+            JSONObject k = arr.optJSONObject(i);
+            if (k == null) {
+                continue;
+            }
+            Kid kid = new Kid();
+            kid.id = k.optInt("id");
+            kid.name = k.optString("name");
+            kid.gender = k.optString("gender");
+            kid.birth = k.optString("birth");
+            kid.height = k.optString("height");
+            kid.type = k.optString("type");
+            kid.lostTime = k.optString("lost_time");
+            kid.lostPlace = k.optString("lost_place");
+            kid.feature = k.optString("feature");
+            kid.regDate = k.optString("reg_date");
+            kid.url = k.optString("url");
+            kid.photo = k.optString("photo");
+            kid.category = k.optString("category");
+            if (kid.name.isEmpty() && kid.lostPlace.isEmpty()) {
+                continue;
+            }
+            into.add(kid);
+        }
+        java.util.Collections.sort(into, (a, b) -> {
+            int c2 = b.regDate.compareTo(a.regDate);
+            return c2 != 0 ? c2 : Integer.compare(b.id, a.id);
+        });
+    }
+
+    /** v3.4.2：slot 0/1 走家寻宝贝，slot 2 走宝贝寻家。 */
+    public static java.util.List<Kid> itemsFor(Doc d, int slot) {
+        if (d == null) {
+            return java.util.Collections.emptyList();
+        }
+        return slot >= 2 ? d.itemsFindHome : d.items;
     }
 
     /** 读本机缓存；不存在 / 解析空返回 null。 */
@@ -286,7 +319,7 @@ public final class WelfareStore {
             int n = fi.read(b);
             fi.close();
             Doc d = parse(new String(b, 0, Math.max(n, 0), java.nio.charset.StandardCharsets.UTF_8));
-            return (d != null && !d.items.isEmpty()) ? d : null;
+            return (d != null && (!d.items.isEmpty() || !d.itemsFindHome.isEmpty())) ? d : null;
         } catch (Throwable ignored) {
             return null;
         }
@@ -300,25 +333,33 @@ public final class WelfareStore {
      * slot=0 是上卡、slot=1 是下卡；条目只有 1 条时两卡指向同一条，不越界。</p>
      */
     public static int currentIndex(Context ctx, Doc d, long nowMs, int slot) {
-        if (d == null || d.items.isEmpty()) {
+        java.util.List<Kid> list = itemsFor(d, slot);
+        if (list.isEmpty()) {
             return 0;
         }
+        // v3.4.2：slot>=2 是宝贝寻家。它只有一张卡，每天前进 1 位，锚点单独记。
+        boolean find = slot >= 2;
         long today = nowMs / DAY_MS;
         android.content.SharedPreferences sp =
                 ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE);
-        String src = sp.getString(KEY_SRC, "");
-        long anchor = sp.getLong(KEY_DAY, -1);
+        String src = sp.getString(find ? KEY_SRC_FIND : KEY_SRC, "");
+        long anchor = sp.getLong(find ? KEY_DAY_FIND : KEY_DAY, -1);
         if (anchor < 0 || !src.equals(d.updated)) {
             anchor = today;
-            sp.edit().putLong(KEY_DAY, anchor).putString(KEY_SRC, d.updated).apply();
+            if (find) {
+                sp.edit().putLong(KEY_DAY_FIND, anchor).putString(KEY_SRC_FIND, d.updated).apply();
+            } else {
+                sp.edit().putLong(KEY_DAY, anchor).putString(KEY_SRC, d.updated).apply();
+            }
         }
-        int size = d.items.size();
-        long steps = Math.max(0, (today - anchor) / ROTATE_DAYS);
-        int base = (int) ((steps * 2) % size);
+        int size = list.size();
         if (size == 1) {
             return 0;
         }
-        return (base + Math.max(0, slot)) % size;
+        int perDay = find ? 1 : 2;
+        long steps = Math.max(0, (today - anchor) / ROTATE_DAYS);
+        int base = (int) ((steps * perDay) % size);
+        return (base + (find ? 0 : Math.max(0, slot))) % size;
     }
 
     /** 兼容旧调用：等价于 slot=0。 */
@@ -364,14 +405,19 @@ public final class WelfareStore {
      * <p>幂等：照片已经在盘上就不再联网。调用方须在 IO 线程。</p>
      */
     public static void syncToday(Context ctx, Doc d, long nowMs) {
-        if (d == null || d.items.isEmpty()) {
+        if (d == null || (d.items.isEmpty() && d.itemsFindHome.isEmpty())) {
             return;
         }
         java.util.Set<Integer> keep = new java.util.HashSet<>();
-        java.util.List<Kid> today = new java.util.ArrayList<>(2);
-        for (int slot = 0; slot < 2; slot++) {
+        java.util.List<Kid> today = new java.util.ArrayList<>(3);
+        int slots = d.itemsFindHome.isEmpty() ? 2 : 3;
+        for (int slot = 0; slot < slots; slot++) {
+            java.util.List<Kid> list = itemsFor(d, slot);
+            if (list.isEmpty()) {
+                continue;
+            }
             int idx = currentIndex(ctx, d, nowMs, slot);
-            Kid k = d.items.get(Math.max(0, Math.min(idx, d.items.size() - 1)));
+            Kid k = list.get(Math.max(0, Math.min(idx, list.size() - 1)));
             if (k == null) {
                 continue;
             }
