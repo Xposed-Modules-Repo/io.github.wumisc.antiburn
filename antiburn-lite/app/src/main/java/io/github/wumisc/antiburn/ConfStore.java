@@ -1321,8 +1321,70 @@ public final class ConfStore {
                 out.append(l).append('\n');
             }
         }
+        // v3.4.0-r2：探针 dump 单独成段。上一版只合并了 mirror / 公共日志 / 审计三份，
+        // VideoAppProbe 写的 antiburn_probe_*.log 是独立文件，云端从来没收到过一次
+        // View 树 —— 快手 / B站 的阈值标定就永远拿不到证据。这里把它并进上传，
+        // 但不参与上面的行排序与裁剪（树是整块结构，按行混排会碎掉）。
+        try {
+            String probe = readProbeDumps();
+            if (!probe.isEmpty()) {
+                out.append("[probe]\n").append(probe);
+            }
+        } catch (Throwable ignored) {
+        }
         return out.toString();
     }
+
+    /**
+     * 把目标 App 的探针 dump 读出来拼成一段。
+     *
+     * <p>文件由注入进程经 su 落到用户可见目录或兜底目录，应用进程直读经常被分区存储
+     * 拦掉，因此每个文件都按「用户目录 → 兜底目录 → /data/local/tmp」顺序试直读，
+     * 全失败再走一次 su cat。单文件上限 {@link #PROBE_MAX}，超长只留头部并标注，
+     * 避免把上传接口 120KB 的额度整段吃掉。</p>
+     */
+    private static String readProbeDumps() {
+        StringBuilder sb = new StringBuilder(8 * 1024);
+        for (String name : PROBE_FILES) {
+            String text = "";
+            for (String dir : new String[]{LOG_DIR, LOG_DIR_FALLBACK, "/data/local/tmp"}) {
+                try {
+                    File f = new File(dir, name);
+                    if (f.exists() && f.length() > 0) {
+                        text = readTextFile(f);
+                        break;
+                    }
+                } catch (Throwable ignored) {
+                }
+            }
+            if (text == null || text.isEmpty()) {
+                text = execSuCapture("cat \"" + LOG_DIR + "/" + name + "\" 2>/dev/null || "
+                        + "cat \"" + LOG_DIR_FALLBACK + "/" + name + "\" 2>/dev/null").trim();
+            }
+            if (text == null || text.isEmpty()) {
+                continue;
+            }
+            boolean cut = text.length() > PROBE_MAX;
+            if (cut) {
+                text = text.substring(0, PROBE_MAX);
+            }
+            sb.append("@@ ").append(name).append(" bytes=").append(text.length())
+                    .append(cut ? " truncated=1" : " truncated=0").append('\n');
+            sb.append(text);
+            if (!text.endsWith("\n")) {
+                sb.append('\n');
+            }
+        }
+        return sb.toString();
+    }
+
+    /** 探针 dump 文件名：与 {@code VideoAppProbe.init()} 传入的 label 一一对应。 */
+    private static final String[] PROBE_FILES = {
+            "antiburn_probe_kuaishou.log",
+            "antiburn_probe_bilibili.log",
+    };
+    /** 单个探针 dump 进上传的最大字符数（预留余量给 [config] 与 [log] 两段）。 */
+    private static final int PROBE_MAX = 40_000;
 
     private static void addUploadLines(java.util.List<String> into,
                                        java.util.Set<String> seen, String text) {
