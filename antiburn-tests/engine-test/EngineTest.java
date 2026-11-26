@@ -314,12 +314,15 @@ public class EngineTest {
                         && scopeBlock.contains("nebula") && scopeBlock.contains("bilibilihd")
                         && scopeBlock.contains("app.blue"),
                 "作用域已启用真机实证渠道包与常见变体（v2.8.0 修复变体不注入）", "item 数=" + itemCount);
-        check(main.contains("RoadmapCard(dark)") && main.contains("快手") && main.contains("哔哩哔哩"),
-                "功能页说明卡点名两个应用", "");
-        check(main.contains("VideoAppSubPage(") && main.contains("state.enableKuaishou")
-                        && main.contains("state.enableBilibili")
-                        && main.contains("state.enableKsRight") && main.contains("state.enableBiliRight"),
-                "快手/B站各有真实开关子页（v2.7.0 区域开关完全独立）", "");
+        check(main.contains("VideoAppPage(\"快手\"") && main.contains("VideoAppPage(\"B站\""),
+                "功能页四入口里点名快手 / B站（v3.4.2 单 App 页）", "");
+        int subCount = 0;
+        for (int i = main.indexOf("VideoAppPage("); i >= 0; i = main.indexOf("VideoAppPage(", i + 1)) {
+            subCount++;
+        }
+        check(subCount == 5 && main.contains("copy(enableKuaishou =")
+                        && main.contains("VideoSlots.BILIBILI"),
+                "快手/B站各有真实开关子页（区域开关仍然独立）", "");
         check(main.contains("val overlay = state.isOverlay") && main.contains("enabled = !overlay"),
                 "遮盖引擎下子页磁贴置灰（能力边界如实呈现）", "");
         // v3.0.8：PendingProbeHint 合规文案含「这条提示不提供开关」（另一组件），

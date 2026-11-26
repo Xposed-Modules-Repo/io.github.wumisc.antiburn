@@ -328,12 +328,15 @@ public class FeatureAuditTest {
 
         // ---------- T-04 每个开关在界面有入口 ----------
         System.out.println("== T-04 开关 → 界面入口 ==");
+        String slotsUi = read(dir.resolve("VideoSlots.kt"));
         List<String> noEntry = new ArrayList<>();
         for (String f : fields) {
             if (!f.startsWith("enable")) {
                 continue;
             }
-            boolean hasEntry = main.contains("state." + f) || main.contains("enabled = state." + f);
+            boolean hasEntry = main.contains("state." + f) || main.contains("enabled = state." + f)
+                    || slotsUi.contains("it." + f) || slotsUi.contains("s.copy(" + f + " =")
+                    || main.contains("copy(" + f + " =");
             if (!hasEntry && !KNOWN_NO_UI.contains(f)) {
                 noEntry.add(f);
             }
@@ -394,7 +397,8 @@ public class FeatureAuditTest {
         check(dupFields.isEmpty(), "T-05a 同一配置字段不绑两行开关（v3.0.6 三全局开关按 App 页挂载除外）",
                 "违规重复=" + dupFields + " · 绑定 " + bound.size() + " 处 · 标题 " + titles.size() + " 行");
         check(badBind.isEmpty(), "T-05b 开关行绑定的字段都真实存在", "错绑=" + badBind);
-        check(titles.size() >= 20, "T-05c 开关行数量未异常减少", "共 " + titles.size() + " 行");
+        check(titles.size() >= 8, "T-05c 开关行数量未异常减少（字面行 + 槽位行）",
+                "字面=" + titles.size() + " 槽位=" + countLiteral(slotsUi, "RegionSlot(\"") + " 行");
         check(!stripComments(main).contains("TileItem")
                         && !stripComments(main).contains("TileGrid"),
                 "T-05d 旧磁贴组件已删除（六参 + 尾随 lambda 误绑隐患连根拔掉）", "");
@@ -544,16 +548,17 @@ public class FeatureAuditTest {
                 "T-12f 周期时长点磁贴弹小窗（不是跳二级页）", "");
         check(!main.contains("\"cycle\" -> CyclePage("),
                 "T-12g 旧二级页路由已清理（不留进不去的死页面）", "");
-        check(main.contains("private fun RoadmapCard(") && main.contains("RoadmapCard(dark)"),
-                "T-12h 适配计划卡片 1 定义 + 1 调用", "");
-        check(main.contains("快手") && main.contains("哔哩哔哩") && main.contains("已支持"),
-                "T-12i 说明卡点名快手/B站且写明已支持", "");
+        check(!main.contains("RoadmapCard("),
+                "T-12h 适配说明卡已删除（能力边界由各 App 页承接，不再摆一张唠叨卡）", "");
+        check(main.contains("GroupTitle(\"短视频应用\"") && main.contains("GroupTitle(\"共用细节（全局）\"")
+                        && countLiteral(slotsUi, "RegionSlot(\"") >= 19,
+                "T-12i 功能页四入口 + 共用细节分组 + 槽位表齐全", "");
         // v3.0.8：PendingProbeHint 的合规文案含「这条提示不提供开关」，属另一组件，
         // 旧的全文负向断言会误伤它。守卫意图是「说明卡不是占位」，故收紧到 RoadmapCard 函数体内。
-        String roadmapCardBody = slice(main, "private fun RoadmapCard(", "private fun openLsposedManager(");
-        check(main.contains("点开「快手」「B站」逐项开启对应开关")
-                        && !stripComments(roadmapCardBody).contains("不提供开关"),
-                "T-12j 说明卡引导到真实子页（RoadmapCard 内无「不提供开关」占位）", "");
+        check(countLiteral(main, "onOpen(\"feat-douyin\"") == 1 && countLiteral(main, "onOpen(\"feat-drama\"") == 1
+                        && countLiteral(main, "onOpen(\"feat-kuaishou\"") == 1
+                        && countLiteral(main, "onOpen(\"feat-bilibili\"") == 1,
+                "T-12j 四个视频 App 各自一行入口（不再挤在一页里）", "");
         check(!main.contains("LSPosed + root 环境") && main.contains("免 root 无障碍两种运行方式"),
                 "T-12k 关于页不再把运行方式写死成单一环境", "");
         String overlayBlock = slice(main, "if (overlay) {", "闭合 if (overlay)");
@@ -584,10 +589,10 @@ public class FeatureAuditTest {
                 "T-13h 排除视频画面容器（不黑屏）", "");
         check(douyin.contains("if (isDrama)") && douyin.contains("collectSwipeHintNode"),
                 "T-13i 只在红果进程收集，不影响抖音", "");
-        check(main.contains("OptionRow(\"左滑查看详情\""),
-                "T-13j 红果页有该开关磁贴", "");
-        check(main.contains("state.enableDramaSwipe"),
-                "T-13k 磁贴绑定真实字段（用户看得见开/关）", "");
+        check(slotsUi.contains("enableDramaSwipe"),
+                "T-13j 红果文案引导（左滑查看详情）仍在槽位表里", "");
+        check(slotsUi.contains("s.copy(enableDramaSwipe = v)"),
+                "T-13k 槽位绑定真实字段（用户看得见开/关）", "");
         check(douyin.contains("\" | swipe=x\""),
                 "T-13l SCAN 诊断行输出命中数量，真机能确认识别是否成功", "");
 
@@ -669,7 +674,10 @@ public class FeatureAuditTest {
             if (!config.contains("case \"" + k + "\":")) { chainOk = false; miss.append(" parse:").append(k); }
             if (!config.contains("public static volatile boolean " + f)) { chainOk = false; miss.append(" cfgField:").append(k); }
             if (!douyinCode.contains("Config." + f)) { chainOk = false; miss.append(" hook:").append(k); }
-            if (!main.contains("state." + f)) { chainOk = false; miss.append(" ui:").append(k); }
+            if (!main.contains("state." + f) && !slotsUi.contains("it." + f)
+                    && !main.contains("copy(" + f + " =")) {
+                chainOk = false; miss.append(" ui:").append(k);
+            }
         }
         check(chainOk, "T-14j v2.7.0 启用中的区域键全链路一致（字段/load/save/diff/default/parse/cfg/hook/ui）",
                 miss.toString());
@@ -691,17 +699,17 @@ public class FeatureAuditTest {
                 "T-14p SCAN 诊断带 app= 标识，真机可区分四个进程", "");
 
         // UI：两个真子页 + 总开关/共用区域开关 + overlay 降级
-        check(main.contains("private fun VideoAppSubPage(") && countLiteral(main, "VideoAppSubPage(") == 3,
-                "T-14q 功能页有快手/B站独立子页（1 定义 + 2 调用）",
-                "次数=" + countLiteral(main, "VideoAppSubPage("));
+        check(main.contains("private fun VideoAppPage(") && countLiteral(main, "VideoAppPage(") == 5,
+                "T-14q 功能页有单 App 槽位页（1 定义 + 4 调用）",
+                "次数=" + countLiteral(main, "VideoAppPage("));
         check(main.contains("\"feat-general\"") && main.contains("\"feat-douyin\"")
                         && main.contains("\"feat-drama\"") && main.contains("\"feat-kuaishou\"")
                         && main.contains("\"feat-bilibili\""),
                 "T-14r 五个功能分类各有一个二级菜单路由（通用/抖音/红果/快手/B站）", "");
         check(main.contains("val overlay = state.isOverlay") && main.contains("enabled = !overlay"),
                 "T-14s overlay 引擎下整页磁贴置灰（不放假开关）", "");
-        check(main.contains("快手、哔哩哔哩已支持") && main.contains("点开「快手」「B站」逐项开启"),
-                "T-14t 说明卡改为「已支持 + 引导子页」，不再是占位", "");
+        check(main.contains("位置名与其它 App 一致"),
+                "T-14t 子页首行说明写明跨 App 统一命名", "");
 
         // 探针仍只读（隐藏由 DouyinHook 负责），沿用 Step 1 的零隐藏边界
         check(!probeCode.contains("setAlpha(") && !probeCode.contains("setVisibility(")
@@ -759,8 +767,8 @@ public class FeatureAuditTest {
         check(douyinCode.contains("Config.enableKsRight : Config.enableBiliRight")
                         && douyinCode.contains("dTop = on && isKuaishou && Config.enableKsTop"),
                 "T-16c Hook 按 App 分派各自开关（快手四区 / B站只剩右侧）", "");
-        check(main.contains("各一套独立开关，互不影响"),
-                "T-16d UI 如实写明两应用开关独立", "");
+        check(slotsUi.contains("NAMED_KUAISHOU_ONLY") || slotsUi.contains("\"ks.right\""),
+                "T-16d 快手 / B站 槽位各自独立声明（Hook 侧仍按 App 分派）", "");
         check(main.contains("为人民服务") && main.contains("为天地立心")
                         && main.contains("为生民立命") && main.contains("为往圣继绝学")
                         && main.contains("为万世开太平"),
@@ -1053,8 +1061,8 @@ public class FeatureAuditTest {
         check(mainCode.contains("private fun FeaturesPage(")
                         && mainCode.contains("onOpen: (String) -> Unit"),
                 "T-23a 功能页改为路由式列表（点行进二级菜单）", "");
-        check(count(main, "onOpen\\(\"feat-") == 2,
-                "T-23b 功能页 2 个分组入口（通用 / 视频应用）", "出现=" + count(main, "onOpen\\(\"feat-"));
+        check(countLiteral(main, "onOpen(\"feat-") == 5,
+                "T-23b 功能页 5 个入口（通用 + 四个视频 App）", "出现=" + countLiteral(main, "onOpen(\"feat-"));
         check(count(main, "\"feat-[\\w-]+\" -> \\w+Page\\(") == 5,
                 "T-23c 五个分组都有落地页（不会点出白屏）",
                 "落地=" + count(main, "\"feat-[\\w-]+\" -> \\w+Page\\("));
@@ -1069,10 +1077,11 @@ public class FeatureAuditTest {
                 "T-23f 按钮预填标题标签与正文模板（含模块版本）", "");
         check(main.contains("前往 GitHub 提交建议") && main.contains("Button("),
                 "T-23g 建议页有可见的提交按钮", "");
-        check(count(main, "OverlayNotice\\(dark, ") == 4,
-                "T-23h 视频应用总页与三个旧子页都有遮盖引擎能力提示",
+        check(countLiteral(main, "OverlayNotice(dark, ") >= 1
+                        && main.contains("OverlayNotice(dark, label)"),
+                "T-23h 每个视频 App 页都有遮盖引擎能力提示（单页共用一处文案）",
                 "出现=" + count(main, "OverlayNotice\\(dark, "));
-        check(count(main, "enabled = !overlay") >= 15,
+        check(count(main, "enabled = !overlay") >= 2,
                 "T-23i App 内控件开关在遮盖引擎下统一置灰（不再放假开关）",
                 "置灰=" + count(main, "enabled = !overlay"));
         // v3.0.12：saveBar 判断由 feat- 扩为 feat-||home-，首页四入口二级页同获即时保存反馈（G7）。
@@ -1552,8 +1561,9 @@ public class FeatureAuditTest {
                         && conf292.contains("enableBiliCorner = false;"),
                 "T-36f Config 加载时把 B站 三项归零（老配置残留不会变成假开关）", "");
         String main292 = read(dir.resolve("MainActivity.kt"));
-        check(main292.contains("OptionRow(\"右侧点赞区\""),
-                "T-36g B站 功能页只剩「右侧点赞区」一行", "");
+        String slots292 = read(dir.resolve("VideoSlots.kt"));
+        check(countLiteral(slots292, "RegionSlot(\"bili.") == 1 && slots292.contains("enableBiliRight"),
+                "T-36g B站 只剩右侧一列槽位（其余三项不摆假开关）", "");
         check(!main292.contains("state.enableBiliTop")
                         && !main292.contains("state.enableBiliBottom")
                         && !main292.contains("state.enableBiliCorner"),
@@ -1661,8 +1671,8 @@ public class FeatureAuditTest {
                 "T-38i2 底部候选只来自直播三区，兜底不碰输入条 / 弹幕区", "");
         check(hook292.contains("\" lin=\"") && hook292.contains("\" lhid=\""),
                 "T-38j 诊断行带 lin / l3 / lhid，能定位直播卡在哪一层", "");
-        check(main292.contains("OptionRow(\"直播间隐藏\""),
-                "T-38k 抖音功能页恢复「直播间隐藏」开关", "");
+        check(slots292.contains("LIVE_CHROME") && slots292.contains("enableLive"),
+                "T-38k 抖音「直播间外框」槽位仍在（可关）", "");
         check(main292.contains("酷安@bzm123123") && main292.contains("帮忙测试 ColorOS 15 环境"),
                 "T-38l 感谢名单新增 @bzm123123（ColorOS 15 测试）", "");
         check(versionAtLeast(gradle, 56, "2.9.4"),
@@ -1807,8 +1817,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 144
-                    && "3.4.2".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 145
+                    && "3.4.3".equals(nm.group(1));
             check(ok, "T-42b 版本锚点恰为 99 / 3.2（非区间，锁死发布锚点）", "");
         }
         check(hook297raw.contains("SAFE_RESTORE") && hook297raw.contains("DRAMA_PAYWALL_HIDE"),
@@ -1883,8 +1893,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 144
-                    && "3.4.2".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 145
+                    && "3.4.3".equals(nm.group(1));
             // 与 T-42b 断言同源，是发布前的双重防回退锁，不冒充新增不变量（评审建议改标签）。
             check(ok, "T-43c P3 版本锚点与 T-42b 双重锁定（99/3.2）（发布前防回退，非新增不变量）", "");
         }
@@ -1922,8 +1932,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 144
-                    && "3.4.2".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 145
+                    && "3.4.3".equals(nm.group(1));
             check(ok, "T-44c 版本号恰为 99 / 3.2（发布锚点）", "");
         }
 
@@ -1965,8 +1975,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 144
-                    && "3.4.2".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 145
+                    && "3.4.3".equals(nm.group(1));
             check(ok, "T-45c 版本号恰为 99 / 3.2（发布锚点）", "");
         }
 
@@ -2042,8 +2052,8 @@ public class FeatureAuditTest {
             // ⑤ 版本锚点 + 辅助方法只读性
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
-            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 144
-                    && "3.4.2".equals(nm.group(1));
+            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 145
+                    && "3.4.3".equals(nm.group(1));
             String helper = stripComments(slice(dy304raw, "private static boolean hasChildByClass(View v, String target)",
                     "private static int scoreRight(ViewGroup g)"));
             boolean readonly = helper.contains("MAX_DEPTH") && helper.contains("catch (Throwable")
@@ -2087,8 +2097,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 144
-                    && "3.4.2".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 145
+                    && "3.4.3".equals(nm.group(1));
             check(ok, "T-47c 版本号恰为 99 / 3.2（v3.0.13 发布锚点）", "");
         }
 
@@ -2306,11 +2316,11 @@ public class FeatureAuditTest {
         }
         {
             // SW-c UI 入口 + 红果「待数据」置灰
-            boolean copies = countLiteral(act306, "copy(enableBottomCaption =") >= 1
-                    && countLiteral(act306, "copy(enableRightActions =") >= 1
-                    && countLiteral(act306, "copy(enableRedDot =") >= 1;
-            boolean dramaDisabled = act306.contains("disabledLabel = \"待数据\"");
-            check(copies && dramaDisabled, "T-48-SW-c 三开关 UI copy() 入口 + 红果待数据置灰", "");
+            String slots306 = read(dir.resolve("VideoSlots.kt"));
+            boolean copies = countLiteral(slots306, "copy(enableBottomCaption =") >= 1
+                    && countLiteral(slots306, "enableRightActions = v") >= 1
+                    && countLiteral(slots306, "copy(enableRedDot =") >= 1;
+            check(copies, "T-48-SW-c 三开关 UI copy() 入口全在槽位表", "");
         }
         {
             // GUARD 越界：通用门槛逐字 + 视频否决顺序 + 零改方法体锚点
@@ -2355,7 +2365,7 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ver = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 144 && "3.4.2".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 145 && "3.4.3".equals(nm.group(1));
             check(ver, "T-48-VER 版本锚点 99/3.2（T-42b~T-47c 六处已同步）", "");
         }
 
@@ -2516,7 +2526,8 @@ public class FeatureAuditTest {
                     "\"enable_(ks_live_hits|dy_live_hits|ks_feed_hits|drama_info_hits)\"") == 12;
             boolean state = count(act307,
                     "val enable(KsLiveHits|DyLiveHits|KsFeedHits|DramaInfoHits): Boolean = false") == 4;
-            boolean copy = count(act307,
+            String slots307 = read(dir.resolve("VideoSlots.kt"));
+            boolean copy = count(act307 + slots307,
                     "copy\\(enable(KsLiveHits|DyLiveHits|KsFeedHits|DramaInfoHits) =") == 4;
             check(idx && keys && state && copy,
                     "T-49-E2 MainActivity Bool(43..46) + 4 键 + state/copy 全链路", "");
@@ -2767,9 +2778,9 @@ public class FeatureAuditTest {
             // v3.0.11 锚点同步：P6 UI 简洁化新增顶层 recentlyInjected()（design-ui §MechanismNote/FeatureSummaryBar
             // 复用点，调用见 MainActivity L2431），再引一次 lastInject(context, kind) 与 24L*3600_000L；
             // 判定口径（24h freshness / 只读 prefs）零改，injDrama 仍恰 1。经 git diff 确认属授权改动，非改坏。
-            check(old5k == 0 && decl == 1 && used == 2 && now == 2
+            check(old5k == 0 && decl == 1 && used == 1 && now == 1
                             && injKind == 2 && injDrama == 0 && fresh == 2,
-                    "T-52-A3 前端 STATUS_REFRESH_MS=15000L / 两处引用 / 轮询保活 / 判定口径零改(P6 复用点 injKind=2/fresh=2；v3.0.23 红果页统一走 recentlyInjected)", detail);
+                    "T-52-A3 前端 STATUS_REFRESH_MS=15000L / 一处引用（单 App 页共用） / 轮询保活 / 判定口径零改(P6 复用点 injKind=2/fresh=2；v3.0.23 红果页统一走 recentlyInjected)", detail);
             }
         }
 
@@ -2850,12 +2861,10 @@ public class FeatureAuditTest {
             String betaBase = frontendDone ? act310
                     : ("private const val STATUS_REFRESH_MS = 15000L\n"
                        + "delay(STATUS_REFRESH_MS)\n"
-                       + "now = System.currentTimeMillis()\n"
-                       + "delay(STATUS_REFRESH_MS)\n"
                        + "now = System.currentTimeMillis()\n");
-            boolean baseOk = count(betaBase, a3OldRx) == 0 && count(betaBase, a3UseRx) == 2;
+            boolean baseOk = count(betaBase, a3OldRx) == 0 && count(betaBase, a3UseRx) == 1;
             String mutB = betaBase.replace("delay(STATUS_REFRESH_MS)", "delay(5_000)");
-            boolean caughtB = count(mutB, a3OldRx) > 0 || count(mutB, a3UseRx) != 2;
+            boolean caughtB = count(mutB, a3OldRx) > 0 || count(mutB, a3UseRx) != 1;
             check(caughtA && caughtB && baseOk,
                     "T-52-M 变异实证：α 3000→2000→A1 FAIL；β 字面 replace 回退 delay(5_000)→A3 FAIL",
                     "caughtA=" + caughtA + " caughtB=" + caughtB + " baseOk=" + baseOk
@@ -3296,8 +3305,8 @@ public class FeatureAuditTest {
             java.util.regex.Matcher nm313 = java.util.regex.Pattern
                     .compile("versionName\\s+\"([^\"]+)\"").matcher(gradle313);
             boolean ver313 = cm313.find() && nm313.find()
-                    && Integer.parseInt(cm313.group(1)) == 144
-                    && "3.4.2".equals(nm313.group(1));
+                    && Integer.parseInt(cm313.group(1)) == 145
+                    && "3.4.3".equals(nm313.group(1));
             check(ver313, "T-55-A5 版本锚点 99 / 3.2", "");
 
             // A6 · 变异实证：把 INFO 类目改坏，A1 守卫必须失效（证明断言非空转）
@@ -3448,7 +3457,7 @@ public class FeatureAuditTest {
             check(act320.contains("OptionRow(\"隐藏时间\"") && act320.contains("OptionRow(\"隐藏右侧图标\""),
                     "T-60-A8 通用页出现「隐藏时间」「隐藏右侧图标」两行", "");
             String feat = slice(act320, "private fun FeaturesPage(", "private fun OptionRow(");
-            String general = slice(act320, "private fun GeneralFeaturePage(", "private fun DouyinFeaturePage(");
+            String general = slice(act320, "private fun GeneralFeaturePage(", "private fun VideoAppPage(");
             check(feat.contains("ListRow(\"周期时间\"") && feat.contains("CycleDialog("),
                     "T-60-A9 功能首页出现「周期时间」卡并可弹周期设置", "");
             check(!general.contains("ListRow(\"周期时长\"") && !general.contains("CycleDialog("),

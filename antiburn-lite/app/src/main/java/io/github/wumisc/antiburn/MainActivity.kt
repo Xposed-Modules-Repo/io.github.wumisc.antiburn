@@ -137,7 +137,6 @@ private const val PAGE_HOME_ENGINE = "home-engine"
 private const val PAGE_HOME_INJECT = "home-inject"
 private const val PAGE_HOME_LIST = "home-list"
 private const val PAGE_HOME_ALL = "home-all"
-private const val PAGE_FEAT_VIDEO = "feat-video"
 
 /**
  * 界面适配可选方案：六大厂商 + 原生（id 与 conf 里的 ui_style 一一对应）。
@@ -2804,14 +2803,22 @@ private fun FeaturesPage(
         ListRow("通用", "系统栏 / 悬浮球 · 已开启 $generalOn/3 项",
             { onOpen("feat-general") }, dark)
 
-        // v3.4.2：四个视频 App 各自一行的做法，让同一件事在四个 App 里有四个名字。
-        // 现在收成一个入口，进去后按「区域槽位」统一命名，计数口径也只剩一处真源。
-        ListRow("视频应用",
-            "抖音 / 红果 / 快手 / B站 · 已开启 ${VideoSlots.openTotal(state)}/${VideoSlots.total(state)} 项",
-            { onOpen("feat-video") }, dark)
+        // v3.4.2：名字统一到 VideoSlots 的那一套，但入口还是分 App 四行 ——
+        // 四个 App 塞进一页要往下翻半天才找得到想关的那一项，分开点更省事。
+        GroupTitle("短视频应用")
+        ListRow("抖音", "视频页区域 · 已开启 ${VideoSlots.openCount(VideoSlots.DOUYIN, state)}/${VideoSlots.DOUYIN.size} 项",
+            { onOpen("feat-douyin") }, dark)
+        ListRow("红果短剧", "视频页区域 · 已开启 ${VideoSlots.openCount(VideoSlots.DRAMA, state)}/${VideoSlots.DRAMA.size} 项",
+            { onOpen("feat-drama") }, dark)
+        ListRow("快手", "视频页区域 · 已开启 ${VideoSlots.openCount(VideoSlots.KUAISHOU, state)}/${VideoSlots.KUAISHOU.size} 项",
+            { onOpen("feat-kuaishou") }, dark)
+        ListRow("B站", "视频页区域 · 已开启 ${VideoSlots.openCount(VideoSlots.BILIBILI, state)}/${VideoSlots.BILIBILI.size} 项",
+            { onOpen("feat-bilibili") }, dark)
 
-        Spacer(Modifier.height(14.dp))
-        RoadmapCard(dark)
+        // 标题栏 / 红点在 Hook 里本来就是全局键，四个 App 共用一个开关，
+        // 所以只放在这一处，不在每个 App 页里各写一遍。
+        GroupTitle("共用细节（全局）")
+        SlotRows(VideoSlots.SHARED, state, onStateChange, dark, state.isOverlay)
     }
     if (showCycleDialog) {
         CycleDialog(
@@ -3085,76 +3092,6 @@ private fun GeneralFeaturePage(
     }
 }
 
-/**
- * v3.4.2：视频应用总页。
- *
- * <p>四款 App 一个入口进去，位置名统一（顶部栏 / 右侧互动列 / 底部栏 …），
- * 不再分「精准隐藏」「定向隐藏」两套分组 —— 那两组里其实有一半是同一个位置的另一种实现，
- * 用户要在同一页里理解两套术语才能知道自己开了什么。</p>
- */
-@Composable
-private fun VideoAppsPage(
-    state: AbState,
-    onStateChange: ((AbState) -> AbState) -> Unit,
-    dark: Boolean,
-) {
-    val overlay = state.isOverlay
-    Text("同一个位置在四个 App 里都叫同一个名字；功能接近的已合并成一个开关。",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant)
-    if (overlay) {
-        Spacer(Modifier.height(8.dp))
-        OverlayNotice(dark, "视频应用")
-    }
-    Spacer(Modifier.height(12.dp))
-
-    AppSlotGroup("抖音", VideoSlots.DOUYIN, state, onStateChange, dark, overlay)
-    Spacer(Modifier.height(10.dp))
-    AppSlotGroup("红果短剧", VideoSlots.DRAMA, state, onStateChange, dark, overlay)
-    Spacer(Modifier.height(10.dp))
-    AppSlotGroup("快手", VideoSlots.KUAISHOU, state, onStateChange, dark, overlay,
-        master = "快手总开关" to { s, v -> s.copy(enableKuaishou = v) },
-        masterRead = { it.enableKuaishou },
-        masterDesc = "关掉则快手所有区域都不参与隐藏")
-    Spacer(Modifier.height(10.dp))
-    AppSlotGroup("B站", VideoSlots.BILIBILI, state, onStateChange, dark, overlay)
-
-    Spacer(Modifier.height(14.dp))
-    GroupTitle("共用细节（全局）")
-    SlotRows(VideoSlots.SHARED, state, onStateChange, dark, overlay)
-    HintText("这两项在 Hook 里本来就是全局键：在抖音打开，快手与 B站 也会一起生效。以前分三个页面各写一遍，看起来像三套开关，其实是同一个。")
-
-    Spacer(Modifier.height(12.dp))
-    HintText("所有区域都是按周期真隐藏（藏 ${state.hideSec}s / 显示 ${state.showSec}s），关掉立即恢复。需要模块注入对应 App 进程才生效：首页「注入状态」显示「已注入」即正常。")
-}
-
-/** 一个 App 一组：折叠标题带「已开 N/M」，组内逐槽位渲染。 */
-@Composable
-private fun AppSlotGroup(
-    label: String,
-    slots: List<RegionSlot>,
-    state: AbState,
-    onStateChange: ((AbState) -> AbState) -> Unit,
-    dark: Boolean,
-    overlay: Boolean,
-    master: Pair<String, (AbState, Boolean) -> AbState>? = null,
-    masterRead: (AbState) -> Boolean = { false },
-    masterDesc: String = "",
-) {
-    val open = VideoSlots.openCount(slots, state)
-    CollapsibleGroup(
-        title = "$label（已开 $open/${slots.size}）",
-        initiallyExpanded = open > 0,
-    ) {
-        master?.let { (title, write) ->
-            OptionRow(title, masterDesc, checked = masterRead(state), dark = dark,
-                enabled = !overlay,
-                onCheckedChange = { v -> onStateChange { s -> write(s, v) } })
-        }
-        SlotRows(slots, state, onStateChange, dark, overlay)
-    }
-}
-
 /** 槽位清单渲染：标题/说明/勾选状态全部来自 VideoSlots，四 App 共用同一份渲染逻辑。 */
 @Composable
 private fun SlotRows(
@@ -3174,235 +3111,41 @@ private fun SlotRows(
     }
 }
 
-@Composable
-private fun DouyinFeaturePage(
-    state: AbState,
-    onStateChange: ((AbState) -> AbState) -> Unit,
-    dark: Boolean,
-) {
-    val overlay = state.isOverlay
-    if (overlay) OverlayNotice(dark, "抖音") // 红线：能力边界警示常显，不折叠
-    val context = LocalContext.current
-    // 摘要只读 state / prefs，不写配置：9 项口径 = 一级页 6 项 + 精准 2 + 定向 1
-    val douyinOpen = listOf(
-        state.enableDouyinTop, state.enableDouyinBottom, state.enableDouyinLike,
-        state.enableDouyinRt, state.enableDouyinLt, state.enableLive,
-        state.enableBottomCaption, state.enableRedDot, state.enableDyLiveHits,
-    ).count { it }
-    FeatureSummaryBar(open = douyinOpen, total = 9,
-        injected = recentlyInjected(context, "douyin"), dark = dark)
-
-    // 核心区域组：默认展开、首屏可见（红线：核心区域组不折叠）
-    GroupTitle("视频页区域")
-    OptionRow("顶部导航", "直播/团购/关注/商城", checked = state.enableDouyinTop, dark = dark,
-        enabled = !overlay,
-        onCheckedChange = { on -> onStateChange { s -> s.copy(enableDouyinTop = on) } })
-    OptionRow("底部导航", "首页/朋友/消息/我", checked = state.enableDouyinBottom, dark = dark,
-        enabled = !overlay,
-        onCheckedChange = { on -> onStateChange { s -> s.copy(enableDouyinBottom = on) } })
-    OptionRow("右侧按钮列", "点赞/评论/收藏/分享", checked = state.enableDouyinLike, dark = dark,
-        enabled = !overlay,
-        onCheckedChange = { on -> onStateChange { s -> s.copy(enableDouyinLike = on) } })
-    OptionRow("右上角", "搜索/分享/更多", checked = state.enableDouyinRt, dark = dark,
-        enabled = !overlay,
-        onCheckedChange = { on -> onStateChange { s -> s.copy(enableDouyinRt = on) } })
-    OptionRow("左上角", "三横线菜单按钮", checked = state.enableDouyinLt, dark = dark,
-        enabled = !overlay,
-        onCheckedChange = { on -> onStateChange { s -> s.copy(enableDouyinLt = on) } })
-    GroupTitle("直播间隐藏")
-    OptionRow("直播间隐藏", "直播页顶栏 / 底部按钮 / 右侧礼物列", checked = state.enableLive,
-        dark = dark, enabled = !overlay,
-        onCheckedChange = { on -> onStateChange { s -> s.copy(enableLive = on) } })
-    // 直播间差异化说明保留在核心组内（design-ui §2.4：不并入通用说明）
-    HintText("直播间单独一套：只藏顶部主播条、底部非输入按钮、右侧礼物列；输入框、弹幕、播放画面一律不碰。判定要求「底部有说点什么输入条 且 没有首页 Tab 栏」，普通视频页不会误入。")
-    HintText("关掉「直播间隐藏」直播间即刻全部恢复。日志里 lin=1 表示识别到输入条、lhid>0 表示确实藏到了控件。")
-
-    // 追加能力组：默认折叠，去版本号，带「已开 N 项」角标（design-ui §2.2.1）
-    CollapsibleGroup("精准隐藏（标题栏 / 红点）",
-        openCount = listOf(state.enableBottomCaption, state.enableRedDot).count { it }) {
-        OptionRow("下方标题栏", "视频描述行，@作者不动", checked = state.enableBottomCaption, dark = dark,
-            enabled = !overlay,
-            onCheckedChange = { on -> onStateChange { s -> s.copy(enableBottomCaption = on) } })
-        OptionRow("红点", "角标，点赞数/进度条绝不动", checked = state.enableRedDot, dark = dark,
-            enabled = !overlay,
-            onCheckedChange = { on -> onStateChange { s -> s.copy(enableRedDot = on) } })
-    }
-    CollapsibleGroup("定向隐藏（圈选内容）",
-        openCount = if (state.enableDyLiveHits) 1 else 0) {
-        OptionRow("直播间圈选内容", "直播间内只藏圈选静态元素，输入条 / 礼物 / 画面不动",
-            checked = state.enableDyLiveHits, dark = dark, enabled = !overlay,
-            onCheckedChange = { on -> onStateChange { s -> s.copy(enableDyLiveHits = on) } })
-    }
-    // 重复说明收敛为单一真源（默认折叠）；原 6 条说明未删，归入 MechanismNote 4 条
-    MechanismNote("抖音", state)
-    PendingProbeHint() // 原本就默认折叠、无开关，保持
-}
-
-@Composable
-private fun DramaFeaturePage(
-    state: AbState,
-    onStateChange: ((AbState) -> AbState) -> Unit,
-    dark: Boolean,
-) {
-    val overlay = state.isOverlay
-    if (overlay) OverlayNotice(dark, "红果短剧")
-
-    // v3.0.7：复用首页 InjectStatusCard 的单一真源与 24h 口径检测注入痕迹
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var now by remember { mutableStateOf(System.currentTimeMillis()) }
-    var scopeText by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(Unit) {
-        // v3.0.23：先在后台读一次 LSPosed 日志，注入证据只取缓存，UI 不卡 su
-        LspScope.warmLogHits(context)
-        // 与首页同款 15s 轮询：切去 LSPosed 勾选再回来自动刷新，无需重进设置页
-        while (true) {
-            delay(STATUS_REFRESH_MS)
-            now = System.currentTimeMillis()
-            LspScope.warmLogHits(context)
-        }
-    }
-    val dramaFresh = recentlyInjected(context, "drama")
-    if (!overlay && !dramaFresh) {
-        ScopePendingNotice(dark) {
-            scopeText = "正在读取 LSPosed 配置…"
-            scope.launch {
-                val text = withContext(Dispatchers.IO) {
-                    runCatching { LspScope.diagnose(context) }
-                        .getOrElse { "读取失败：" + (it.message ?: it.javaClass.simpleName) }
-                }
-                scopeText = text
-                withContext(Dispatchers.IO) { ConfStore.logLine(LspScope.ensure(context)) }
-            }
-        }
-    }
-
-    GroupTitle("红果短剧 · 视频页区域")
-    OptionRow("顶部区域", "视频页顶部栏", checked = state.enableDramaTop, dark = dark,
-        enabled = !overlay,
-        onCheckedChange = { on -> onStateChange { s -> s.copy(enableDramaTop = on) } })
-    OptionRow("右侧按钮", "点赞/收藏等按钮列", checked = state.enableDramaLike, dark = dark,
-        enabled = !overlay,
-        onCheckedChange = { on -> onStateChange { s -> s.copy(enableDramaLike = on) } })
-    OptionRow("右上角", "右上角操作按钮", checked = state.enableDramaRt, dark = dark,
-        enabled = !overlay,
-        onCheckedChange = { on -> onStateChange { s -> s.copy(enableDramaRt = on) } })
-    OptionRow("左上角", "左上角菜单按钮", checked = state.enableDramaLt, dark = dark,
-        enabled = !overlay,
-        onCheckedChange = { on -> onStateChange { s -> s.copy(enableDramaLt = on) } })
-    OptionRow("左滑查看详情", "右侧竖排引导文字，按文案识别", checked = state.enableDramaSwipe,
-        dark = dark, enabled = !overlay,
-        onCheckedChange = { on -> onStateChange { s -> s.copy(enableDramaSwipe = on) } })
-    OptionRow("底部入口", "剧集/选集入口，模块刻意不隐藏", checked = false, dark = dark,
-        enabled = false, disabledLabel = "始终常驻", onCheckedChange = {})
-    HintText("红果底部是「完整观看 / 选集」等功能入口，模块刻意不隐藏，避免点不进去。")
-    HintText("「左滑查看详情」按文案识别引导条，同样按周期真隐藏。以上都需要模块注入红果进程，日志里出现 INJECTED Drama 即已生效；谷歌版（.oversea.gp）包名已被识别，若日志里连 INJECTED Drama 都没有，就是 LSPosed 没加载进它的进程。")
-    // v3.0.6：红果本次无前台样本，不写专属识别规则，两项占位置灰
-    GroupTitle("红果 · v3.0.6 精准隐藏（待数据）")
-    OptionRow("下方标题栏（待数据）", "本次无红果样本，规则未启用", checked = false, dark = dark,
-        enabled = false, disabledLabel = "待数据", onCheckedChange = {})
-    OptionRow("红点（待数据）", "本次无红果样本，规则未启用", checked = false, dark = dark,
-        enabled = false, disabledLabel = "待数据", onCheckedChange = {})
-    // v3.0.7：红果信息区 + 底部导航定向隐藏（未注入也不禁用，杜绝假开关）
-    GroupTitle("红果 · v3.0.7 定向隐藏")
-    OptionRow("信息区与底部导航", "藏剧集信息区与底部导航栏，视频画面与选集入口不动",
-        checked = state.enableDramaInfoHits, dark = dark, enabled = !overlay,
-        subtitleWarn = if (!dramaFresh) " · 待勾选作用域（勾选后自动生效）" else "",
-        onCheckedChange = { on -> onStateChange { s -> s.copy(enableDramaInfoHits = on) } })
-    HintText("「定向隐藏」是真隐藏：把圈定的控件透明度设为 0 并标记为不可见（alpha=0 + INVISIBLE），相当于从画面里拿掉——像素不发光、也不响应点击；不是在上面盖一层黑块。视频画面、输入条与播放本身照常工作，退出对应页面后控件立即恢复。")
-    HintText("点赞、评论、分享、进度等纯数字互动计数一律不进隐藏名单，红点走独立白名单；宁可少藏，绝不误藏。识别不到时功能会静默跳过，不会误伤画面或让你点不到按钮。")
-    HintText("这里的「底部导航」只指 首页 / 剧场 / 我的 三 Tab 栏；观看完整漫剧 / 选集 入口保持常驻，不受影响。")
-    scopeText?.let { text ->
-        ScopeDialog(
-            text = text,
-            dark = dark,
-            onOpenLsposed = { openLsposedManager(context) },
-            onDismiss = { scopeText = null },
-        )
-    }
-}
-
 /**
- * 快手 / 哔哩哔哩共用子页：各一套独立开关，互不影响。
- * 免 root 遮盖引擎下整页置灰，不放假开关。
+ * v3.4.2：单个短视频 App 的隐藏项页。
+ *
+ * <p>位置名来自 [VideoSlots]（顶部栏 / 右侧互动列 / 底部栏 …），四个 App 同一套说法；
+ * 但入口仍按 App 分开，一页只列这个 App 真正支持的项，翻两下就能关掉想关的那个。</p>
  */
 @Composable
-private fun VideoAppSubPage(
+private fun VideoAppPage(
+    label: String,
+    slots: List<RegionSlot>,
     state: AbState,
     onStateChange: ((AbState) -> AbState) -> Unit,
     dark: Boolean,
-    appLabel: String,
-    isKuaishou: Boolean,
+    master: Pair<String, (AbState, Boolean) -> AbState>? = null,
+    masterRead: (AbState) -> Boolean = { false },
+    masterDesc: String = "",
 ) {
     val overlay = state.isOverlay
-    if (overlay) OverlayNotice(dark, appLabel)
-
-    if (!isKuaishou) {
-        // v2.9.2：B站只保留右侧点赞区。
-        // 顶部 / 底部 / 角落三项在 B站 8.9x 上识别不到稳定容器，真机打开也没有效果，
-        // 按用户要求把入口一起删掉 —— 与其留三个按了没反应的开关，不如只留一个真的。
-        val on = state.enableBilibili && state.enableBiliRight
-        GroupTitle("B站 · 视频页区域")
-        OptionRow("右侧点赞区", "点赞/评论/收藏/投币/分享", checked = on, dark = dark,
-            enabled = !overlay,
-            onCheckedChange = { v -> onStateChange { s ->
-                s.copy(enableBilibili = v, enableBiliRight = v)
-            } })
-        HintText("打开后按周期真隐藏（藏 ${state.hideSec}s / 显示 ${state.showSec}s），右侧竖排按钮列像素不发光；关掉立即恢复。")
-        HintText("需要模块注入 B站进程才生效。首页「注入状态」显示「已注入」即正常；「未检测到」就是 LSPosed 没勾它（或勾了没重启），点「作用域自检」按提示补齐。")
-        // v3.0.6：B站下方标题栏（只藏视频标题，UP主名和创作声明不动）
-        OptionRow("下方标题栏", "视频标题，UP主名和创作声明不动", checked = state.enableBottomCaption,
-            dark = dark, enabled = !overlay,
-            onCheckedChange = { v -> onStateChange { s -> s.copy(enableBottomCaption = v) } })
-        return
+    Text("位置名与其它 App 一致；同类能力已合并成一个开关。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant)
+    if (overlay) {
+        Spacer(Modifier.height(8.dp))
+        OverlayNotice(dark, label)
     }
-
-    GroupTitle("$appLabel · 视频页区域")
-    val master = state.enableKuaishou
-    val right = state.enableKsRight
-    val top = state.enableKsTop
-    val bottom = state.enableKsBottom
-    val corner = state.enableKsCorner
-    OptionRow("$appLabel 总开关", "关则本应用所有区域都不参与隐藏", checked = master, dark = dark,
-        enabled = !overlay,
-        onCheckedChange = { v -> onStateChange { s -> s.copy(enableKuaishou = v) } })
-    OptionRow("右侧互动列", "点赞/评论/收藏/分享", checked = right, dark = dark,
-        enabled = !overlay,
-        onCheckedChange = { v -> onStateChange { s -> s.copy(enableKsRight = v) } })
-    OptionRow("顶部工具栏", "返回/搜索/更多/台标", checked = top, dark = dark,
-        enabled = !overlay,
-        onCheckedChange = { v -> onStateChange { s -> s.copy(enableKsTop = v) } })
-    OptionRow("底部操作栏", "标签栏/进度条/评论入口", checked = bottom, dark = dark,
-        enabled = !overlay,
-        onCheckedChange = { v -> onStateChange { s -> s.copy(enableKsBottom = v) } })
-    OptionRow("角落按钮", "右上/左上角常驻按钮", checked = corner, dark = dark,
-        enabled = !overlay,
-        onCheckedChange = { v -> onStateChange { s -> s.copy(enableKsCorner = v) } })
-    // v3.0.6：快手精准隐藏三开关（与 v2.6.9 四区域独立，旧键/索引一律不动）
-    GroupTitle("$appLabel · v3.0.6 精准隐藏")
-    OptionRow("下方标题栏", "视频正文文案，@作者和声明不动", checked = state.enableBottomCaption,
-        dark = dark, enabled = !overlay,
-        onCheckedChange = { v -> onStateChange { s -> s.copy(enableBottomCaption = v) } })
-    OptionRow("右侧点赞栏", "点赞·评论·收藏·分享，头像关注不动", checked = state.enableRightActions,
-        dark = dark, enabled = !overlay,
-        onCheckedChange = { v -> onStateChange { s -> s.copy(enableRightActions = v) } })
-    OptionRow("红点", "未读角标，互动数字绝不动", checked = state.enableRedDot,
-        dark = dark, enabled = !overlay,
-        onCheckedChange = { v -> onStateChange { s -> s.copy(enableRedDot = v) } })
-    HintText("打开的区域按周期真隐藏（藏 ${state.hideSec}s / 显示 ${state.showSec}s）。快手只有这一套开关，与抖音、B站互不影响。")
-    HintText("需要模块注入该进程才生效。首页「注入状态」显示「已注入」即正常；「未检测到」就是 LSPosed 没勾这个 App（或勾了没重启），点「作用域自检」按提示补齐。")
-    // v3.0.7：快手直播间 / 刷视频两行；必须在 !isKuaishou 的 return 之后，B站页零变化
-    GroupTitle("$appLabel · v3.0.7 定向隐藏")
-    OptionRow("直播间圈选内容", "直播间内只藏圈选静态元素，输入条 / 礼物 / 画面不动",
-        checked = state.enableKsLiveHits, dark = dark, enabled = !overlay,
-        onCheckedChange = { on -> onStateChange { s -> s.copy(enableKsLiveHits = on) } })
-    OptionRow("刷视频圈选内容", "红点走原开关；本项只藏全屏观看 / AI 提示等静态元素，互动数字绝不藏",
-        checked = state.enableKsFeedHits, dark = dark, enabled = !overlay,
-        onCheckedChange = { on -> onStateChange { s -> s.copy(enableKsFeedHits = on) } })
-    HintText("「定向隐藏」是真隐藏：把圈定的控件透明度设为 0 并标记为不可见（alpha=0 + INVISIBLE），相当于从画面里拿掉——像素不发光、也不响应点击；不是在上面盖一层黑块。视频画面、输入条与播放本身照常工作，退出对应页面后控件立即恢复。")
-    HintText("点赞、评论、分享、进度等纯数字互动计数一律不进隐藏名单，红点走独立白名单；宁可少藏，绝不误藏。识别不到时功能会静默跳过，不会误伤画面或让你点不到按钮。")
-    // v3.0.8 P3：必须在 !isKuaishou 的 return 之后，B站页零变化
-    PendingProbeHint()
+    Spacer(Modifier.height(12.dp))
+    master?.let { (title, write) ->
+        OptionRow(title, masterDesc, checked = masterRead(state), dark = dark,
+            enabled = !overlay,
+            onCheckedChange = { v -> onStateChange { s -> write(s, v) } })
+    }
+    SlotRows(slots, state, onStateChange, dark, overlay)
+    Spacer(Modifier.height(10.dp))
+    HintText("所有区域都是按周期真隐藏（藏 ${state.hideSec}s / 显示 ${state.showSec}s），关掉立即恢复。需要模块注入「$label」进程才生效：首页「注入状态」显示已注入即正常。")
+    HintText("直播页与白名单应用自动跳过；只隐藏可确认的固定控件，内容区不误伤。")
 }
 
 @Composable
@@ -3859,7 +3602,6 @@ private fun SubPageHost(
         PAGE_HOME_LIST -> "白名单"
         PAGE_HOME_ALL -> "功能设置"
         "feat-general" -> "通用"
-        PAGE_FEAT_VIDEO -> "视频应用"
         "feat-douyin" -> "抖音"
         "feat-drama" -> "红果短剧"
         "feat-kuaishou" -> "快手"
@@ -3922,13 +3664,17 @@ private fun SubPageHost(
                     dark = dark,
                 )
                 "feat-general" -> GeneralFeaturePage(state, onStateChange, dark)
-                PAGE_FEAT_VIDEO -> VideoAppsPage(state, onStateChange, dark)
-                "feat-douyin" -> DouyinFeaturePage(state, onStateChange, dark)
-                "feat-drama" -> DramaFeaturePage(state, onStateChange, dark)
-                "feat-kuaishou" -> VideoAppSubPage(state, onStateChange, dark, "快手",
-                    isKuaishou = true)
-                "feat-bilibili" -> VideoAppSubPage(state, onStateChange, dark, "哔哩哔哩",
-                    isKuaishou = false)
+                "feat-douyin" -> VideoAppPage("抖音", VideoSlots.DOUYIN,
+                    state, onStateChange, dark)
+                "feat-drama" -> VideoAppPage("红果短剧", VideoSlots.DRAMA,
+                    state, onStateChange, dark)
+                "feat-kuaishou" -> VideoAppPage("快手", VideoSlots.KUAISHOU,
+                    state, onStateChange, dark,
+                    master = "快手总开关" to { s, v -> s.copy(enableKuaishou = v) },
+                    masterRead = { it.enableKuaishou },
+                    masterDesc = "关掉则快手所有区域都不参与隐藏")
+                "feat-bilibili" -> VideoAppPage("B站", VideoSlots.BILIBILI,
+                    state, onStateChange, dark)
                 else -> Text("页面不存在，请返回上一页。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -4327,39 +4073,6 @@ private fun CreditPage(dark: Boolean, onOpenUrl: (String) -> Unit) {
         color = MaterialTheme.colorScheme.outline,
         modifier = Modifier.fillMaxWidth().padding(top = 18.dp),
         textAlign = TextAlign.Center)
-}
-
-/**
- * 短视频应用适配说明卡（v2.6.5 计划说明 → v2.6.8 已上线）。
- *
- * <p>早期版本这里只列适配计划、尚无开关入口。v2.6.8 起快手 / 哔哩哔哩
- * 已在功能页开通真开关，本卡改为能力边界与作用域勾选提示，不再误导用户。</p>
- */
-@Composable
-private fun RoadmapCard(dark: Boolean) {
-    Spacer(Modifier.height(4.dp))
-    Card(
-        Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = UiPalette.surface(dark, 0.55f)),
-    ) {
-        Column(Modifier.padding(16.dp)) {
-            Text("短视频应用适配", style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold, color = UiPalette.ink(dark))
-            Text("快手、哔哩哔哩已支持：在功能页点开「快手」「B站」逐项开启对应开关。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 6.dp))
-            Text("LSPosed 真隐藏需要模块注入目标进程。本版只做位置偏移，不再用覆盖层铺黑：注入没通时不会画任何东西，日志里可看 INJECTED 与作用域自检结果。",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.outline,
-                modifier = Modifier.padding(top = 6.dp))
-            Text("直播页与白名单应用自动跳过；只隐藏可确认的固定控件，内容区不误伤。底部「+」随「底部操作栏」开关一起隐藏。",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.outline,
-                modifier = Modifier.padding(top = 6.dp))
-        }
-    }
 }
 
 /**
