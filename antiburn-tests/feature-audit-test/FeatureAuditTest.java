@@ -1817,8 +1817,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 159
-                    && "3.4.17".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 160
+                    && "3.4.18".equals(nm.group(1));
             check(ok, "T-42b 版本锚点恰为 99 / 3.2（非区间，锁死发布锚点）", "");
         }
         check(hook297raw.contains("SAFE_RESTORE") && hook297raw.contains("DRAMA_PAYWALL_HIDE"),
@@ -1893,8 +1893,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 159
-                    && "3.4.17".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 160
+                    && "3.4.18".equals(nm.group(1));
             // 与 T-42b 断言同源，是发布前的双重防回退锁，不冒充新增不变量（评审建议改标签）。
             check(ok, "T-43c P3 版本锚点与 T-42b 双重锁定（99/3.2）（发布前防回退，非新增不变量）", "");
         }
@@ -1932,8 +1932,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 159
-                    && "3.4.17".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 160
+                    && "3.4.18".equals(nm.group(1));
             check(ok, "T-44c 版本号恰为 99 / 3.2（发布锚点）", "");
         }
 
@@ -1975,8 +1975,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 159
-                    && "3.4.17".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 160
+                    && "3.4.18".equals(nm.group(1));
             check(ok, "T-45c 版本号恰为 99 / 3.2（发布锚点）", "");
         }
 
@@ -2052,8 +2052,8 @@ public class FeatureAuditTest {
             // ⑤ 版本锚点 + 辅助方法只读性
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
-            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 159
-                    && "3.4.17".equals(nm.group(1));
+            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 160
+                    && "3.4.18".equals(nm.group(1));
             String helper = stripComments(slice(dy304raw, "private static boolean hasChildByClass(View v, String target)",
                     "private static int scoreRight(ViewGroup g)"));
             boolean readonly = helper.contains("MAX_DEPTH") && helper.contains("catch (Throwable")
@@ -2097,8 +2097,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 159
-                    && "3.4.17".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 160
+                    && "3.4.18".equals(nm.group(1));
             check(ok, "T-47c 版本号恰为 99 / 3.2（v3.0.13 发布锚点）", "");
         }
 
@@ -2365,7 +2365,7 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ver = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 159 && "3.4.17".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 160 && "3.4.18".equals(nm.group(1));
             check(ver, "T-48-VER 版本锚点 99/3.2（T-42b~T-47c 六处已同步）", "");
         }
 
@@ -2981,6 +2981,47 @@ public class FeatureAuditTest {
             dyNorm = dyNorm.replace(
                     "    /** v3.4.17：按 id 补遮时的命中数，用于「数量变化才写日志」的去抖。 */\n"
                             + "    private static int lastKsIdN = 0;\n", "");
+            {
+                int from = dyNorm.indexOf("    /**\n     * v3.4.18：快手短剧 / 漫剧页底部的「合集入口」卡片");
+                int to = dyNorm.indexOf("    private static final String[] KS_ENTRY_IDS = {\"general_entry_unTruncated_title\",");
+                if (from >= 0 && to > from) {
+                    int end = dyNorm.indexOf("};", to);
+                    if (end > 0) {
+                        dyNorm = dyNorm.substring(0, from) + dyNorm.substring(end + 3);
+                    }
+                }
+            }
+            dyNorm = dyNorm.replace(
+                    "    private static final String[] KS_RIGHT_IDS = {\"slide_play_right_follow\",\n"
+                            + "            \"slide_play_right_follow_button\", \"slide_play_right_poke_button\",\n"
+                            + "            \"slide_play_right_fans_group_button\", \"slide_play_avatar_click_area\",\n"
+                            + "            \"like_button\", \"comment_button\", \"collect_button\", \"forward_button\",",
+                    "    private static final String[] KS_RIGHT_IDS = {\"slide_play_right_follow\",\n"
+                            + "            \"like_button\", \"comment_button\", \"collect_button\", \"forward_button\",");
+            dyNorm = dyNorm.replace(
+                    "            // v3.4.18：短剧页的点赞/评论数是裸 TextView，没有 id 也没有动作词，\n"
+                            + "            // 只能按「右缘窄带 + 纯数字 ≤4 位 + 竖屏中部」认，避免把播放量等页面大数字收进来。\n"
+                            + "            if (!hit && v instanceof TextView && v.getWidth() < w * 0.18f\n"
+                            + "                    && v.getHeight() < h * 0.06f) {\n"
+                            + "                CharSequence t = ((TextView) v).getText();\n"
+                            + "                String s2 = normText(t);\n"
+                            + "                if (s2.length() <= 4 && THH_COUNT_PATTERN.matcher(s2).matches()) {\n"
+                            + "                    int[] l0 = loc(v);\n"
+                            + "                    if (l0 != null && l0[0] + v.getWidth() / 2 > w * 0.74f\n"
+                            + "                            && l0[1] > h * 0.20f && l0[1] < h * 0.88f) {\n"
+                            + "                        hit = true;\n"
+                            + "                    }\n"
+                            + "                }\n"
+                            + "            }\n", "");
+            dyNorm = dyNorm.replace(
+                    "                hideKsEntryById(lastRoot);\n", "");
+            {
+                int from = dyNorm.indexOf("    /** v3.4.18：底部「合集入口」卡片按 id 补遮");
+                int to = dyNorm.indexOf("    private static void collectKsRightById(");
+                if (from >= 0 && to > from) {
+                    dyNorm = dyNorm.substring(0, from) + dyNorm.substring(to);
+                }
+            }
             String dyNormHash = sha256(dyNorm);
             String fetchBody = slice(cfg310, "private static long fetchInterval() {", "/** 屏幕是否亮着。");
             int fetchLines = count(fetchBody, ".+");
@@ -2992,7 +3033,7 @@ public class FeatureAuditTest {
             int fixed45 = count(act310, "(?m)^[ \\t]*val[ \\t]+navMicroSec[ \\t]*=[ \\t]*45[ \\t]*$");
             int boundSaveable = count(act310,
                     "navMicroSec[^\\n]*rememberSaveable|rememberSaveable[^\\n]*navMicroSec");
-                                    check("48368fc251d5e9265f0b7d656ce5c182b628a697be785685e8b179b1fd974b25".equals(dyNormHash)
+                                    check("20715f0e9d7dd5ccd7b37863e911abdf16a76ab7cae97affb1abfc80b7040aa2".equals(dyNormHash)
                             && fetchLines == 11
                             && "e9395fb642fcb791b8af95ce676fb109cd7c16196ac7ff8d9242def575ba39a7".equals(fetchHash)
                             && t60 == 1 && t2 == 1 && t20 == 1 && t90 == 1
@@ -3462,8 +3503,8 @@ public class FeatureAuditTest {
             java.util.regex.Matcher nm313 = java.util.regex.Pattern
                     .compile("versionName\\s+\"([^\"]+)\"").matcher(gradle313);
             boolean ver313 = cm313.find() && nm313.find()
-                    && Integer.parseInt(cm313.group(1)) == 159
-                    && "3.4.17".equals(nm313.group(1));
+                    && Integer.parseInt(cm313.group(1)) == 160
+                    && "3.4.18".equals(nm313.group(1));
             check(ver313, "T-55-A5 版本锚点 99 / 3.2", "");
 
             // A6 · 变异实证：把 INFO 类目改坏，A1 守卫必须失效（证明断言非空转）
@@ -5123,6 +5164,28 @@ public class FeatureAuditTest {
                     "T-103-A5 走幽灵隐藏（按钮仍可点）+ 数量变化才写日志", "");
             check(dy.contains("|| !Config.enableRightActions)"),
                     "T-103-A6 与「右侧按钮列」同一个开关，关掉即恢复", "");
+        }
+
+        // ---------- T-104 v3.4.18 快手短剧/漫剧页（SlidePlay）补遮 ----------
+        System.out.println("== T-104 快手短剧页补遮 ==");
+        {
+            String dy = read(dir.resolve("DouyinHook.java"));
+            check(dy.contains("\"slide_play_right_follow_button\"")
+                            && dy.contains("\"slide_play_right_poke_button\"")
+                            && dy.contains("\"slide_play_right_fans_group_button\""),
+                    "T-104-A1 短剧页 SlidePlay 的四个右侧 id 已并入名单", "");
+            check(dy.contains("s2.length() <= 4 && THH_COUNT_PATTERN.matcher(s2).matches()")
+                            && dy.contains("l0[1] > h * 0.20f && l0[1] < h * 0.88f"),
+                    "T-104-A2 裸数字计数按「右缘窄带 + 纯数字」认，不吃页面大数字", "");
+            check(dy.contains("KS_ENTRY_IDS") && dy.contains("\"general_entry_unTruncated_title\""),
+                    "T-104-A3 底部合集入口 id 名单在", "");
+            check(dy.contains("hideKsEntryById(lastRoot);")
+                            && dy.contains("|| !Config.enableKsBottom)"),
+                    "T-104-A4 合集入口挂「底部操作栏」开关（关掉即不遮）", "");
+            check(dy.contains("if (bottom > h * 0.72f) {"),
+                    "T-104-A5 合集入口限域在屏高 72% 以下", "");
+            check(dy.contains("collectKsEntryById(root, hits, 0, w, h)"),
+                    "T-104-A6 收集器接线在", "");
         }
 
         System.out.println();

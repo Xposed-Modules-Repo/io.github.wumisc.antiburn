@@ -2752,6 +2752,7 @@ public final class DouyinHook {
             // 用幽灵隐藏（alpha=0）而不是 INVISIBLE：关注/点赞点得动，只是不再发光。
             if (isKuaishou) {
                 hideKsRightById(lastRoot);
+                hideKsEntryById(lastRoot);
             }
         } else {
             for (View v : rightList) {
@@ -4141,9 +4142,17 @@ public final class DouyinHook {
      * 容器变透明它们照样发光 —— 真机看到的就是「右边还剩一排按钮」。</p>
      */
     private static final String[] KS_RIGHT_IDS = {"slide_play_right_follow",
+            "slide_play_right_follow_button", "slide_play_right_poke_button",
+            "slide_play_right_fans_group_button", "slide_play_avatar_click_area",
             "like_button", "comment_button", "collect_button", "forward_button",
             "like_count_view", "comment_count_view", "comment_count_view2", "forward_count",
             "collect_count", "like_count", "comment_count"};
+    /**
+     * v3.4.18：快手短剧 / 漫剧页底部的「合集入口」卡片（真机 RDUMP 实测 id）。
+     * 这一条是静态卡片，压在底部信息区上方，属于典型烧屏面。
+     */
+    private static final String[] KS_ENTRY_IDS = {"general_entry_unTruncated_title",
+            "general_entry_arrow", "slide_play_merchant_follow_tip"};
     private static final String[] KS_ACTION_TEXTS = {"点赞", "赞", "评论", "分享", "收藏", "喜欢"};
     /** 红果推荐栏里必然出现的标签词。 */
     private static final String[] DRAMA_RECO_TEXTS = {"推荐", "猜你喜欢", "热播", "为你推荐",
@@ -4245,6 +4254,64 @@ public final class DouyinHook {
         }
     }
 
+    /** v3.4.18：底部「合集入口」卡片按 id 补遮（贴底、通栏、矮），同样用幽灵隐藏。 */
+    private static void hideKsEntryById(View root) {
+        if (root == null || forceShow || !root.isAttachedToWindow() || !Config.enableKsBottom) {
+            return;
+        }
+        int w = screenW(root);
+        int h = screenH(root);
+        if (w <= 0 || h <= 0) {
+            return;
+        }
+        java.util.List<View> hits = new ArrayList<>();
+        collectKsEntryById(root, hits, 0, w, h);
+        for (View v : hits) {
+            hideGhost(v);
+        }
+    }
+
+    private static void collectKsEntryById(View v, java.util.List<View> out, int depth, int w, int h) {
+        if (v == null || depth > MAX_DEPTH || out.size() >= 8) {
+            return;
+        }
+        if (isOwnOverlay(v)) {
+            return;
+        }
+        boolean hit = false;
+        try {
+            String n = resName(v);
+            for (String k : KS_ENTRY_IDS) {
+                if (k.equals(n)) {
+                    hit = true;
+                    break;
+                }
+            }
+            if (hit && v.getWidth() > 0 && v.getHeight() > 0
+                    && v.getWidth() < w * 0.95f && v.getHeight() < h * 0.12f
+                    && !containsVideoSurface(v, 0)) {
+                int[] l = loc(v);
+                int bottom = l == null ? 0 : l[1] + v.getHeight();
+                if (bottom > h * 0.72f) {
+                    out.add(v);
+                } else {
+                    hit = false;
+                }
+            } else {
+                hit = false;
+            }
+        } catch (Throwable ignored) {
+            hit = false;
+        }
+        if (hit || !(v instanceof ViewGroup)) {
+            return;
+        }
+        ViewGroup g = (ViewGroup) v;
+        for (int i = 0; i < g.getChildCount(); i++) {
+            collectKsEntryById(g.getChildAt(i), out, depth + 1, w, h);
+        }
+    }
+
     private static void collectKsRightById(View v, java.util.List<View> out, int depth, int w, int h) {
         if (v == null || depth > MAX_DEPTH || out.size() >= 16) {
             return;
@@ -4259,6 +4326,20 @@ public final class DouyinHook {
                 if (k.equals(n)) {
                     hit = true;
                     break;
+                }
+            }
+            // v3.4.18：短剧页的点赞/评论数是裸 TextView，没有 id 也没有动作词，
+            // 只能按「右缘窄带 + 纯数字 ≤4 位 + 竖屏中部」认，避免把播放量等页面大数字收进来。
+            if (!hit && v instanceof TextView && v.getWidth() < w * 0.18f
+                    && v.getHeight() < h * 0.06f) {
+                CharSequence t = ((TextView) v).getText();
+                String s2 = normText(t);
+                if (s2.length() <= 4 && THH_COUNT_PATTERN.matcher(s2).matches()) {
+                    int[] l0 = loc(v);
+                    if (l0 != null && l0[0] + v.getWidth() / 2 > w * 0.74f
+                            && l0[1] > h * 0.20f && l0[1] < h * 0.88f) {
+                        hit = true;
+                    }
                 }
             }
             if (hit && v.getWidth() > 0 && v.getHeight() > 0
