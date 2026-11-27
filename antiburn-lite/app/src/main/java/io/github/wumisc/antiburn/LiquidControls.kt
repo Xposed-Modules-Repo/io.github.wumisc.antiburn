@@ -8,6 +8,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -195,17 +197,21 @@ fun LiquidSlider(
     // 读屏手势上下滑永远停在同一格，只能靠旁边的 ±5s 按钮，等于半个残废控件。
     val rounded = value.roundToInt()
     BoxWithConstraints(
-        modifier.fillMaxWidth().semantics {
-            progressBarRangeInfo = ProgressBarRangeInfo(
-                current = value,
-                range = valueRange,
-            )
-            stateDescription = "$rounded"
-            setProgress { target ->
-                onValueChange(target.coerceIn(valueRange.start, valueRange.endInclusive))
-                true
-            }
-        },
+        modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .focusable()
+            .semantics(mergeDescendants = true) {
+                progressBarRangeInfo = ProgressBarRangeInfo(
+                    current = value,
+                    range = valueRange,
+                )
+                stateDescription = "$rounded"
+                setProgress { target ->
+                    onValueChange(target.coerceIn(valueRange.start, valueRange.endInclusive))
+                    true
+                }
+            },
         contentAlignment = Alignment.CenterStart,
     ) {
         val trackWidth = constraints.maxWidth.toFloat()

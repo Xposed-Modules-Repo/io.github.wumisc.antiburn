@@ -3814,17 +3814,26 @@ private fun ThanksPage(dark: Boolean) {
         color = MaterialTheme.colorScheme.onSurfaceVariant)
     Spacer(Modifier.height(10.dp))
     THANKS.forEach { t ->
+        // v3.4.6：一行一个人合并成一个节点，TalkBack 一次读完「昵称，贡献」，
+        // 不用再在「字」上逐条点（头像方块里的单字也不单独发声）。
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 13.dp),
+            Modifier
+                .fillMaxWidth()
+                .semantics(mergeDescendants = true) {
+                    contentDescription = t.name + "，" + t.contribution
+                }
+                .padding(horizontal = 4.dp, vertical = 13.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
                 Modifier.size(38.dp).clip(RoundedCornerShape(12.dp))
-                    .background(UiPalette.accent(dark)),
+                    .background(UiPalette.accent(dark))
+                    .clearAndSetSemantics {},
                 contentAlignment = Alignment.Center,
             ) {
                 Text(t.badge, style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimary)
+                    fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier.clearAndSetSemantics {})
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
@@ -4008,7 +4017,7 @@ private fun WelfarePage(slot: Int, dark: Boolean, onOpenUrl: (String) -> Unit) {
     }
     val b = bmp
     if (b != null) {
-        Image(b.asImageBitmap(), contentDescription = kid.name,
+        Image(b.asImageBitmap(), contentDescription = kid.name + " 的照片",
             modifier = Modifier.fillMaxWidth().height(280.dp).clip(RoundedCornerShape(16.dp)),
             contentScale = ContentScale.Crop)
         Spacer(Modifier.height(12.dp))
@@ -4017,18 +4026,27 @@ private fun WelfarePage(slot: Int, dark: Boolean, onOpenUrl: (String) -> Unit) {
         style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold,
         color = UiPalette.ink(dark))
     Spacer(Modifier.height(8.dp))
-    listOf(
+    // v3.4.6：这些字段对读屏是一段话，不是六段。合成一个节点后一次读完，
+    // 想听某一条再回看也不用来回滑六次。
+    val fields = listOf(
         "出生日期" to kid.birth,
         "失踪时身高" to kid.height,
         "走失时间" to kid.lostTime,
         "走失地点" to kid.lostPlace,
         "体貌特征" to kid.feature,
         "登记日期" to kid.regDate,
-    ).forEach { (k, v) ->
-        if (v.isNotEmpty() && v != "未知CM") {
+    ).filter { (_, v) -> v.isNotEmpty() && v != "未知CM" }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .semantics(mergeDescendants = true) {
+                contentDescription = fields.joinToString("，") { (k, v) -> k + " " + v }
+            },
+    ) {
+        fields.forEach { (k, v) ->
             Text(k + "：" + v, style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp).clearAndSetSemantics {})
         }
     }
     Spacer(Modifier.height(12.dp))
@@ -4046,7 +4064,10 @@ private fun WelfarePage(slot: Int, dark: Boolean, onOpenUrl: (String) -> Unit) {
         shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = UiPalette.surface(dark)),
     ) {
-        Column(Modifier.padding(16.dp)) {
+        Column(
+            Modifier
+                .padding(16.dp)
+        ) {
             Text("有线索请联系官方", style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold, color = UiPalette.accent(dark))
             Text("电话：" + d!!.tel + "（工作日） / " + d.mobile + "（节假日）",
@@ -4135,7 +4156,11 @@ private fun CreditPage(dark: Boolean, onOpenUrl: (String) -> Unit) {
         Column(
             Modifier
                 .fillMaxWidth()
-                .clickable { onOpenUrl(c.url) }
+                .semantics(mergeDescendants = true) {
+                    contentDescription = c.name + "，" + c.desc + "，链接 " + c.url + "，双击打开"
+                    role = Role.Button
+                }
+                .clickable(onClickLabel = "打开" + c.name, onClick = { onOpenUrl(c.url) })
                 .padding(horizontal = 4.dp, vertical = 13.dp),
         ) {
             Text(
