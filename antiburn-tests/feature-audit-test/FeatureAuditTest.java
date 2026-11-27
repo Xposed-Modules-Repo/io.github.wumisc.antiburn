@@ -1817,8 +1817,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 150
-                    && "3.4.8".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 151
+                    && "3.4.9".equals(nm.group(1));
             check(ok, "T-42b 版本锚点恰为 99 / 3.2（非区间，锁死发布锚点）", "");
         }
         check(hook297raw.contains("SAFE_RESTORE") && hook297raw.contains("DRAMA_PAYWALL_HIDE"),
@@ -1893,8 +1893,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 150
-                    && "3.4.8".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 151
+                    && "3.4.9".equals(nm.group(1));
             // 与 T-42b 断言同源，是发布前的双重防回退锁，不冒充新增不变量（评审建议改标签）。
             check(ok, "T-43c P3 版本锚点与 T-42b 双重锁定（99/3.2）（发布前防回退，非新增不变量）", "");
         }
@@ -1932,8 +1932,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 150
-                    && "3.4.8".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 151
+                    && "3.4.9".equals(nm.group(1));
             check(ok, "T-44c 版本号恰为 99 / 3.2（发布锚点）", "");
         }
 
@@ -1975,8 +1975,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 150
-                    && "3.4.8".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 151
+                    && "3.4.9".equals(nm.group(1));
             check(ok, "T-45c 版本号恰为 99 / 3.2（发布锚点）", "");
         }
 
@@ -2052,8 +2052,8 @@ public class FeatureAuditTest {
             // ⑤ 版本锚点 + 辅助方法只读性
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
-            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 150
-                    && "3.4.8".equals(nm.group(1));
+            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 151
+                    && "3.4.9".equals(nm.group(1));
             String helper = stripComments(slice(dy304raw, "private static boolean hasChildByClass(View v, String target)",
                     "private static int scoreRight(ViewGroup g)"));
             boolean readonly = helper.contains("MAX_DEPTH") && helper.contains("catch (Throwable")
@@ -2097,8 +2097,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 150
-                    && "3.4.8".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 151
+                    && "3.4.9".equals(nm.group(1));
             check(ok, "T-47c 版本号恰为 99 / 3.2（v3.0.13 发布锚点）", "");
         }
 
@@ -2365,7 +2365,7 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ver = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 150 && "3.4.8".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 151 && "3.4.9".equals(nm.group(1));
             check(ver, "T-48-VER 版本锚点 99/3.2（T-42b~T-47c 六处已同步）", "");
         }
 
@@ -2825,6 +2825,49 @@ public class FeatureAuditTest {
             dyNorm = dyNorm.replace(
                     "\n                    && !isProfileListContext(g)) {   // v3.0.11 P0b：用户主页作品卡不隐藏",
                     ") {");
+            // 5) v3.4.9 授权改动：三处页面形态补遮（抖音个人页底栏 / 快手精选兜底 / 红果推荐栏）
+            //    整块与接线逐字移除后归一化，不改变上面任何既有算法的守卫语义。
+            int v349a = dyNorm.indexOf("    // ==================== v3.4.9：三处新页面形态的补遮 ====================\n");
+            int v349b = dyNorm.indexOf("    /**\n     * v3.2.16：作品列表 / 搜索结果页的结构判定", v349a);
+            if (v349a >= 0 && v349b > v349a) {
+                dyNorm = dyNorm.substring(0, v349a) + dyNorm.substring(v349b);
+            }
+            dyNorm = dyNorm.replace(
+                    "                // v3.4.9：红果「我的」页不动；抖音个人页在顶部 chrome 之外，\n"
+                            + "                // 再把底部 Tab 条（首页/朋友/消息/我）一起遮掉 —— 与刷视频页同口径。\n"
+                            + "                // 只认「≥80% 屏宽、贴底、含两条 Tab 文案」的横条，作品封面是图片格子，\n"
+                            + "                // 尺寸与文案都不满足，不会被收进来（白屏教训的硬护栏）。\n"
+                            + "                if (!isDrama) {\n"
+                            + "                    hideProfileBottomTab(lastRoot);\n"
+                            + "                }\n",
+                    "");
+            dyNorm = dyNorm.replace(
+                    "            // v3.4.9：快手「精选」页的互动列结构和视频页不同，id 规则一个都收不到\n"
+                            + "            // （rightList 为空）。这时按右边缘 + 动作文案（点赞/评论/分享/收藏）兜底，\n"
+                            + "            // 只在「本来就一个都没收到」时才启用，视频页行为零变化。\n"
+                            + "            if (isKuaishou && rightList.isEmpty()) {\n"
+                            + "                hideKsLabelActions(lastRoot);\n"
+                            + "            }\n",
+                    "");
+            dyNorm = dyNorm.replace(
+                    "            // v3.4.9：红果刷两次后出现的「上方推荐栏」不在 topBar 容器里，单独按\n"
+                            + "            // 「顶部横条 + 多个短标签」补遮；与「顶部栏」同一个开关，关掉即恢复。\n"
+                            + "            if (isDrama) {\n"
+                            + "                hideDramaRecoBar(lastRoot);\n"
+                            + "            }\n",
+                    "");
+            dyNorm = dyNorm.replace(
+                    "        // v3.4.9：新增三处台账一并恢复（关开关 / 退出页面 / 相位显示都不能留永久 INVISIBLE）\n"
+                            + "        for (View v : profileBottomList) {\n"
+                            + "            showDeep(v);\n"
+                            + "        }\n"
+                            + "        for (View v : ksLabelActionList) {\n"
+                            + "            showDeep(v);\n"
+                            + "        }\n"
+                            + "        for (View v : dramaRecoList) {\n"
+                            + "            showDeep(v);\n"
+                            + "        }\n",
+                    "");
             String dyNormHash = sha256(dyNorm);
             String fetchBody = slice(cfg310, "private static long fetchInterval() {", "/** 屏幕是否亮着。");
             int fetchLines = count(fetchBody, ".+");
@@ -3306,8 +3349,8 @@ public class FeatureAuditTest {
             java.util.regex.Matcher nm313 = java.util.regex.Pattern
                     .compile("versionName\\s+\"([^\"]+)\"").matcher(gradle313);
             boolean ver313 = cm313.find() && nm313.find()
-                    && Integer.parseInt(cm313.group(1)) == 150
-                    && "3.4.8".equals(nm313.group(1));
+                    && Integer.parseInt(cm313.group(1)) == 151
+                    && "3.4.9".equals(nm313.group(1));
             check(ver313, "T-55-A5 版本锚点 99 / 3.2", "");
 
             // A6 · 变异实证：把 INFO 类目改坏，A1 守卫必须失效（证明断言非空转）
@@ -4812,6 +4855,39 @@ public class FeatureAuditTest {
                             && a11y.contains("maxLines = 1")
                             && a11y.contains("TextOverflow.Ellipsis"),
                     "T-96-A7 底部导航一格一个节点 + 200% 字号不撑破布局", "");
+        }
+
+        // ---------- T-97 v3.4.9 三处页面形态补遮 ----------
+        System.out.println("== T-97 抖音个人页 / 快手精选 / 红果推荐栏 ==");
+        {
+            String dy = read(dir.resolve("DouyinHook.java"));
+            // 新块单独切出来，避免把老代码里的 isBilibili 算进来
+            int kb = dy.indexOf("// ==================== v3.4.9");
+            int ke = dy.indexOf("v3.2.16：作品列表 / 搜索结果页的结构判定");
+            String blk = (kb >= 0 && ke > kb) ? dy.substring(kb, ke) : "";
+            check(blk.contains("private static void hideProfileBottomTab(")
+                            && blk.contains("profileBottomList.add(v)")
+                            && dy.contains("if (!isDrama) {\n                    hideProfileBottomTab(lastRoot);"),
+                    "T-97-A1 抖音个人页补遮底部 Tab（红果「我的」页排除在外）", "");
+            check(blk.contains("profileBottomList.size() < 100") == false
+                            && blk.contains("v.getWidth() >= w * 0.80f")
+                            && blk.contains("v.getHeight() < h * 0.12f")
+                            && blk.contains("hasAnyText(v, 0, \"首页\")"),
+                    "T-97-A2 底栏判据收紧（≥80% 宽 + 贴底 + ≥2 个 Tab 文案 + 无视频画面）", "");
+            check(blk.contains("KS_ACTION_TEXTS = {\"点赞\", \"赞\", \"评论\", \"分享\", \"收藏\", \"喜欢\"}")
+                            && blk.contains("ksLabelActionList.size() < 3")
+                            && dy.contains("isKuaishou && rightList.isEmpty()"),
+                    "T-97-A3 快手精选按动作文案兜底，且只在原规则一个都没收到时启用", "");
+            check(blk.contains("DRAMA_RECO_TEXTS")
+                            && blk.contains("countShortTexts(v, 0, 0) >= 3")
+                            && dy.contains("if (isDrama) {\n                hideDramaRecoBar(lastRoot);"),
+                    "T-97-A4 红果上方推荐栏：短标签 ≥3 + 命中推荐词才遮，挂「顶部栏」开关", "");
+            check(dy.contains("for (View v : profileBottomList) {")
+                            && dy.contains("for (View v : ksLabelActionList) {")
+                            && dy.contains("for (View v : dramaRecoList) {"),
+                    "T-97-A5 三处新台账都接进 showAll 恢复路径", "");
+            check(!blk.contains("isBilibili") && !blk.contains("enableBiliRight"),
+                    "T-97-A6 B站不参与任何新规则（保持现状不动）", "");
         }
 
         System.out.println();

@@ -2636,6 +2636,13 @@ public final class DouyinHook {
             if (!profileChromeHidden) {
                 showAll();
                 hideProfileChrome(lastRoot);
+                // v3.4.9：红果「我的」页不动；抖音个人页在顶部 chrome 之外，
+                // 再把底部 Tab 条（首页/朋友/消息/我）一起遮掉 —— 与刷视频页同口径。
+                // 只认「≥80% 屏宽、贴底、含两条 Tab 文案」的横条，作品封面是图片格子，
+                // 尺寸与文案都不满足，不会被收进来（白屏教训的硬护栏）。
+                if (!isDrama) {
+                    hideProfileBottomTab(lastRoot);
+                }
                 profileChromeHidden = true;
             }
             return;
@@ -2725,6 +2732,12 @@ public final class DouyinHook {
                 }
                 hideSafe(v, "right");
             }
+            // v3.4.9：快手「精选」页的互动列结构和视频页不同，id 规则一个都收不到
+            // （rightList 为空）。这时按右边缘 + 动作文案（点赞/评论/分享/收藏）兜底，
+            // 只在「本来就一个都没收到」时才启用，视频页行为零变化。
+            if (isKuaishou && rightList.isEmpty()) {
+                hideKsLabelActions(lastRoot);
+            }
         } else {
             for (View v : rightList) {
                 showDeep(v);
@@ -2733,6 +2746,11 @@ public final class DouyinHook {
         if (dTop) {
             if (topBar != null) {
                 hideSafe(topBar, "top");
+            }
+            // v3.4.9：红果刷两次后出现的「上方推荐栏」不在 topBar 容器里，单独按
+            // 「顶部横条 + 多个短标签」补遮；与「顶部栏」同一个开关，关掉即恢复。
+            if (isDrama) {
+                hideDramaRecoBar(lastRoot);
             }
         } else if (topBar != null) {
             showDeep(topBar);
@@ -3067,6 +3085,16 @@ public final class DouyinHook {
             showDeep(v);
         }
         profileChromeHidden = false;
+        // v3.4.9：新增三处台账一并恢复（关开关 / 退出页面 / 相位显示都不能留永久 INVISIBLE）
+        for (View v : profileBottomList) {
+            showDeep(v);
+        }
+        for (View v : ksLabelActionList) {
+            showDeep(v);
+        }
+        for (View v : dramaRecoList) {
+            showDeep(v);
+        }
         for (View v : liveTopList) {
             showDeep(v);
         }
@@ -4054,6 +4082,250 @@ public final class DouyinHook {
         }
     }
 
+    // ==================== v3.4.9：三处新页面形态的补遮 ====================
+
+    /** 抖音个人页底部 Tab 的保底台账（showAll 按它点亮）。 */
+    private static final List<View> profileBottomList = new ArrayList<>();
+    /** 快手精选页按文案收的互动按钮。 */
+    private static final List<View> ksLabelActionList = new ArrayList<>();
+    /** 红果上方推荐栏。 */
+    private static final List<View> dramaRecoList = new ArrayList<>();
+    /** 三条新规则的日志去抖：只有数量变化才写一行，避免每秒刷屏。 */
+    private static int lastProfileBottomN = -1;
+    private static int lastKsLabelN = -1;
+    private static int lastDramaRecoN = -1;
+
+    /** 快手互动按钮的朗读/显示文案（精确短文本才认，避免命中视频文案）。 */
+    private static final String[] KS_ACTION_TEXTS = {"点赞", "赞", "评论", "分享", "收藏", "喜欢"};
+    /** 红果推荐栏里必然出现的标签词。 */
+    private static final String[] DRAMA_RECO_TEXTS = {"推荐", "猜你喜欢", "热播", "为你推荐",
+            "大家都在看", "精选", "猜你想看"};
+
+    /**
+     * v3.4.9：抖音个人页底部 Tab 条。
+     *
+     * <p>个人页过去是整页放行（只因作品网格被当固定控件透明化会白屏），
+     * 结果底部那一条「首页 / 朋友 / 消息 / 我」永远亮着 —— 它是纯静态像素，
+     * 和刷视频页的底栏是同一条，没理由不防。这里只认同时满足：</p>
+     * <ul>
+     *   <li>宽度 ≥ 80% 屏宽、贴底（y ≥ 86% 屏高）、高度 &lt; 12% 屏高；</li>
+     *   <li>容器里同时出现「首页」与「朋友 / 消息 / 我」中至少一条（≥2 个 Tab 文案）；</li>
+     *   <li>不包含视频画面（作品封面是 ImageView 格子，尺寸与文案都不满足）。</li>
+     * </ul>
+     */
+    private static void hideProfileBottomTab(View root) {
+        profileBottomList.clear();
+        if (root == null || !root.isAttachedToWindow() || forceShow) {
+            return;
+        }
+        int w = screenW(root), h = screenH(root);
+        if (w <= 0 || h <= 0) {
+            return;
+        }
+        collectProfileBottom(root, 0, w, h, (int) (h * 0.86f));
+        for (int i = 0; i < profileBottomList.size(); i++) {
+            transparentDeep(profileBottomList.get(i), "profile-bottom");
+        }
+        if (profileBottomList.size() != lastProfileBottomN && profileBottomList.size() > 0) {
+            lastProfileBottomN = profileBottomList.size();
+            Log.i(TAG, "PROF-BOTTOM x" + profileBottomList.size());
+        }
+    }
+
+    private static void collectProfileBottom(View v, int depth, int w, int h, int yTop) {
+        if (v == null || depth > MAX_DEPTH) {
+            return;
+        }
+        if (isOwnOverlay(v)) {
+            return;
+        }
+        try {
+            if (v instanceof ViewGroup && v.getVisibility() == View.VISIBLE) {
+                int[] l = loc(v);
+                if (l != null && v.getWidth() >= w * 0.80f && v.getHeight() > 0
+                        && v.getHeight() < h * 0.12f && l[1] >= yTop
+                        && !containsVideoSurface(v, 0)
+                        && hasAnyText(v, 0, "首页") && hasAnyText(v, 0, "朋友", "消息", "我")) {
+                    profileBottomList.add(v);
+                    return;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) {
+                collectProfileBottom(g.getChildAt(i), depth + 1, w, h, yTop);
+            }
+        }
+    }
+
+    /**
+     * v3.4.9：快手「精选」页互动列按文案兜底。
+     *
+     * <p>精选页是图文 / 混排流，右侧按钮没有视频页那套 id / 类名，原有收集器
+     * 一个都收不到（rightList 为空），表现就是「点赞评论分享收藏照样亮着」。
+     * 这里按「右边缘 28% 屏宽、矮小叶子、文案是动作词」收集，凑到 3 个才动手；
+     * 不足 3 个一律不藏，避免把作者名、话题标签这类右侧文字误当按钮。</p>
+     */
+    private static void hideKsLabelActions(View root) {
+        ksLabelActionList.clear();
+        if (root == null || !root.isAttachedToWindow() || forceShow) {
+            return;
+        }
+        int w = screenW(root), h = screenH(root);
+        if (w <= 0 || h <= 0) {
+            return;
+        }
+        collectKsLabelActions(root, 0, w, h);
+        if (ksLabelActionList.size() < 3) {
+            ksLabelActionList.clear();
+            return;
+        }
+        for (int i = 0; i < ksLabelActionList.size(); i++) {
+            hideSmallSafe(ksLabelActionList.get(i), "ks-label");
+        }
+        if (ksLabelActionList.size() != lastKsLabelN) {
+            lastKsLabelN = ksLabelActionList.size();
+            Log.i(TAG, "KS-LABEL x" + ksLabelActionList.size());
+        }
+    }
+
+    private static void collectKsLabelActions(View v, int depth, int w, int h) {
+        if (v == null || depth > MAX_DEPTH || ksLabelActionList.size() >= 12) {
+            return;
+        }
+        if (isOwnOverlay(v)) {
+            return;
+        }
+        boolean matched = false;
+        try {
+            if (v.getVisibility() == View.VISIBLE && v.getWidth() > 0 && v.getHeight() > 0
+                    && v.getWidth() < w * 0.28f && v.getHeight() < h * 0.12f) {
+                int[] l = loc(v);
+                if (l != null && l[0] + v.getWidth() / 2 > w * 0.72f
+                        && matchesKsActionText(v) && !containsVideoSurface(v, 0)) {
+                    ksLabelActionList.add(v);
+                    matched = true;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        if (matched || !(v instanceof ViewGroup)) {
+            return;
+        }
+        ViewGroup g = (ViewGroup) v;
+        for (int i = 0; i < g.getChildCount(); i++) {
+            collectKsLabelActions(g.getChildAt(i), depth + 1, w, h);
+        }
+    }
+
+    /** 这个叶子的文字或无障碍描述正好是动作词（相等或「点赞 12」这种以动作词开头）。 */
+    private static boolean matchesKsActionText(View v) {
+        CharSequence cd = null;
+        try {
+            cd = v.getContentDescription();
+        } catch (Throwable ignored) {
+        }
+        CharSequence t = null;
+        if (v instanceof TextView) {
+            t = ((TextView) v).getText();
+        }
+        return isActionWord(cd) || isActionWord(t);
+    }
+
+    private static boolean isActionWord(CharSequence cs) {
+        if (cs == null) {
+            return false;
+        }
+        String s = cs.toString().trim();
+        if (s.isEmpty() || s.length() > 8) {
+            return false;
+        }
+        for (String key : KS_ACTION_TEXTS) {
+            if (s.equals(key) || s.startsWith(key)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * v3.4.9：红果上方推荐栏。
+     *
+     * <p>刷两次后出现的推荐条是「顶部横条 + 几个短标签」，既不在 topBar 容器里，
+     * 也不含视频画面。判据：y 在 4%~22% 屏高、高 &lt; 10% 屏高、宽 ≥ 55% 屏宽、
+     * 至少 3 个短文本叶子，且其中至少一个命中推荐词。四个条件缺一不藏。</p>
+     */
+    private static void hideDramaRecoBar(View root) {
+        dramaRecoList.clear();
+        if (root == null || !root.isAttachedToWindow() || forceShow) {
+            return;
+        }
+        int w = screenW(root), h = screenH(root);
+        if (w <= 0 || h <= 0) {
+            return;
+        }
+        collectDramaReco(root, 0, w, h, (int) (h * 0.04f), (int) (h * 0.22f));
+        for (int i = 0; i < dramaRecoList.size(); i++) {
+            hideSmallSafe(dramaRecoList.get(i), "drama-reco");
+        }
+        if (dramaRecoList.size() != lastDramaRecoN && dramaRecoList.size() > 0) {
+            lastDramaRecoN = dramaRecoList.size();
+            Log.i(TAG, "DRAMA-RECO x" + dramaRecoList.size());
+        }
+    }
+
+    private static void collectDramaReco(View v, int depth, int w, int h, int yMin, int yMax) {
+        if (v == null || depth > MAX_DEPTH) {
+            return;
+        }
+        if (isOwnOverlay(v)) {
+            return;
+        }
+        try {
+            if (v instanceof ViewGroup && v.getVisibility() == View.VISIBLE
+                    && v.getWidth() >= w * 0.55f && v.getHeight() > 0 && v.getHeight() < h * 0.10f) {
+                int[] l = loc(v);
+                if (l != null) {
+                    int cy = l[1] + v.getHeight() / 2;
+                    if (cy >= yMin && cy <= yMax && !containsVideoSurface(v, 0)
+                            && hasAnyText(v, 0, DRAMA_RECO_TEXTS) && countShortTexts(v, 0, 0) >= 3) {
+                        dramaRecoList.add(v);
+                        return;
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) {
+                collectDramaReco(g.getChildAt(i), depth + 1, w, h, yMin, yMax);
+            }
+        }
+    }
+
+    /** 数一段子树里的「短文本叶子」（≤6 字），用作推荐条 / 标签行的结构证据。 */
+    private static int countShortTexts(View v, int depth, int budget) {
+        if (v == null || depth > MAX_DEPTH || budget > 400) {
+            return 0;
+        }
+        int n = 0;
+        if (v instanceof TextView) {
+            CharSequence t = ((TextView) v).getText();
+            if (t != null && t.toString().trim().length() > 0 && t.toString().trim().length() <= 6) {
+                n++;
+            }
+        }
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) {
+                n += countShortTexts(g.getChildAt(i), depth + 1, budget + n);
+            }
+        }
+        return n;
+    }
     /**
      * v3.2.16：作品列表 / 搜索结果页的结构判定（「等尺寸封面 + 多列」网格）。
      *
