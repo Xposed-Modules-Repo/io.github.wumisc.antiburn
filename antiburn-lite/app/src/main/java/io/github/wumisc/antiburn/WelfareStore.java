@@ -49,6 +49,11 @@ public final class WelfareStore {
     /** v3.4.2：宝贝寻家独立锚点，免得两套数据更新时互相重置轮换。 */
     private static final String KEY_DAY_FIND = "anchor_day_find";
     private static final String KEY_SRC_FIND = "anchor_src_find";
+    /** v3.4.13：轮换游标。存的是「当前已经展示到第几位」，换人 = 游标前进，不再靠日期取模。 */
+    private static final String KEY_POS = "rotate_pos";
+    private static final String KEY_POS_FIND = "rotate_pos_find";
+    /** 游标推进用的锁：同一帧四张卡会先后调进来，必须只推进一次。 */
+    private static final Object ROTATE_LOCK = new Object();
     private static final long DAY_MS = TimeUnit.DAYS.toMillis(1);
     /** v3.2.11：每 24 小时换一对（两张卡各换一位）。 */
     public static final long ROTATE_DAYS = 1;
@@ -346,32 +351,45 @@ public final class WelfareStore {
         if (list.isEmpty()) {
             return 0;
         }
-        // v3.4.10：两类各两张卡，四个槽位 2+2 对半分。
-        // 家寻按每天前进 2 位、寻家也前进 2 位，保证同一天两张不重人，锚点各自独立。
-        boolean find = slot == SLOT_FIND_HOME;
-        long today = nowMs / DAY_MS;
-        android.content.SharedPreferences sp =
-                ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE);
-        String src = sp.getString(find ? KEY_SRC_FIND : KEY_SRC, "");
-        long anchor = sp.getLong(find ? KEY_DAY_FIND : KEY_DAY, -1);
-        if (anchor < 0 || !src.equals(d.updated)) {
-            anchor = today;
-            if (find) {
-                sp.edit().putLong(KEY_DAY_FIND, anchor).putString(KEY_SRC_FIND, d.updated).apply();
-            } else {
-                sp.edit().putLong(KEY_DAY, anchor).putString(KEY_SRC, d.updated).apply();
-            }
-        }
         int size = list.size();
         if (size == 1) {
             return 0;
         }
+
+        // v3.4.13：改成「游标 + 每日前进」，不再用「(今天 - 锚点) × 张数 % 总数」取模。
+        //
+        // 旧算法有两个致命点：
+        //   1) 锚点绑在 d.updated 上 —— 数据每天刷新一次，updated 一变锚点就重置，
+        //      于是每天算出来都是第 0/1 位，用户会反复看到同一个人（「怎么又回到牛乾坤」）；
+        //   2) 就算锚点不重置，取模在列表长度和每次张数不整除时也会提前折返。
+        // 现在只存一个位置：每过 ROTATE_DAYS 天前进 perDay 位，游标跨数据更新保留，
+        // 列表变了就按新长度夹一下，保证「顺着往后走一圈再回头」。
+        boolean find = slot >= SLOT_FIND_HOME;
         int perDay = find ? FIND_CARDS : FAMILY_CARDS;
+        long today = nowMs / DAY_MS;
+        android.content.SharedPreferences sp =
+                ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE);
+        int pos;
+        synchronized (ROTATE_LOCK) {
+            pos = sp.getInt(find ? KEY_POS_FIND : KEY_POS, 0);
+            long day = sp.getLong(find ? KEY_DAY_FIND : KEY_DAY, -1);
+            if (day < 0) {
+                day = today;
+            }
+            long steps = Math.max(0, (today - day) / ROTATE_DAYS);
+            if (steps > 0) {
+                pos = (int) ((pos + steps * perDay) % size);
+                day = day + steps * ROTATE_DAYS;
+            }
+            pos = ((pos % size) + size) % size;
+            sp.edit()
+                    .putInt(find ? KEY_POS_FIND : KEY_POS, pos)
+                    .putLong(find ? KEY_DAY_FIND : KEY_DAY, day)
+                    .apply();
+        }
         // 组内序号：家寻 0、1 号槽位排 0、1；寻家 2、3 号槽位排 0、1
         int offset = find ? (slot - SLOT_FIND_HOME) : slot;
-        long steps = Math.max(0, (today - anchor) / ROTATE_DAYS);
-        int base = (int) ((steps * perDay) % size);
-        return (base + Math.max(0, offset)) % size;
+        return (pos + Math.max(0, offset)) % size;
     }
 
     /** 兼容旧调用：等价于 slot=0。 */
