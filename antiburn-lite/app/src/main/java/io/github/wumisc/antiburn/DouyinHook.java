@@ -5415,10 +5415,13 @@ public final class DouyinHook {
             }
             boolean container = !(v instanceof TextView);
             String what = "target";
-            // S2：红果底部导航（三锚 AND 命中的容器）走矮横条门槛 bottom，且已过 isOwnedElsewhere / tooBigToHide
-            if (container && slot == SLOT_DRAMA && v instanceof ViewGroup
+            // v3.4.11：红果底部导航是功能入口，任何一轮都不许藏。
+            // mergeWithGrace 会把上一轮藏过、这一轮没再收到的 View 并回列表，
+            // 所以这里必须再拦一道：命中三锚就连同子树一起点亮并跳过。
+            if (slot == SLOT_DRAMA && v instanceof ViewGroup
                     && targetTextAll((ViewGroup) v, DRAMA_NAV_KEYS, 3)) {
-                what = "bottom";
+                showDeep(v);
+                continue;
             }
             hideTargeted(v, what, container);
         }
@@ -5701,12 +5704,12 @@ public final class DouyinHook {
         }
         if (v instanceof ViewGroup) {
             ViewGroup g = (ViewGroup) v;
-            // 底部导航：三锚 AND + 矮横条几何（高 <= 30%），且不得命中 bottomList（isOwnedElsewhere 已含）
-            if (targetTextAll(g, DRAMA_NAV_KEYS, 3) && targetGeoOk(g, 1.0f, 0.30f)
-                    && !containsDynamicUi(g, 0) && !containsVideoSurface(g, 0)) {
-                if (!out.contains(g)) {
-                    out.add(g);
-                }
+            // v3.4.11：红果底部导航（首页 / 剧场 / 我的）**不再隐藏**，整棵子树直接跳过。
+            // 真机反馈：遮罩在这条导航上时，用户回不到首页/剧场，等于把 App 的主入口抹了；
+            // 而这条导航是纯文字 + 图标、且每次切页都会重绘，防烧屏收益接近于零。
+            // 之前是把它当候选收进来（三锚 AND + 矮横条），现在改成「认出来就放行」，
+            // 连子节点也不再逐个收 —— 否则容器跳过、叶子又被 targetLeafUp 抓回去。
+            if (targetTextAll(g, DRAMA_NAV_KEYS, 3) && targetGeoOk(g, 1.0f, 0.30f)) {
                 return;
             }
             for (int i = 0; i < g.getChildCount(); i++) {

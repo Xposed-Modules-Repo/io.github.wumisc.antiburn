@@ -89,24 +89,43 @@ export async function onRequestPost(context) {
       )
       .run();
 
-    // 版本挂钩的旧日志清理：本次落库成功后，只保留不低于当前 versionCode 的记录，
-    // 清掉更早版本（以及历史上没带 module_code 的未知版本）。同版本、更新版本保留；
-    // 旧设备回传旧版本号不会反向删掉更新版本的行。module_code 缺失时跳过清理，避免误删。
-    // v3.4.0 修：以前 code 直接来自请求体，一个 POST 带上 code=999999 就能把整表清空。
-    // 现在只接受 0..MAX_CODE 的合理版本号，越界一律不清理。
+    // v3.4.11：旧日志清理不再按「版本号」删。
+    //
+    // 以前是「删掉 module_code < 本次 versionCode 的所有行」，等于谁上传新版本，
+    // 就把其他人的旧版本日志一起清空 —— 实际效果是库里长期只剩最后一次上传。
+    // 现在改成按「时间 + 设备 + 总量」保留，别人的日志不会被一次上传带走：
+    //   1) 超过 30 天的行删除（老日志本来也没有排障价值）；
+    //   2) 同一台设备只留最近 8 条（避免同一人反复上传把别人挤掉）；
+    //   3) 全表最多 200 条，超出按 id 从旧到新删。
+    // 清理失败只记 warning，绝不影响本次日志已入库的事实。
     let purged = 0;
     let purgeWarning = null;
-    if (code != null && code >= 0 && code <= MAX_CODE) {
-      try {
-        const del = await env.DB.prepare(
-          `DELETE FROM logs WHERE module_code IS NULL OR module_code < ?`
-        )
-          .bind(code)
-          .run();
-        purged = del.meta && typeof del.meta.changes === "number" ? del.meta.changes : 0;
-      } catch (purgeErr) {
-        purgeWarning = String(purgeErr && purgeErr.message || purgeErr);
-      }
+    try {
+      const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+      const d1 = await env.DB.prepare(`DELETE FROM logs WHERE ts < ?`).bind(cutoff).run();
+      purged += d1.meta && typeof d1.meta.changes === "number" ? d1.meta.changes : 0;
+
+      const d2 = await env.DB.prepare(
+        `DELETE FROM logs
+           WHERE brand = ? AND model = ? AND device = ?
+             AND id NOT IN (
+               SELECT id FROM (
+                 SELECT id, ROW_NUMBER() OVER (ORDER BY ts DESC, id DESC) AS rn
+                   FROM logs WHERE brand = ? AND model = ? AND device = ?
+               ) WHERE rn <= 8
+             )`
+      )
+        .bind(str(e.brand), str(e.model), str(e.device),
+              str(e.brand), str(e.model), str(e.device))
+        .run();
+      purged += d2.meta && typeof d2.meta.changes === "number" ? d2.meta.changes : 0;
+
+      const d3 = await env.DB.prepare(
+        `DELETE FROM logs WHERE id < (SELECT MAX(id) FROM logs) - 200`
+      ).run();
+      purged += d3.meta && typeof d3.meta.changes === "number" ? d3.meta.changes : 0;
+    } catch (purgeErr) {
+      purgeWarning = String(purgeErr && purgeErr.message || purgeErr);
     }
     return json({ ok: true, purged, purgeWarning });
   } catch (err) {

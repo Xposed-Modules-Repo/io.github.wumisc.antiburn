@@ -1817,8 +1817,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 152
-                    && "3.4.10".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 153
+                    && "3.4.11".equals(nm.group(1));
             check(ok, "T-42b 版本锚点恰为 99 / 3.2（非区间，锁死发布锚点）", "");
         }
         check(hook297raw.contains("SAFE_RESTORE") && hook297raw.contains("DRAMA_PAYWALL_HIDE"),
@@ -1893,8 +1893,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 152
-                    && "3.4.10".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 153
+                    && "3.4.11".equals(nm.group(1));
             // 与 T-42b 断言同源，是发布前的双重防回退锁，不冒充新增不变量（评审建议改标签）。
             check(ok, "T-43c P3 版本锚点与 T-42b 双重锁定（99/3.2）（发布前防回退，非新增不变量）", "");
         }
@@ -1932,8 +1932,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 152
-                    && "3.4.10".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 153
+                    && "3.4.11".equals(nm.group(1));
             check(ok, "T-44c 版本号恰为 99 / 3.2（发布锚点）", "");
         }
 
@@ -1975,8 +1975,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 152
-                    && "3.4.10".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 153
+                    && "3.4.11".equals(nm.group(1));
             check(ok, "T-45c 版本号恰为 99 / 3.2（发布锚点）", "");
         }
 
@@ -2052,8 +2052,8 @@ public class FeatureAuditTest {
             // ⑤ 版本锚点 + 辅助方法只读性
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
-            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 152
-                    && "3.4.10".equals(nm.group(1));
+            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 153
+                    && "3.4.11".equals(nm.group(1));
             String helper = stripComments(slice(dy304raw, "private static boolean hasChildByClass(View v, String target)",
                     "private static int scoreRight(ViewGroup g)"));
             boolean readonly = helper.contains("MAX_DEPTH") && helper.contains("catch (Throwable")
@@ -2097,8 +2097,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 152
-                    && "3.4.10".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 153
+                    && "3.4.11".equals(nm.group(1));
             check(ok, "T-47c 版本号恰为 99 / 3.2（v3.0.13 发布锚点）", "");
         }
 
@@ -2365,7 +2365,7 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ver = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 152 && "3.4.10".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 153 && "3.4.11".equals(nm.group(1));
             check(ver, "T-48-VER 版本锚点 99/3.2（T-42b~T-47c 六处已同步）", "");
         }
 
@@ -2868,6 +2868,39 @@ public class FeatureAuditTest {
                             + "            showDeep(v);\n"
                             + "        }\n",
                     "");
+            // 6) v3.4.11 授权改动：红果底部导航改为「绝不隐藏」（收集与施加两处），
+            //    反向替换回旧写法后再算哈希，既有守卫语义不变。
+            dyNorm = dyNorm.replace(
+                    "            // v3.4.11：红果底部导航（首页 / 剧场 / 我的）**不再隐藏**，整棵子树直接跳过。\n"
+                            + "            // 真机反馈：遮罩在这条导航上时，用户回不到首页/剧场，等于把 App 的主入口抹了；\n"
+                            + "            // 而这条导航是纯文字 + 图标、且每次切页都会重绘，防烧屏收益接近于零。\n"
+                            + "            // 之前是把它当候选收进来（三锚 AND + 矮横条），现在改成「认出来就放行」，\n"
+                            + "            // 连子节点也不再逐个收 —— 否则容器跳过、叶子又被 targetLeafUp 抓回去。\n"
+                            + "            if (targetTextAll(g, DRAMA_NAV_KEYS, 3) && targetGeoOk(g, 1.0f, 0.30f)) {\n"
+                            + "                return;\n"
+                            + "            }",
+                    "            // 底部导航：三锚 AND + 矮横条几何（高 <= 30%），且不得命中 bottomList（isOwnedElsewhere 已含）\n"
+                            + "            if (targetTextAll(g, DRAMA_NAV_KEYS, 3) && targetGeoOk(g, 1.0f, 0.30f)\n"
+                            + "                    && !containsDynamicUi(g, 0) && !containsVideoSurface(g, 0)) {\n"
+                            + "                if (!out.contains(g)) {\n"
+                            + "                    out.add(g);\n"
+                            + "                }\n"
+                            + "                return;\n"
+                            + "            }");
+            dyNorm = dyNorm.replace(
+                    "            // v3.4.11：红果底部导航是功能入口，任何一轮都不许藏。\n"
+                            + "            // mergeWithGrace 会把上一轮藏过、这一轮没再收到的 View 并回列表，\n"
+                            + "            // 所以这里必须再拦一道：命中三锚就连同子树一起点亮并跳过。\n"
+                            + "            if (slot == SLOT_DRAMA && v instanceof ViewGroup\n"
+                            + "                    && targetTextAll((ViewGroup) v, DRAMA_NAV_KEYS, 3)) {\n"
+                            + "                showDeep(v);\n"
+                            + "                continue;\n"
+                            + "            }",
+                    "            // S2：红果底部导航（三锚 AND 命中的容器）走矮横条门槛 bottom，且已过 isOwnedElsewhere / tooBigToHide\n"
+                            + "            if (container && slot == SLOT_DRAMA && v instanceof ViewGroup\n"
+                            + "                    && targetTextAll((ViewGroup) v, DRAMA_NAV_KEYS, 3)) {\n"
+                            + "                what = \"bottom\";\n"
+                            + "            }");
             String dyNormHash = sha256(dyNorm);
             String fetchBody = slice(cfg310, "private static long fetchInterval() {", "/** 屏幕是否亮着。");
             int fetchLines = count(fetchBody, ".+");
@@ -3349,8 +3382,8 @@ public class FeatureAuditTest {
             java.util.regex.Matcher nm313 = java.util.regex.Pattern
                     .compile("versionName\\s+\"([^\"]+)\"").matcher(gradle313);
             boolean ver313 = cm313.find() && nm313.find()
-                    && Integer.parseInt(cm313.group(1)) == 152
-                    && "3.4.10".equals(nm313.group(1));
+                    && Integer.parseInt(cm313.group(1)) == 153
+                    && "3.4.11".equals(nm313.group(1));
             check(ver313, "T-55-A5 版本锚点 99 / 3.2", "");
 
             // A6 · 变异实证：把 INFO 类目改坏，A1 守卫必须失效（证明断言非空转）
@@ -4913,6 +4946,23 @@ public class FeatureAuditTest {
                             && m98.contains("WelfareCard(slot = 2, onOpen = { onOpen(\"welfare-2\") }")
                             && m98.contains("WelfareCard(slot = 3, onOpen = { onOpen(\"welfare-3\") }"),
                     "T-98-A5 首页仍是四张卡铺满（只换分配，不换布局）", "");
+        }
+
+        // ---------- T-99 v3.4.11 红果底部导航绝不隐藏 ----------
+        System.out.println("== T-99 红果导航栏保护 ==");
+        {
+            String dy = read(dir.resolve("DouyinHook.java"));
+            check(dy.contains("v3.4.11：红果底部导航（首页 / 剧场 / 我的）**不再隐藏**"),
+                    "T-99-A1 收集阶段认出三锚就整棵跳过（不再当候选）", "");
+            int navSkip = dy.indexOf("v3.4.11：红果底部导航（首页 / 剧场 / 我的）**不再隐藏**");
+            int seg = navSkip < 0 ? -1 : dy.indexOf("if (targetTextAll(g, DRAMA_NAV_KEYS, 3) && targetGeoOk(g, 1.0f, 0.30f)) {", navSkip);
+            check(seg > navSkip && dy.substring(seg, seg + 120).contains("return;"),
+                    "T-99-A2 该分支只 return，不再 out.add（不会把导航收进候选）", "");
+            check(dy.contains("if (slot == SLOT_DRAMA && v instanceof ViewGroup")
+                            && dy.contains("showDeep(v);") && dy.contains("continue;"),
+                    "T-99-A3 施加阶段再拦一道：旧列表里残留的导航容器一律点亮", "");
+            check(!dy.contains("what = \"bottom\";"),
+                    "T-99-A4 红果导航不再借用 bottom 语义去隐藏", "");
         }
 
         System.out.println();
