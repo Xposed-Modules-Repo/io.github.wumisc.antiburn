@@ -1437,6 +1437,14 @@ public class BurnInMaskService extends AccessibilityService {
             paint.setAntiAlias(false);
             setWillNotDraw(false);
             setVisibility(INVISIBLE);
+            // v3.4.7：遮罩是纯装饰窗口，不该出现在读屏里。
+            // 之前没人声明过它「不重要」，TalkBack 会把这块全屏 View 当成一个空节点，
+            // 手势探索划到状态栏附近时会碰上「未加标签的按钮」之类的空口播，还会把焦点抢走。
+            // 三件事一起做：不进无障碍树、不可聚焦、不可点击。
+            setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
+            setFocusable(false);
+            setClickable(false);
+            setContentDescription(null);
         }
 
         void setRects(OverlayGeometry.Rect top, OverlayGeometry.Rect bottom,

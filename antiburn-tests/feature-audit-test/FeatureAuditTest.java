@@ -1817,8 +1817,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 149
-                    && "3.4.7".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 150
+                    && "3.4.8".equals(nm.group(1));
             check(ok, "T-42b 版本锚点恰为 99 / 3.2（非区间，锁死发布锚点）", "");
         }
         check(hook297raw.contains("SAFE_RESTORE") && hook297raw.contains("DRAMA_PAYWALL_HIDE"),
@@ -1893,8 +1893,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 149
-                    && "3.4.7".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 150
+                    && "3.4.8".equals(nm.group(1));
             // 与 T-42b 断言同源，是发布前的双重防回退锁，不冒充新增不变量（评审建议改标签）。
             check(ok, "T-43c P3 版本锚点与 T-42b 双重锁定（99/3.2）（发布前防回退，非新增不变量）", "");
         }
@@ -1932,8 +1932,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 149
-                    && "3.4.7".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 150
+                    && "3.4.8".equals(nm.group(1));
             check(ok, "T-44c 版本号恰为 99 / 3.2（发布锚点）", "");
         }
 
@@ -1975,8 +1975,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 149
-                    && "3.4.7".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 150
+                    && "3.4.8".equals(nm.group(1));
             check(ok, "T-45c 版本号恰为 99 / 3.2（发布锚点）", "");
         }
 
@@ -2052,8 +2052,8 @@ public class FeatureAuditTest {
             // ⑤ 版本锚点 + 辅助方法只读性
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
-            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 149
-                    && "3.4.7".equals(nm.group(1));
+            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 150
+                    && "3.4.8".equals(nm.group(1));
             String helper = stripComments(slice(dy304raw, "private static boolean hasChildByClass(View v, String target)",
                     "private static int scoreRight(ViewGroup g)"));
             boolean readonly = helper.contains("MAX_DEPTH") && helper.contains("catch (Throwable")
@@ -2097,8 +2097,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 149
-                    && "3.4.7".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 150
+                    && "3.4.8".equals(nm.group(1));
             check(ok, "T-47c 版本号恰为 99 / 3.2（v3.0.13 发布锚点）", "");
         }
 
@@ -2365,7 +2365,7 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ver = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 149 && "3.4.7".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 150 && "3.4.8".equals(nm.group(1));
             check(ver, "T-48-VER 版本锚点 99/3.2（T-42b~T-47c 六处已同步）", "");
         }
 
@@ -3035,7 +3035,8 @@ public class FeatureAuditTest {
                     {"ThhLiveGate.java", "09903e9bb86f1f9f044c04a869df71a9c6e31ea8d8e4746aa7381c0e81226c5f"},
                     // v3.0.16 授权改动：应用内遮盖通道重开（仅 overlay 引擎）
                     // v3.2.16 授权改动：无障碍探针 NDUMP（免 root 采集红点/右侧列/底栏节点），基线重锁
-                    {"BurnInMaskService.java", "45c09609a5dad548b77ee5003d7c7fb692202d942c73e6b7d227cf9e703e9904"},
+                    // v3.4.8 授权改动：遮罩 View 移出无障碍树（IMPORTANT_FOR_ACCESSIBILITY_NO），基线重锁
+                    {"BurnInMaskService.java", "903a5b949f817e75ff208f75e0f56756abaab7f54b0862f545a5039ee43fe1ea"},
                     {"BootReceiver.java", "8383a771e4ce1e3fc9d9fa7da4b6e00f66740a901a3a56ca8041b3c10ba2aeea"},
                     {"VideoApps.java", "a2d2e5d5d3ccd65e6dc2960a2e80d7237ede53230161fdf790f6812327dddea4"},
                     {"VideoAppProbe.java", "339431f7762ed59befe066a22da5a0049ada5c8c88c3452a7c277687967de0b1"},
@@ -3223,7 +3224,7 @@ public class FeatureAuditTest {
             // G8c：无障碍侧三文件零改（哈希=开工前基线，实施者按 sha256sum 实测，待主理人复核）
             String cfgH = sha256(read(dir.resolve("../../../../../res/xml/accessibility_service_config.xml")));
             boolean a11yZero = // v3.2 授权：MASK 日志签名对 fg 去抖（前台插件进程抖动不再每次写盘）
-                    "45c09609a5dad548b77ee5003d7c7fb692202d942c73e6b7d227cf9e703e9904".equals(sha256(bmsRaw))
+                    "903a5b949f817e75ff208f75e0f56756abaab7f54b0862f545a5039ee43fe1ea".equals(sha256(bmsRaw))
                     && "c33f8b30633d0b54c20518104258a8841665e498f7150bc8de67688a8d86381c".equals(sha256(read(dir.resolve("OverlayGeometry.java"))))
                     && "9026c696e17c9f16dff35e1146a59117c81a680342a337ce8cf02dcb6a5488bb".equals(cfgH);
             check(a11yZero, "T-54-G8c 无障碍侧 3 文件哈希==v3.2.2 基线（BMS/config 已授权变更）", "");
@@ -3305,8 +3306,8 @@ public class FeatureAuditTest {
             java.util.regex.Matcher nm313 = java.util.regex.Pattern
                     .compile("versionName\\s+\"([^\"]+)\"").matcher(gradle313);
             boolean ver313 = cm313.find() && nm313.find()
-                    && Integer.parseInt(cm313.group(1)) == 149
-                    && "3.4.7".equals(nm313.group(1));
+                    && Integer.parseInt(cm313.group(1)) == 150
+                    && "3.4.8".equals(nm313.group(1));
             check(ver313, "T-55-A5 版本锚点 99 / 3.2", "");
 
             // A6 · 变异实证：把 INFO 类目改坏，A1 守卫必须失效（证明断言非空转）
@@ -4786,6 +4787,31 @@ public class FeatureAuditTest {
                     "T-95-A4 运行时再显式设一次（防 ROM 起来后按默认刷回白图标）", "");
             check(act.contains("UI_MODE_NIGHT_MASK"),
                     "T-95-A5 图标明暗与 isSystemInDarkTheme 同源（界面深则图标浅）", "");
+        }
+
+        // ---------- T-96 v3.4.8 无障碍收尾：提示可播报 / 遮罩不留节点 / 触摸目标 / 字号 ----------
+        System.out.println("== T-96 无障碍收尾 ==");
+        {
+            String a11y = read(dir.resolve("MainActivity.kt"));
+            String hints = read(dir.resolve("A11yHints.kt"));
+            String maskA11y = read(dir.resolve("BurnInMaskService.java"));
+            check(!a11y.contains("Toast.makeText"),
+                    "T-96-A1 主界面已无 Toast —— 结果一律走应用内提示条（读屏必念）", "");
+            check(hints.contains("liveRegion = LiveRegionMode.Assertive"),
+                    "T-96-A2 提示条声明 assertive liveRegion，出现即播报", "");
+            check(hints.contains("fun attachUi()") && hints.contains("fun detachUi()")
+                            && hints.contains("Toast.makeText"),
+                    "T-96-A3 界面不在前台时退回 Toast（服务/磁贴场景仍有反馈）", "");
+            check(a11y.contains("Hints.show(") && a11y.contains("HintBar("),
+                    "T-96-A4 主界面挂了提示条并把提示改走 Hints", "");
+            check(maskA11y.contains("IMPORTANT_FOR_ACCESSIBILITY_NO") && maskA11y.contains("setFocusable(false)"),
+                    "T-96-A5 遮罩窗口移出无障碍树（不再被手势探索抓到空节点）", "");
+            check(countLiteral(a11y, "heightIn(min = 48.dp)") >= 2,
+                    "T-96-A6 状态概览条与滑条触摸目标均 ≥48dp", "");
+            check(a11y.contains("contentDescription = item.label")
+                            && a11y.contains("maxLines = 1")
+                            && a11y.contains("TextOverflow.Ellipsis"),
+                    "T-96-A7 底部导航一格一个节点 + 200% 字号不撑破布局", "");
         }
 
         System.out.println();

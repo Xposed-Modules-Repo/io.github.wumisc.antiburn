@@ -763,11 +763,7 @@ class MainActivity : ComponentActivity() {
             val pendingToast = meta.getBoolean("cleared_pending", false)
             if (pendingToast) {
                 meta.edit().putBoolean("cleared_pending", false).apply()
-                Toast.makeText(
-                    this,
-                    "v" + BuildConfig.VERSION_NAME + "：配置已保留，旧日志已清空",
-                    Toast.LENGTH_LONG,
-                ).show()
+                Hints.show(this, "v" + BuildConfig.VERSION_NAME + "：配置已保留，旧日志已清空")
             }
             Thread {
                 try { ConfStore.clearLogsIfUpgraded(this) } catch (t: Throwable) { }
@@ -898,7 +894,7 @@ private fun BurnInProtectApp() {
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(intent)
         } catch (t: Throwable) {
-            Toast.makeText(context, "无法打开链接，请检查是否安装了浏览器", Toast.LENGTH_SHORT).show()
+            Hints.show(context, "无法打开链接，请检查是否安装了浏览器")
         }
     }
 
@@ -975,7 +971,7 @@ private fun BurnInProtectApp() {
                 pendingSave = null
                 if (drift.isNotEmpty()) {
                     status = "未完全生效：" + drift.take(3).joinToString("、") + " 已被其它入口改写"
-                    Toast.makeText(context, status, Toast.LENGTH_LONG).show()
+                    Hints.show(context, status)
                     ConfStore.appendAudit(
                         "SAVE-DRIFT want_status=" + target.enableStatus + " disk_status=" + disk.enableStatus
                                 + " keys=" + drift,
@@ -996,7 +992,7 @@ private fun BurnInProtectApp() {
             )
         } else {
             status = "保存失败：" + bad.take(3).joinToString("、") + " 未能落盘，请检查 root 与存储"
-            Toast.makeText(context, status, Toast.LENGTH_LONG).show()
+            Hints.show(context, status)
         }
     }
 
@@ -1023,7 +1019,7 @@ private fun BurnInProtectApp() {
                 val msg = if (ok) "已重启系统界面，状态栏会短暂重绘后按新配置生效"
                 else "重启失败：请确认已授予 root 权限，或手动切换一次开关等待下个周期"
                 status = msg
-                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                Hints.show(context, msg)
             } finally {
                 // v2.5：Activity 销毁 / 重组会取消协程，旧版只在正常返回时复位，
                 // 一旦被取消 restarting 永远是 true，「重启界面」按钮彻底失效。
@@ -1142,7 +1138,7 @@ private fun BurnInProtectApp() {
             }
             status = if (out.isNotBlank()) "日志已就绪 · " + clock()
             else "还没有日志：请先打开「诊断日志」，让模块跑一个周期再导出"
-            Toast.makeText(context, status + "\n" + ConfStore.LOG_DIR, Toast.LENGTH_LONG).show()
+            Hints.show(context, status + "，日志目录 " + ConfStore.LOG_DIR)
         }
     }
 
@@ -1150,7 +1146,7 @@ private fun BurnInProtectApp() {
         scope.launch {
             val msg = withContext(Dispatchers.IO) { LogUploader.uploadBlocking(context) }
             status = msg
-            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+            Hints.show(context, msg)
         }
     }
 
@@ -1215,7 +1211,7 @@ private fun BurnInProtectApp() {
                 }
             }
             status = msg
-            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+            Hints.show(context, msg)
         }
     }
 
@@ -1300,17 +1296,30 @@ private fun BurnInProtectApp() {
                         ) {
                             tabs.forEachIndexed { index, item ->
                                 LiquidBottomTab({ goTab(index) }) {
-                                    Icon(
-                                        imageVector = item.icon,
-                                        contentDescription = item.label,
-                                        tint = UiPalette.ink(dark).copy(alpha = 0.9f),
-                                        modifier = Modifier.size(22.dp),
-                                    )
-                                    Text(
-                                        text = item.label,
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = UiPalette.ink(dark).copy(alpha = 0.9f),
-                                    )
+                                    // v3.4.8：整格合成一个节点，读屏只说一次「首页 / 功能 / 关于」。
+                                    // 图标本来有 contentDescription，文字再报一遍就是一个格子两个节点。
+                                    Column(
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        modifier = Modifier.semantics(mergeDescendants = true) {
+                                            contentDescription = item.label
+                                        },
+                                    ) {
+                                        Icon(
+                                            imageVector = item.icon,
+                                            contentDescription = null,
+                                            tint = UiPalette.ink(dark).copy(alpha = 0.9f),
+                                            modifier = Modifier.size(22.dp),
+                                        )
+                                        // 200% 字号下导航栏高度是库里写死的，文字只会被截不会撑开布局，
+                                        // 所以这里限定一行 + 省略号，语义上仍靠上面整格的 contentDescription 完整播报。
+                                        Text(
+                                            text = item.label,
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = UiPalette.ink(dark).copy(alpha = 0.9f),
+                                            maxLines = 1,
+                                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -1330,6 +1339,15 @@ private fun BurnInProtectApp() {
                     onSelfCheck = { selfCheckList() },
                 )
             }
+
+            // v3.4.7：所有「一句话结果」都从这里出来 —— 读屏一定念得到（liveRegion）。
+            // 首页有底部导航，提示条要抬高 96dp 才不被按在导航栏底下。
+            HintBar(
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(horizontal = 20.dp)
+                    .padding(bottom = if (subPage == null) 96.dp else 24.dp),
+            )
         }
     }
 }
@@ -1488,7 +1506,7 @@ private fun EngineCard(
     var busy by remember { mutableStateOf("") }
 
     fun toast(msg: String) {
-        Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+        Hints.show(context, msg)
     }
 
     // 能力探测要 fork su，必须离开主线程；refreshTick 变化即重探（从设置页返回、授权完成等）
@@ -2017,7 +2035,7 @@ private fun HomeStaleCard(dark: Boolean) {
     var tick by remember { mutableIntStateOf(0) }
 
     fun toast(msg: String) {
-        Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+        Hints.show(context, msg)
     }
 
     LaunchedEffect(tick) {
@@ -2175,7 +2193,7 @@ private fun EngineStyleCard(
     var refreshTick by remember { mutableIntStateOf(0) }
 
     fun toast(msg: String) {
-        Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+        Hints.show(context, msg)
     }
 
     // 能力探测要 fork su，必须离开主线程；refreshTick 变化即重探（切完引擎 / 授权完成 / 重启完系统界面）
@@ -2573,7 +2591,7 @@ private fun HomeAllPage(
                                 applyRecentsVisibility(context)
                                 hideLauncher = false
                                 hideRecents = false
-                                Toast.makeText(context, "桌面入口切换失败，请重试或重启桌面", Toast.LENGTH_SHORT).show()
+                                Hints.show(context, "桌面入口切换失败，请重试或重启桌面")
                                 return@LiquidToggle
                             }
                             AppVisibilityStore.setHideRecents(context, on)
@@ -3080,11 +3098,7 @@ private fun GeneralFeaturePage(
                 val next = !uploadConsent
                 LogUploader.setConsent(context, next)
                 uploadConsent = next
-                Toast.makeText(
-                    context,
-                    if (next) "已同意上传诊断日志" else "已撤回上传授权",
-                    Toast.LENGTH_SHORT,
-                ).show()
+                Hints.show(context, if (next) "已同意上传诊断日志" else "已撤回上传授权")
             },
             contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp),
         ) {
@@ -3095,11 +3109,7 @@ private fun GeneralFeaturePage(
             onClick = {
                 scope.launch {
                     withContext(Dispatchers.IO) { ConfStore.clearLogs() }
-                    Toast.makeText(
-                        context,
-                        "日志已清空，之后只写 v" + BuildConfig.VERSION_NAME,
-                        Toast.LENGTH_SHORT,
-                    ).show()
+                    Hints.show(context, "日志已清空，之后只写 v" + BuildConfig.VERSION_NAME, long = false)
                 }
             },
             contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp),
@@ -3110,11 +3120,10 @@ private fun GeneralFeaturePage(
             onClick = {
                 scope.launch {
                     val ok = withContext(Dispatchers.IO) { ConfStore.resetAll() }
-                    Toast.makeText(
+                    Hints.show(
                         context,
                         if (ok) "已重建默认配置，请重启系统界面" else "重建失败：root 不可用",
-                        Toast.LENGTH_LONG,
-                    ).show()
+                    )
                 }
             },
             contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp),
@@ -3429,6 +3438,7 @@ private fun StatusStrip(
                 role = Role.Button
             }
             .clickable(onClickLabel = "打开功能设置", onClick = onClick)
+            .heightIn(min = 48.dp)
             .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -4238,7 +4248,7 @@ private fun openLsposedManager(context: Context) {
         } catch (ignored: Throwable) {
         }
     }
-    Toast.makeText(context, "没找到 LSPosed 管理器，请从桌面图标手动打开", Toast.LENGTH_LONG).show()
+    Hints.show(context, "没找到 LSPosed 管理器，请从桌面图标手动打开")
 }
 
 /**
@@ -4361,7 +4371,7 @@ private fun FeedbackDialog(dark: Boolean, onDismiss: () -> Unit) {
                                 }
                                 sending = false
                                 if (msg.startsWith("反馈已送达")) {
-                                    Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                    Hints.show(context, msg)
                                     onDismiss()
                                 } else {
                                     hint = msg
