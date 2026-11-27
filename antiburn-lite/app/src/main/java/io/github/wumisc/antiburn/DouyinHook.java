@@ -169,6 +169,16 @@ public final class DouyinHook {
             "人在追", "权力斗争", "打脸反派", "作者声明", "内容由AI生成", "观看完整漫剧"};
     /** 红果底部导航三锚 AND（宪法 §3 唯一例外，已在 changes/ 留批准记录）。 */
     private static final String[] DRAMA_NAV_KEYS = {"首页", "剧场", "我的"};
+    /** v3.4.16：红果播放页底部「选集 · 已完结 · 全 101 集」条，文本以「选集」开头。 */
+    private static final String DRAMA_EPISODE_PREFIX = "选集";
+    /**
+     * v3.4.16：红果的「保护词」—— 任何子树只要含其中一个字，一律不许隐藏。
+     *
+     * <p>真机反馈：模块把「我的预约」那一行连带藏掉之后，下面反而露出一个「删除」按钮，
+     * 用户既看不到自己的预约、又差点误点删除。这类是功能入口，藏它没有防烧屏收益，
+     * 只有误操作风险，所以做成一票否决的白名单。</p>
+     */
+    private static final String[] DRAMA_PROTECT_KEYS = {"预约", "删除"};
     /** v2.6.9：当前页命中直播文本特征。命中则视频 App 整页跳过 App 内区域隐藏，避免误伤弹幕 / 礼物栏。 */
     private static volatile boolean videoLivePage = false;
     /**
@@ -3048,6 +3058,26 @@ public final class DouyinHook {
     }
 
     /**
+     * v3.4.16：幽灵隐藏 —— 只把 alpha 归零，保留 visibility 与触摸链路。
+     *
+     * <p>给「选集」这种纯静态但必须能点的入口用：像素不发光（防烧屏达成），
+     * 手指点下去照样能调出选集面板（功能不丢）。恢复走既有的 showDeep。</p>
+     */
+    private static void hideGhost(View v) {
+        if (v == null || forceShow || isOwnOverlay(v)) {
+            return;
+        }
+        try {
+            if (v.getAlpha() != 0f) {
+                v.setAlpha(0f);
+            }
+            touched.add(v);
+        } catch (Throwable t) {
+            Log.e(TAG, "ghost hide failed", t);
+        }
+    }
+
+    /**
      * v3.0.6 P2/P3 共用的专用隐藏出口：不新增到 safeToHide 的 what 分支，保持通用门槛零改。
      * 只复用三道通用保险：悬浮球保护 + 视频否决 + 面积保险，最后走 transparentDeep（只 INVISIBLE）。
      */
@@ -5354,6 +5384,93 @@ public final class DouyinHook {
      * 每层重跑 isOwnedElsewhere + 单维 50% + 视频否决 + 动态内容否决，任一命中立即停；
      * 只并进「未被任何既有通道认领」的静态小卡，杜绝双重隐藏与越权接管。
      */
+    /**
+     * v3.4.16：红果保护判定 —— 子树含「预约 / 删除」或驮着大封面（≥30% 宽且 ≥15% 高）就放行。
+     * 大封面按占比判，小图标（选集箭头、底部小按钮）不会被这个条件误放。
+     */
+    private static boolean dramaProtected(View v) {
+        return dramaTextProtected(v) || hasBigCover(v, 0);
+    }
+
+    /** 只判文案，用于「整棵跳过」—— 大封面判定不能用在遍历上，否则整页都跳不过去。 */
+    private static boolean dramaTextProtected(View v) {
+        if (v == null) {
+            return false;
+        }
+        StringBuilder sb = new StringBuilder();
+        appendTargetText(v, sb, 0);
+        for (String k : DRAMA_PROTECT_KEYS) {
+            if (sb.indexOf(k) >= 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean hasBigCover(View v, int depth) {
+        if (v == null || depth > 6) {
+            return false;
+        }
+        int w = screenW(v);
+        int h = screenH(v);
+        if (w <= 0 || h <= 0) {
+            return false;
+        }
+        if (v.getClass().getName().contains("ImageView")
+                && v.getWidth() >= w * 0.30f && v.getHeight() >= h * 0.15f) {
+            return true;
+        }
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) {
+                if (hasBigCover(g.getChildAt(i), depth + 1)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** v3.4.16：播放页底部「选集 · 已完结 · 全 101 集」条 —— 通栏 ≥60% 宽、矮 ≤14% 高、贴底 ≥70% 高。 */
+    private static boolean isDramaEpisodeBar(ViewGroup g) {
+        if (g == null) {
+            return false;
+        }
+        int w = screenW(g);
+        int h = screenH(g);
+        if (w <= 0 || h <= 0 || g.getWidth() <= 0 || g.getHeight() <= 0) {
+            return false;
+        }
+        if (g.getWidth() < w * 0.60f || g.getHeight() > h * 0.14f) {
+            return false;
+        }
+        int[] loc = new int[2];
+        g.getLocationOnScreen(loc);
+        if (loc[1] < h * 0.70f) {
+            return false;
+        }
+        return startsWithEpisode(g, 0);
+    }
+
+    private static boolean startsWithEpisode(View v, int depth) {
+        if (v == null || depth > 5) {
+            return false;
+        }
+        if (v instanceof TextView) {
+            String t = normText(((TextView) v).getText());
+            return t.startsWith(DRAMA_EPISODE_PREFIX);
+        }
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) {
+                if (startsWithEpisode(g.getChildAt(i), depth + 1)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     private static View targetLeafUp(View v, int maxUp, float maxW, float maxH) {
         View best = v;
         ViewParent p = v == null ? null : v.getParent();
@@ -5421,6 +5538,18 @@ public final class DouyinHook {
             if (slot == SLOT_DRAMA && v instanceof ViewGroup
                     && targetTextAll((ViewGroup) v, DRAMA_NAV_KEYS, 3)) {
                 showDeep(v);
+                continue;
+            }
+            // v3.4.16：保护词 / 大封面同样在施加阶段再拦一道（旧列表可能还留着它们）
+            if (slot == SLOT_DRAMA && dramaProtected(v)) {
+                showDeep(v);
+                continue;
+            }
+            // v3.4.16：底部「选集」条走「幽灵」——只把 alpha 归零，不 INVISIBLE。
+            // 用户要的是别烧屏，但选集仍是最常用的翻集入口，必须还能点得到。
+            if (slot == SLOT_DRAMA && v instanceof ViewGroup
+                    && isDramaEpisodeBar((ViewGroup) v)) {
+                hideGhost(v);
                 continue;
             }
             hideTargeted(v, what, container);
@@ -5695,6 +5824,10 @@ public final class DouyinHook {
                 if (isProfileListContext(v)) {
                     return;
                 }
+                // v3.4.16：含「预约 / 删除」或驮着大封面的子树，连叶子都不许进候选
+                if (dramaProtected(v)) {
+                    return;
+                }
                 View tgt = targetLeafUp(v, 2, 0.50f, 0.50f);
                 if (tgt != null && !containsDynamicUi(tgt, 0)
                         && !containsVideoSurface(tgt, 0) && !out.contains(tgt)) {
@@ -5711,6 +5844,17 @@ public final class DouyinHook {
             // 连子节点也不再逐个收 —— 否则容器跳过、叶子又被 targetLeafUp 抓回去。
             if (targetTextAll(g, DRAMA_NAV_KEYS, 3) && targetGeoOk(g, 1.0f, 0.30f)) {
                 return;
+            }
+            // v3.4.16：保护词子树整棵跳过（「我的预约」被藏掉后下方冒出的「删除」就是这条路）
+            if (dramaTextProtected(g)) {
+                return;
+            }
+            // v3.4.16：播放页底部「选集 · 已完结 · 全 101 集」条 —— 贴底、矮、通栏、以「选集」开头
+            if (isDramaEpisodeBar(g)) {
+                if (!dramaProtected(g) && !out.contains(g)) {
+                    out.add(g);
+                }
+                return;   // 整条认领，不再下沉把里面的箭头图标也收进来
             }
             for (int i = 0; i < g.getChildCount(); i++) {
                 collectDramaTargets(g.getChildAt(i), out, depth + 1);

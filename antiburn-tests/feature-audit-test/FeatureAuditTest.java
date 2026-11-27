@@ -1817,8 +1817,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 157
-                    && "3.4.15".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 158
+                    && "3.4.16".equals(nm.group(1));
             check(ok, "T-42b 版本锚点恰为 99 / 3.2（非区间，锁死发布锚点）", "");
         }
         check(hook297raw.contains("SAFE_RESTORE") && hook297raw.contains("DRAMA_PAYWALL_HIDE"),
@@ -1893,8 +1893,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 157
-                    && "3.4.15".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 158
+                    && "3.4.16".equals(nm.group(1));
             // 与 T-42b 断言同源，是发布前的双重防回退锁，不冒充新增不变量（评审建议改标签）。
             check(ok, "T-43c P3 版本锚点与 T-42b 双重锁定（99/3.2）（发布前防回退，非新增不变量）", "");
         }
@@ -1932,8 +1932,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 157
-                    && "3.4.15".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 158
+                    && "3.4.16".equals(nm.group(1));
             check(ok, "T-44c 版本号恰为 99 / 3.2（发布锚点）", "");
         }
 
@@ -1975,8 +1975,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 157
-                    && "3.4.15".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 158
+                    && "3.4.16".equals(nm.group(1));
             check(ok, "T-45c 版本号恰为 99 / 3.2（发布锚点）", "");
         }
 
@@ -2052,8 +2052,8 @@ public class FeatureAuditTest {
             // ⑤ 版本锚点 + 辅助方法只读性
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
-            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 157
-                    && "3.4.15".equals(nm.group(1));
+            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 158
+                    && "3.4.16".equals(nm.group(1));
             String helper = stripComments(slice(dy304raw, "private static boolean hasChildByClass(View v, String target)",
                     "private static int scoreRight(ViewGroup g)"));
             boolean readonly = helper.contains("MAX_DEPTH") && helper.contains("catch (Throwable")
@@ -2097,8 +2097,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 157
-                    && "3.4.15".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 158
+                    && "3.4.16".equals(nm.group(1));
             check(ok, "T-47c 版本号恰为 99 / 3.2（v3.0.13 发布锚点）", "");
         }
 
@@ -2365,7 +2365,7 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ver = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 157 && "3.4.15".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 158 && "3.4.16".equals(nm.group(1));
             check(ver, "T-48-VER 版本锚点 99/3.2（T-42b~T-47c 六处已同步）", "");
         }
 
@@ -2504,7 +2504,7 @@ public class FeatureAuditTest {
         {
             // D5 v2.9.4 hideLiveCandidate 与基线逐字一致（design §7.3 附加）
             String hlc = stripComments(slice(dy307,
-                    "private static boolean hideLiveCandidate(View v, String what)", "private static void hideSmallSafe("));
+                    "private static boolean hideLiveCandidate(View v, String what)", "private static void hideGhost(View v)"));
             // v3.0.36 重锁：transparentDeep 新增 touched.add(v) 一行（保底台账）
             check(count(hlc, ".+") == 46
                             && sha256(hlc).equals("6cefc4ca57e8ce6e68f7fbdee84c23703c0566f26ac43088bcceefe3a861a970"),
@@ -2901,6 +2901,63 @@ public class FeatureAuditTest {
                             + "                    && targetTextAll((ViewGroup) v, DRAMA_NAV_KEYS, 3)) {\n"
                             + "                what = \"bottom\";\n"
                             + "            }");
+            // 7) v3.4.16 授权改动：红果选集条规则 + 预约/删除/大封面保护（纯加性）。
+            //    逐段反向剥掉再算哈希，既有守卫语义不变。
+            dyNorm = dyNorm.replace(
+                    "    /** v3.4.16：红果播放页底部「选集", "    /** v3.4.16：红果播放页底部「选集");
+            {
+                int from = dyNorm.indexOf("    /** v3.4.16：红果播放页底部「选集");
+                int to = dyNorm.indexOf("    private static final String[] DRAMA_PROTECT_KEYS = {\"预约\", \"删除\"};");
+                if (from >= 0 && to > from) {
+                    dyNorm = dyNorm.substring(0, from)
+                            + dyNorm.substring(to + "    private static final String[] DRAMA_PROTECT_KEYS = {\"预约\", \"删除\"};".length() + 1);
+                }
+            }
+            dyNorm = dyNorm.replace(
+                    "                // v3.4.16：含「预约 / 删除」或驮着大封面的子树，连叶子都不许进候选\n"
+                            + "                if (dramaProtected(v)) {\n"
+                            + "                    return;\n"
+                            + "                }\n", "");
+            dyNorm = dyNorm.replace(
+                    "            // v3.4.16：保护词子树整棵跳过（「我的预约」被藏掉后下方冒出的「删除」就是这条路）\n"
+                            + "            if (dramaTextProtected(g)) {\n"
+                            + "                return;\n"
+                            + "            }\n"
+                            + "            // v3.4.16：播放页底部「选集 · 已完结 · 全 101 集」条 —— 贴底、矮、通栏、以「选集」开头\n"
+                            + "            if (isDramaEpisodeBar(g)) {\n"
+                            + "                if (!dramaProtected(g) && !out.contains(g)) {\n"
+                            + "                    out.add(g);\n"
+                            + "                }\n"
+                            + "                return;   // 整条认领，不再下沉把里面的箭头图标也收进来\n"
+                            + "            }\n", "");
+            dyNorm = dyNorm.replace(
+                    "            // v3.4.16：保护词 / 大封面同样在施加阶段再拦一道（旧列表可能还留着它们）\n"
+                            + "            if (slot == SLOT_DRAMA && dramaProtected(v)) {\n"
+                            + "                showDeep(v);\n"
+                            + "                continue;\n"
+                            + "            }\n", "");
+            {
+                int from = dyNorm.indexOf("    /**\n     * v3.4.16：红果保护判定");
+                int to = dyNorm.indexOf("    private static View targetLeafUp(");
+                if (from >= 0 && to > from) {
+                    dyNorm = dyNorm.substring(0, from) + dyNorm.substring(to);
+                }
+            }
+            dyNorm = dyNorm.replace(
+                    "            // v3.4.16：底部「选集」条走「幽灵」——只把 alpha 归零，不 INVISIBLE。\n"
+                            + "            // 用户要的是别烧屏，但选集仍是最常用的翻集入口，必须还能点得到。\n"
+                            + "            if (slot == SLOT_DRAMA && v instanceof ViewGroup\n"
+                            + "                    && isDramaEpisodeBar((ViewGroup) v)) {\n"
+                            + "                hideGhost(v);\n"
+                            + "                continue;\n"
+                            + "            }\n", "");
+            {
+                int from = dyNorm.indexOf("    /**\n     * v3.4.16：幽灵隐藏");
+                int to = dyNorm.indexOf("    /**\n     * v3.0.6 P2/P3 共用的专用隐藏出口");
+                if (from >= 0 && to > from) {
+                    dyNorm = dyNorm.substring(0, from) + dyNorm.substring(to);
+                }
+            }
             String dyNormHash = sha256(dyNorm);
             String fetchBody = slice(cfg310, "private static long fetchInterval() {", "/** 屏幕是否亮着。");
             int fetchLines = count(fetchBody, ".+");
@@ -3382,8 +3439,8 @@ public class FeatureAuditTest {
             java.util.regex.Matcher nm313 = java.util.regex.Pattern
                     .compile("versionName\\s+\"([^\"]+)\"").matcher(gradle313);
             boolean ver313 = cm313.find() && nm313.find()
-                    && Integer.parseInt(cm313.group(1)) == 157
-                    && "3.4.15".equals(nm313.group(1));
+                    && Integer.parseInt(cm313.group(1)) == 158
+                    && "3.4.16".equals(nm313.group(1));
             check(ver313, "T-55-A5 版本锚点 99 / 3.2", "");
 
             // A6 · 变异实证：把 INFO 类目改坏，A1 守卫必须失效（证明断言非空转）
@@ -4991,6 +5048,37 @@ public class FeatureAuditTest {
             check(wf.contains("sp.getString(find ? KEY_SRC_FIND : KEY_SRC") == false
                             || wf.contains("src.equals"),
                     "T-101-A4 旧的 updated 比对逻辑已不参与索引计算", "");
+        }
+
+        // ---------- T-102 v3.4.16 红果选集条 + 预约/删除/封面保护 ----------
+        System.out.println("== T-102 红果选集条与保护词 ==");
+        {
+            String dy = read(dir.resolve("DouyinHook.java"));
+            check(dy.contains("DRAMA_EPISODE_PREFIX = \"选集\""),
+                    "T-102-A1 选集条锚点常量在（以「选集」开头）", "");
+            check(dy.contains("isDramaEpisodeBar(g)") && dy.contains("startsWithEpisode(g, 0)")
+                            && dy.contains("loc[1] < h * 0.70f")
+                            && dy.contains("g.getHeight() > h * 0.14f")
+                            && dy.contains("g.getWidth() < w * 0.60f"),
+                    "T-102-A2 选集条判据三合一：贴底≥70% / 矮≤14% / 通栏≥60%", "");
+            check(dy.contains("DRAMA_PROTECT_KEYS = {\"预约\", \"删除\"}"),
+                    "T-102-A3 「我的预约 / 删除」列入保护词", "");
+            check(dy.contains("if (dramaProtected(v)) {") && dy.contains("if (dramaTextProtected(g)) {"),
+                    "T-102-A4 收集阶段：文案保护整棵跳过 + 叶子保护不入选", "");
+            check(dy.contains("if (slot == SLOT_DRAMA && dramaProtected(v)) {")
+                            && dy.contains("showDeep(v);"),
+                    "T-102-A5 施加阶段：保护词/大封面旧列表残留也一律点亮", "");
+            check(dy.contains("hasBigCover(v, 0)")
+                            && dy.contains("v.getWidth() >= w * 0.30f && v.getHeight() >= h * 0.15f"),
+                    "T-102-A6 封面按占比保护（≥30% 宽且 ≥15% 高），小图标不受影响", "");
+            check(dy.contains("// v3.4.16：保护词子树整棵跳过"),
+                    "T-102-A7 保护词跳过的注释锚点在（防回退成旧写法）", "");
+            check(dy.contains("hideGhost(v);") && dy.contains("v.setAlpha(0f);")
+                            && !dy.contains("ghost hide failed") == false,
+                    "T-102-A8 选集条走幽灵隐藏（alpha=0 不 INVISIBLE，仍可点开选集）", "");
+            String vs = read(dir.resolve("VideoSlots.kt"));
+            check(vs.contains("预约/删除/封面不动"),
+                    "T-102-A9 开关文案已同步为「预约/删除/封面不动」", "");
         }
 
         System.out.println();

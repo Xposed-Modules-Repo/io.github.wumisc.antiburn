@@ -67,7 +67,7 @@ internal object VideoSlots {
             { it.enableDramaLt }, { s, v -> s.copy(enableDramaLt = v) }),
         RegionSlot("drama.hint", HINT_TEXT, "右侧竖排「左滑查看详情」，按文案识别",
             { it.enableDramaSwipe }, { s, v -> s.copy(enableDramaSwipe = v) }),
-        RegionSlot("drama.info", INFO_BLOCK, "剧集信息区与底部导航；选集入口不动",
+        RegionSlot("drama.info", INFO_BLOCK, "剧集信息区与底部选集条；预约/删除/封面不动",
             { it.enableDramaInfoHits }, { s, v -> s.copy(enableDramaInfoHits = v) }),
     )
 
