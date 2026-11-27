@@ -3700,7 +3700,8 @@ private fun SubPageHost(
         "welfare" -> "寻人启事"
         "welfare-1" -> "寻人启事"
         "welfare-2" -> "宝贝寻家"
-        "welfare-3" -> "寻人启事"
+        // v3.4.10：首页四张卡对半分 —— 家寻 2 张、寻家 2 张，标题跟着槽位走
+        "welfare-3" -> "宝贝寻家"
         "suggest" -> "功能建议"
         PAGE_HOME_ENGINE -> "运行方式"
         PAGE_HOME_INJECT -> "注入状态"

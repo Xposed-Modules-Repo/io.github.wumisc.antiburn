@@ -41,8 +41,10 @@ public final class WelfareStore {
     private static final String CACHE = "welfare.json";
     private static final String PREF = "welfare_anchor";
     private static final String KEY_DAY = "anchor_day";
-    /** 首页家寻宝贝卡的数量（slot 0 / 1 / 3），每天整体前进这么多位。 */
-    private static final int FAMILY_CARDS = 3;
+    /** v3.4.10：首页家寻宝贝卡的数量（slot 0 / 1），每天整体前进这么多位。 */
+    private static final int FAMILY_CARDS = 2;
+    /** v3.4.10：宝贝寻家卡的数量（slot 2 / 3），两类各两张，不再一边倒。 */
+    private static final int FIND_CARDS = 2;
     private static final String KEY_SRC = "anchor_src";
     /** v3.4.2：宝贝寻家独立锚点，免得两套数据更新时互相重置轮换。 */
     private static final String KEY_DAY_FIND = "anchor_day_find";
@@ -301,7 +303,7 @@ public final class WelfareStore {
         });
     }
 
-    /** v3.4.2：slot 0/1/3 走家寻宝贝（三张卡），slot 2 走宝贝寻家（一张卡）。 */
+    /** v3.4.10：slot 0/1 走家寻宝贝（两张卡），slot 2/3 走宝贝寻家（两张卡）。 */
     public static java.util.List<Kid> itemsFor(Doc d, int slot) {
         if (d == null) {
             return java.util.Collections.emptyList();
@@ -309,7 +311,7 @@ public final class WelfareStore {
         return slot == SLOT_FIND_HOME ? d.itemsFindHome : d.items;
     }
 
-    /** 寻家固定占第 3 张卡；其余槽位都读家寻宝贝。 */
+    /** 从第 3 张卡起（slot 2 / 3）读宝贝寻家；slot 0 / 1 读家寻宝贝。 */
     public static final int SLOT_FIND_HOME = 2;
 
     /** 读本机缓存；不存在 / 解析空返回 null。 */
@@ -342,8 +344,8 @@ public final class WelfareStore {
         if (list.isEmpty()) {
             return 0;
         }
-        // v3.4.2：slot 2 是宝贝寻家。它只有一张卡，每天前进 1 位，锚点单独记。
-        // v3.4.4：家寻加到三张，仍按「每天前进 3 位」保证同一天三张不重人。
+        // v3.4.10：两类各两张卡，四个槽位 2+2 对半分。
+        // 家寻按每天前进 2 位、寻家也前进 2 位，保证同一天两张不重人，锚点各自独立。
         boolean find = slot == SLOT_FIND_HOME;
         long today = nowMs / DAY_MS;
         android.content.SharedPreferences sp =
@@ -362,9 +364,9 @@ public final class WelfareStore {
         if (size == 1) {
             return 0;
         }
-        int perDay = find ? 1 : FAMILY_CARDS;
-        // 家寻三张卡的组内序号：0、1、3 号槽位依次排 0、1、2
-        int offset = find ? 0 : (slot == 3 ? 2 : slot);
+        int perDay = find ? FIND_CARDS : FAMILY_CARDS;
+        // 组内序号：家寻 0、1 号槽位排 0、1；寻家 2、3 号槽位排 0、1
+        int offset = find ? (slot - SLOT_FIND_HOME) : slot;
         long steps = Math.max(0, (today - anchor) / ROTATE_DAYS);
         int base = (int) ((steps * perDay) % size);
         return (base + Math.max(0, offset)) % size;
