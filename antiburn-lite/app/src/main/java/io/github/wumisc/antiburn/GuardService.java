@@ -412,12 +412,11 @@ public final class GuardService extends Service {
                 .setShowWhen(false)
                 .setOnlyAlertOnce(true)
                 .setCategory(Notification.CATEGORY_SERVICE)
-                .setContentIntent(pi)
-                // v3.2.25 保命：常驻通知上挂一键恢复，系统不放行后台启动时也不至于没救
-                .addAction(R.drawable.ic_tile, "立即恢复", HealReceiver.manualPending(ctx))
-                // v3.2.25：ACTION_STOP 分支以前没有任何入口，等于「停止就永不复活」是死代码；
-                // 补上这条 action，用户才有真正的退出口（点了就不再自愈、不排闹钟）
-                .addAction(R.drawable.ic_tile, "停止守护", HealReceiver.stopPending(ctx));
+                .setContentIntent(pi);
+        // v3.4.15：两个按钮都撤了。
+        // 「立即恢复」和「停止守护」在常驻通知上横向占掉一整行：前者要点两下才生效，
+        // 后者与首页总开关、桌面磁贴重复，误触还会关掉自愈。通知本身点一下就是打开
+        // 模块首页 —— 恢复、停止、看状态都在那边一步到位，所以这里不再放任何 action。
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             b.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE);
         }

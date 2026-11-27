@@ -1817,8 +1817,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 156
-                    && "3.4.14".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 157
+                    && "3.4.15".equals(nm.group(1));
             check(ok, "T-42b 版本锚点恰为 99 / 3.2（非区间，锁死发布锚点）", "");
         }
         check(hook297raw.contains("SAFE_RESTORE") && hook297raw.contains("DRAMA_PAYWALL_HIDE"),
@@ -1893,8 +1893,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 156
-                    && "3.4.14".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 157
+                    && "3.4.15".equals(nm.group(1));
             // 与 T-42b 断言同源，是发布前的双重防回退锁，不冒充新增不变量（评审建议改标签）。
             check(ok, "T-43c P3 版本锚点与 T-42b 双重锁定（99/3.2）（发布前防回退，非新增不变量）", "");
         }
@@ -1932,8 +1932,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 156
-                    && "3.4.14".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 157
+                    && "3.4.15".equals(nm.group(1));
             check(ok, "T-44c 版本号恰为 99 / 3.2（发布锚点）", "");
         }
 
@@ -1975,8 +1975,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 156
-                    && "3.4.14".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 157
+                    && "3.4.15".equals(nm.group(1));
             check(ok, "T-45c 版本号恰为 99 / 3.2（发布锚点）", "");
         }
 
@@ -2052,8 +2052,8 @@ public class FeatureAuditTest {
             // ⑤ 版本锚点 + 辅助方法只读性
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
-            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 156
-                    && "3.4.14".equals(nm.group(1));
+            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 157
+                    && "3.4.15".equals(nm.group(1));
             String helper = stripComments(slice(dy304raw, "private static boolean hasChildByClass(View v, String target)",
                     "private static int scoreRight(ViewGroup g)"));
             boolean readonly = helper.contains("MAX_DEPTH") && helper.contains("catch (Throwable")
@@ -2097,8 +2097,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 156
-                    && "3.4.14".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 157
+                    && "3.4.15".equals(nm.group(1));
             check(ok, "T-47c 版本号恰为 99 / 3.2（v3.0.13 发布锚点）", "");
         }
 
@@ -2365,7 +2365,7 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ver = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 156 && "3.4.14".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 157 && "3.4.15".equals(nm.group(1));
             check(ver, "T-48-VER 版本锚点 99/3.2（T-42b~T-47c 六处已同步）", "");
         }
 
@@ -3382,8 +3382,8 @@ public class FeatureAuditTest {
             java.util.regex.Matcher nm313 = java.util.regex.Pattern
                     .compile("versionName\\s+\"([^\"]+)\"").matcher(gradle313);
             boolean ver313 = cm313.find() && nm313.find()
-                    && Integer.parseInt(cm313.group(1)) == 156
-                    && "3.4.14".equals(nm313.group(1));
+                    && Integer.parseInt(cm313.group(1)) == 157
+                    && "3.4.15".equals(nm313.group(1));
             check(ver313, "T-55-A5 版本锚点 99 / 3.2", "");
 
             // A6 · 变异实证：把 INFO 类目改坏，A1 守卫必须失效（证明断言非空转）
@@ -4575,8 +4575,8 @@ public class FeatureAuditTest {
                     "T-88-A9 用户主动「停止」会关掉自愈（否则通知自己回来，等于流氓软件）", "");
             check(gs88.contains("HealReceiver.arm(this)"),
                     "T-88-A10 每次服务起来都重排兜底巡检（天然续命）", "");
-            check(gs88.contains(".addAction(R.drawable.ic_tile, \"立即恢复\", HealReceiver.manualPending(ctx))"),
-                    "T-88-A11 常驻通知挂「立即恢复」按钮（系统不放行后台启动时的手动兜底）", "");
+            check(!gs88.contains("\"立即恢复\"") && !gs88.contains("HealReceiver.manualPending(ctx)"),
+                    "T-88-A11 常驻通知不再挂「立即恢复」按钮（点通知即进首页，恢复在那边做）", "");
             check(gs88.contains("已自愈恢复"),
                     "T-88-A12 自愈后通知如实说明，不假装一直没停", "");
             check(man88.contains("\".HealReceiver\"") && man88.contains("android:exported=\"false\"")
@@ -4589,8 +4589,8 @@ public class FeatureAuditTest {
                     "T-88-A15 系统拒绝后台启动时仍有可见兜底通知（点一下就恢复）", "");
             check(heal.contains("stopPending") && heal.contains("GuardService.ACTION_STOP"),
                     "T-88-A19 「停止守护」入口已构造（ACTION_STOP 不再是走不到的死代码）", "");
-            check(gs88.contains("\"停止守护\"") && gs88.contains("HealReceiver.stopPending(ctx)"),
-                    "T-88-A20 常驻通知真的挂了停止按钮（用户有明确退出口）", "");
+            check(!gs88.contains("\"停止守护\"") && !gs88.contains("HealReceiver.stopPending(ctx)"),
+                    "T-88-A20 常驻通知不再挂「停止守护」（与总开关/磁贴重复，误触会关自愈）", "");
             check(heal.contains("cancelBlocked") && gs88.contains("HealReceiver.cancelBlocked(this)"),
                     "T-88-A21 服务起来后撤掉「已停止」兜底通知（两条通知不自相矛盾）", "");
             // v3.2.25 追加：用户点「停止」后闹钟可能已经排在系统侧，仅置内存标志不够，
