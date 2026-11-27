@@ -1817,8 +1817,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 148
-                    && "3.4.6".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 149
+                    && "3.4.7".equals(nm.group(1));
             check(ok, "T-42b 版本锚点恰为 99 / 3.2（非区间，锁死发布锚点）", "");
         }
         check(hook297raw.contains("SAFE_RESTORE") && hook297raw.contains("DRAMA_PAYWALL_HIDE"),
@@ -1893,8 +1893,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 148
-                    && "3.4.6".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 149
+                    && "3.4.7".equals(nm.group(1));
             // 与 T-42b 断言同源，是发布前的双重防回退锁，不冒充新增不变量（评审建议改标签）。
             check(ok, "T-43c P3 版本锚点与 T-42b 双重锁定（99/3.2）（发布前防回退，非新增不变量）", "");
         }
@@ -1932,8 +1932,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 148
-                    && "3.4.6".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 149
+                    && "3.4.7".equals(nm.group(1));
             check(ok, "T-44c 版本号恰为 99 / 3.2（发布锚点）", "");
         }
 
@@ -1975,8 +1975,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 148
-                    && "3.4.6".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 149
+                    && "3.4.7".equals(nm.group(1));
             check(ok, "T-45c 版本号恰为 99 / 3.2（发布锚点）", "");
         }
 
@@ -2052,8 +2052,8 @@ public class FeatureAuditTest {
             // ⑤ 版本锚点 + 辅助方法只读性
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
-            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 148
-                    && "3.4.6".equals(nm.group(1));
+            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 149
+                    && "3.4.7".equals(nm.group(1));
             String helper = stripComments(slice(dy304raw, "private static boolean hasChildByClass(View v, String target)",
                     "private static int scoreRight(ViewGroup g)"));
             boolean readonly = helper.contains("MAX_DEPTH") && helper.contains("catch (Throwable")
@@ -2097,8 +2097,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 148
-                    && "3.4.6".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 149
+                    && "3.4.7".equals(nm.group(1));
             check(ok, "T-47c 版本号恰为 99 / 3.2（v3.0.13 发布锚点）", "");
         }
 
@@ -2365,7 +2365,7 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ver = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 148 && "3.4.6".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 149 && "3.4.7".equals(nm.group(1));
             check(ver, "T-48-VER 版本锚点 99/3.2（T-42b~T-47c 六处已同步）", "");
         }
 
@@ -3305,8 +3305,8 @@ public class FeatureAuditTest {
             java.util.regex.Matcher nm313 = java.util.regex.Pattern
                     .compile("versionName\\s+\"([^\"]+)\"").matcher(gradle313);
             boolean ver313 = cm313.find() && nm313.find()
-                    && Integer.parseInt(cm313.group(1)) == 148
-                    && "3.4.6".equals(nm313.group(1));
+                    && Integer.parseInt(cm313.group(1)) == 149
+                    && "3.4.7".equals(nm313.group(1));
             check(ver313, "T-55-A5 版本锚点 99 / 3.2", "");
 
             // A6 · 变异实证：把 INFO 类目改坏，A1 守卫必须失效（证明断言非空转）
@@ -4765,6 +4765,27 @@ public class FeatureAuditTest {
                     "T-94-B6 开源致谢一条一个节点（名字 + 说明 + 链接一次读完）", "");
             check(a11y.contains("contentDescription = fields.joinToString(\"，\")"),
                     "T-94-B7 寻亲详情六个字段合成一段播报", "");
+        }
+
+        // ---------- T-95 v3.4.7 系统栏图标明暗 ----------
+        System.out.println("== T-95 状态栏 / 导航栏图标对比度 ==");
+        {
+            String light = read(dir.resolve("../../../../../res/values/themes.xml"));
+            String night = read(dir.resolve("../../../../../res/values-night/themes.xml"));
+            String act = read(dir.resolve("MainActivity.kt"));
+            check(light.contains("android:windowLightStatusBar\">true"),
+                    "T-95-A1 浅色主题声明深色状态栏图标（此前白底白字等于看不见）", "");
+            check(light.contains("android:windowLightNavigationBar\">true"),
+                    "T-95-A2 浅色主题声明深色导航栏图标", "");
+            check(night.contains("android:windowLightStatusBar\">false")
+                            && night.contains("android:windowLightNavigationBar\">false"),
+                    "T-95-A3 深色主题两个都关掉（保持浅色图标）", "");
+            check(act.contains("setSystemBarsAppearance(")
+                            && act.contains("APPEARANCE_LIGHT_STATUS_BARS")
+                            && act.contains("APPEARANCE_LIGHT_NAVIGATION_BARS"),
+                    "T-95-A4 运行时再显式设一次（防 ROM 起来后按默认刷回白图标）", "");
+            check(act.contains("UI_MODE_NIGHT_MASK"),
+                    "T-95-A5 图标明暗与 isSystemInDarkTheme 同源（界面深则图标浅）", "");
         }
 
         System.out.println();

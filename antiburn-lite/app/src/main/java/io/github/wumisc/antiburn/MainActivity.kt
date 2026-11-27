@@ -734,6 +734,24 @@ class MainActivity : ComponentActivity() {
     /** 由 Compose 侧注入：把 700ms 防抖窗口里还没写完的改动立刻落盘。 */
     internal var flushPending: (() -> Unit)? = null
 
+    /**
+     * v3.4.7：系统栏图标明暗。
+     *
+     * <p>只在主题里写 windowLightStatusBar 不够稳：这个模块自己就是被 Hook 的对象之一，
+     * 个别 ROM 会在 Activity 可见后按系统默认刷一遍图标色，结果浅色页面上仍是白图标。
+     * 这里按 dark 显式设 APPEARANCE_LIGHT_STATUS_BARS / LIGHT_NAVIGATION_BARS，
+     * 与 Compose 用的 isSystemInDarkTheme() 同一个判定源，不会出现「界面深、图标也深」。</p>
+     */
+    private fun applySystemBarAppearance(dark: Boolean) {
+        try {
+            val ctl = window.insetsController ?: return
+            val light = android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
+                    android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+            ctl.setSystemBarsAppearance(if (dark) 0 else light, light)
+        } catch (ignored: Throwable) {
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         ConfStore.init(this)
@@ -756,6 +774,14 @@ class MainActivity : ComponentActivity() {
             }.start()
         }
         setContent { BurnInProtectApp() }
+        // v3.4.7：状态栏 / 导航栏图标明暗跟主题走。主题属性只能管启动那一帧，
+        // 部分 ROM（含 HyperOS）在 Activity 起来后会重新按系统默认刷一遍，
+        // 所以这里再显式设一次，保证「浅色界面 = 深色图标」。
+        applySystemBarAppearance(
+            (resources.configuration.uiMode and
+                    android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+                    android.content.res.Configuration.UI_MODE_NIGHT_YES
+        )
         // v3.0.11 P2：冷启动时按 prefs 真值对本任务栈幂等生效（onResume 亦会再校正一次）。
         applyRecentsVisibility(this)
         // v3.0.24：常驻运行通知。在用户可见时启动前台服务才不受后台启动限制，

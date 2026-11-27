@@ -6,6 +6,11 @@
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <!-- windowBackground 用浅色而非纯黑：避免根布局在 Compose 接管前闪黑 / 背景变黑 -->
         <item name="android:windowBackground">#F2F3F5</item>
+        <!-- v3.4.7：浅底必须配深色状态栏图标。原来只设了透明状态栏却没声明 windowLightStatusBar，
+             系统按「深底」假设继续画白色图标 —— 白底白字，时间和图标等于看不见。
+             导航栏同理（手势条两侧的图标）。深色主题由 values-night 覆盖为 false。 -->
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
     </style>
 
     <!-- 白名单选择页：居中小窗（宽度 90% 屏宽、高度贴合内容） -->
