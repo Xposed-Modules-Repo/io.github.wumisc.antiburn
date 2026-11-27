@@ -308,7 +308,9 @@ public final class WelfareStore {
         if (d == null) {
             return java.util.Collections.emptyList();
         }
-        return slot == SLOT_FIND_HOME ? d.itemsFindHome : d.items;
+        // v3.4.12：判据必须是「>= 第 3 张卡」，不是「== 第 3 张」。
+        // 旧写法 slot 3 落回家寻列表，首页永远是 3 张家寻 + 1 张寻家。
+        return slot >= SLOT_FIND_HOME ? d.itemsFindHome : d.items;
     }
 
     /** 从第 3 张卡起（slot 2 / 3）读宝贝寻家；slot 0 / 1 读家寻宝贝。 */

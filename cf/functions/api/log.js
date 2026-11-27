@@ -44,6 +44,9 @@ export async function onRequestPost(context) {
   }
 
   const e = body.env && typeof body.env === "object" ? body.env : {};
+  // v3.4.12：来源 IP 参与留存分组（厂商 + 机型 + IP 只留最近 3 条）。
+  // 优先 CF-Connecting-IP（Cloudflare 保证是真实客户端地址），再退 X-Forwarded-For 首段。
+  const ip = clientIp(request);
   const log = String(body.log || "").slice(-MAX_LOG);
   const ts = clampTs(Number(body.ts) || Date.now());
   const code = num(e.moduleCode);
@@ -78,25 +81,26 @@ export async function onRequestPost(context) {
     await env.DB.prepare(
       `INSERT INTO logs
         (ts, model, brand, manufacturer, device, product, release, sdk,
-         module, module_code, abi, log)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         module, module_code, abi, ip, log)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
       .bind(
         ts,
         str(e.model), str(e.brand), str(e.manufacturer), str(e.device),
         str(e.product), str(e.release), num(e.sdk),
-        str(e.module), code, str(e.abi), log
+        str(e.module), code, str(e.abi), ip, log
       )
       .run();
 
-    // v3.4.11：旧日志清理不再按「版本号」删。
+    // v3.4.12：留存口径换成「厂商 + 机型 + 来源 IP，各留最近 3 条」，彻底不看版本号。
     //
-    // 以前是「删掉 module_code < 本次 versionCode 的所有行」，等于谁上传新版本，
-    // 就把其他人的旧版本日志一起清空 —— 实际效果是库里长期只剩最后一次上传。
-    // 现在改成按「时间 + 设备 + 总量」保留，别人的日志不会被一次上传带走：
-    //   1) 超过 30 天的行删除（老日志本来也没有排障价值）；
-    //   2) 同一台设备只留最近 8 条（避免同一人反复上传把别人挤掉）；
-    //   3) 全表最多 200 条，超出按 id 从旧到新删。
+    // 演进过程：v3.2.39 按 versionCode 删（开发者版本永远最新，一上传就把别人清空）；
+    // v3.4.11 改成「同设备留 8 条」，但同一台设备换了网络、或用同一型号的两个人撞车时
+    // 仍会互相挤掉。现在把来源 IP 并进分组键，一台机器一个出口 IP 一个槽位，
+    // 每次上传只滚动自己那 3 条，别人的一条不动：
+    //   1) 超过 30 天的行删除（老日志没有排障价值，也防无限膨胀）；
+    //   2) 每个 (brand, model, ip) 组只留最近 3 条（ts 倒序，同 ts 按 id）；
+    //   3) 全表硬上限 1000 条，防伪造 IP 刷库把免费额度吃光（正常用不到）。
     // 清理失败只记 warning，绝不影响本次日志已入库的事实。
     let purged = 0;
     let purgeWarning = null;
@@ -105,23 +109,24 @@ export async function onRequestPost(context) {
       const d1 = await env.DB.prepare(`DELETE FROM logs WHERE ts < ?`).bind(cutoff).run();
       purged += d1.meta && typeof d1.meta.changes === "number" ? d1.meta.changes : 0;
 
+      // 一条语句把**所有**分组都修到 3 条：老库里按 8 条留下的富余也会被顺手收掉。
       const d2 = await env.DB.prepare(
         `DELETE FROM logs
-           WHERE brand = ? AND model = ? AND device = ?
-             AND id NOT IN (
-               SELECT id FROM (
-                 SELECT id, ROW_NUMBER() OVER (ORDER BY ts DESC, id DESC) AS rn
-                   FROM logs WHERE brand = ? AND model = ? AND device = ?
-               ) WHERE rn <= 8
-             )`
-      )
-        .bind(str(e.brand), str(e.model), str(e.device),
-              str(e.brand), str(e.model), str(e.device))
-        .run();
+           WHERE id IN (
+             SELECT id FROM (
+               SELECT id,
+                      ROW_NUMBER() OVER (
+                        PARTITION BY COALESCE(brand, '?'), COALESCE(model, '?'), COALESCE(ip, '?')
+                        ORDER BY ts DESC, id DESC
+                      ) AS rn
+                 FROM logs
+             ) WHERE rn > 3
+           )`
+      ).run();
       purged += d2.meta && typeof d2.meta.changes === "number" ? d2.meta.changes : 0;
 
       const d3 = await env.DB.prepare(
-        `DELETE FROM logs WHERE id < (SELECT MAX(id) FROM logs) - 200`
+        `DELETE FROM logs WHERE id < (SELECT MAX(id) FROM logs) - 1000`
       ).run();
       purged += d3.meta && typeof d3.meta.changes === "number" ? d3.meta.changes : 0;
     } catch (purgeErr) {
@@ -142,6 +147,23 @@ export async function onRequestOptions() {
       "Access-Control-Allow-Headers": "Content-Type",
     },
   });
+}
+
+/** 客户端 IP：Cloudflare 的 CF-Connecting-IP 最可信；拿不到再退 XFF 首段，都不行就记 "?"。 */
+function clientIp(request) {
+  const h = request.headers;
+  const cf = h.get("cf-connecting-ip");
+  if (cf && cf.trim()) {
+    return cf.trim().slice(0, 64);
+  }
+  const xff = h.get("x-forwarded-for");
+  if (xff) {
+    const first = xff.split(",")[0].trim();
+    if (first) {
+      return first.slice(0, 64);
+    }
+  }
+  return "?";
 }
 
 function str(v) {

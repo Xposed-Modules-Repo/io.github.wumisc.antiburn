@@ -14,8 +14,10 @@ CREATE TABLE IF NOT EXISTS logs (
     module       TEXT,
     module_code  INTEGER,
     abi          TEXT,
+    ip           TEXT,
     log          TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_logs_ts ON logs (ts);
 CREATE INDEX IF NOT EXISTS idx_logs_code ON logs (module_code);
+CREATE INDEX IF NOT EXISTS idx_logs_keep ON logs (brand, model, ip, ts);
