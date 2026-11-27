@@ -2748,6 +2748,11 @@ public final class DouyinHook {
             if (isKuaishou && rightList.isEmpty()) {
                 hideKsLabelActions(lastRoot);
             }
+            // v3.4.17：精选页容器藏了、按钮本体还在 —— 按 resource-id 把这一列补掉。
+            // 用幽灵隐藏（alpha=0）而不是 INVISIBLE：关注/点赞点得动，只是不再发光。
+            if (isKuaishou) {
+                hideKsRightById(lastRoot);
+            }
         } else {
             for (View v : rightList) {
                 showDeep(v);
@@ -4123,9 +4128,22 @@ public final class DouyinHook {
     /** 三条新规则的日志去抖：只有数量变化才写一行，避免每秒刷屏。 */
     private static int lastProfileBottomN = -1;
     private static int lastKsLabelN = -1;
+    /** v3.4.17：按 id 补遮时的命中数，用于「数量变化才写日志」的去抖。 */
+    private static int lastKsIdN = 0;
     private static int lastDramaRecoN = -1;
 
     /** 快手互动按钮的朗读/显示文案（精确短文本才认，避免命中视频文案）。 */
+    /**
+     * v3.4.17：快手右侧互动列的 resource-id 精确名单。
+     *
+     * <p>精选页的结构和刷视频页不一样：四个按钮的外层容器会被 rightList 收走并透明化，
+     * 但按钮本体（关注 / 点赞 / 评论 / 收藏 / 转发）以及叠在上面的计数文字是独立节点，
+     * 容器变透明它们照样发光 —— 真机看到的就是「右边还剩一排按钮」。</p>
+     */
+    private static final String[] KS_RIGHT_IDS = {"slide_play_right_follow",
+            "like_button", "comment_button", "collect_button", "forward_button",
+            "like_count_view", "comment_count_view", "comment_count_view2", "forward_count",
+            "collect_count", "like_count", "comment_count"};
     private static final String[] KS_ACTION_TEXTS = {"点赞", "赞", "评论", "分享", "收藏", "喜欢"};
     /** 红果推荐栏里必然出现的标签词。 */
     private static final String[] DRAMA_RECO_TEXTS = {"推荐", "猜你喜欢", "热播", "为你推荐",
@@ -4198,6 +4216,75 @@ public final class DouyinHook {
      * 这里按「右边缘 28% 屏宽、矮小叶子、文案是动作词」收集，凑到 3 个才动手；
      * 不足 3 个一律不藏，避免把作者名、话题标签这类右侧文字误当按钮。</p>
      */
+    /** v3.4.17：快手右侧互动列按 id 补遮（与「右侧按钮列」同一个开关）。 */
+    private static void hideKsRightById(View root) {
+        if (root == null || forceShow || !root.isAttachedToWindow()
+                || !Config.enableRightActions) {
+            return;
+        }
+        int w = screenW(root);
+        int h = screenH(root);
+        if (w <= 0 || h <= 0) {
+            return;
+        }
+        java.util.List<View> hits = new ArrayList<>();
+        collectKsRightById(root, hits, 0, w, h);
+        if (hits.isEmpty()) {
+            if (lastKsIdN != 0) {
+                lastKsIdN = 0;
+                Log.i(TAG, "KS-ID x0");
+            }
+            return;
+        }
+        for (View v : hits) {
+            hideGhost(v);
+        }
+        if (hits.size() != lastKsIdN) {
+            lastKsIdN = hits.size();
+            Log.i(TAG, "KS-ID x" + hits.size());
+        }
+    }
+
+    private static void collectKsRightById(View v, java.util.List<View> out, int depth, int w, int h) {
+        if (v == null || depth > MAX_DEPTH || out.size() >= 16) {
+            return;
+        }
+        if (isOwnOverlay(v)) {
+            return;
+        }
+        boolean hit = false;
+        try {
+            String n = resName(v);
+            for (String k : KS_RIGHT_IDS) {
+                if (k.equals(n)) {
+                    hit = true;
+                    break;
+                }
+            }
+            if (hit && v.getWidth() > 0 && v.getHeight() > 0
+                    && v.getWidth() < w * 0.40f && v.getHeight() < h * 0.20f
+                    && !containsVideoSurface(v, 0)) {
+                int[] l = loc(v);
+                if (l != null && l[0] + v.getWidth() / 2 > w * 0.60f) {
+                    out.add(v);
+                } else {
+                    hit = false;
+                }
+            } else {
+                hit = false;
+            }
+        } catch (Throwable ignored) {
+            hit = false;
+        }
+        if (hit || !(v instanceof ViewGroup)) {
+            return;
+        }
+        ViewGroup g = (ViewGroup) v;
+        for (int i = 0; i < g.getChildCount(); i++) {
+            collectKsRightById(g.getChildAt(i), out, depth + 1, w, h);
+        }
+    }
+
     private static void hideKsLabelActions(View root) {
         ksLabelActionList.clear();
         if (root == null || !root.isAttachedToWindow() || forceShow) {

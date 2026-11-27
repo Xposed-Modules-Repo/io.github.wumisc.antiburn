@@ -1817,8 +1817,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 158
-                    && "3.4.16".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 159
+                    && "3.4.17".equals(nm.group(1));
             check(ok, "T-42b 版本锚点恰为 99 / 3.2（非区间，锁死发布锚点）", "");
         }
         check(hook297raw.contains("SAFE_RESTORE") && hook297raw.contains("DRAMA_PAYWALL_HIDE"),
@@ -1893,8 +1893,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 158
-                    && "3.4.16".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 159
+                    && "3.4.17".equals(nm.group(1));
             // 与 T-42b 断言同源，是发布前的双重防回退锁，不冒充新增不变量（评审建议改标签）。
             check(ok, "T-43c P3 版本锚点与 T-42b 双重锁定（99/3.2）（发布前防回退，非新增不变量）", "");
         }
@@ -1932,8 +1932,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 158
-                    && "3.4.16".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 159
+                    && "3.4.17".equals(nm.group(1));
             check(ok, "T-44c 版本号恰为 99 / 3.2（发布锚点）", "");
         }
 
@@ -1975,8 +1975,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 158
-                    && "3.4.16".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 159
+                    && "3.4.17".equals(nm.group(1));
             check(ok, "T-45c 版本号恰为 99 / 3.2（发布锚点）", "");
         }
 
@@ -2052,8 +2052,8 @@ public class FeatureAuditTest {
             // ⑤ 版本锚点 + 辅助方法只读性
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
-            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 158
-                    && "3.4.16".equals(nm.group(1));
+            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 159
+                    && "3.4.17".equals(nm.group(1));
             String helper = stripComments(slice(dy304raw, "private static boolean hasChildByClass(View v, String target)",
                     "private static int scoreRight(ViewGroup g)"));
             boolean readonly = helper.contains("MAX_DEPTH") && helper.contains("catch (Throwable")
@@ -2097,8 +2097,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 158
-                    && "3.4.16".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 159
+                    && "3.4.17".equals(nm.group(1));
             check(ok, "T-47c 版本号恰为 99 / 3.2（v3.0.13 发布锚点）", "");
         }
 
@@ -2365,7 +2365,7 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ver = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 158 && "3.4.16".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 159 && "3.4.17".equals(nm.group(1));
             check(ver, "T-48-VER 版本锚点 99/3.2（T-42b~T-47c 六处已同步）", "");
         }
 
@@ -2958,6 +2958,29 @@ public class FeatureAuditTest {
                     dyNorm = dyNorm.substring(0, from) + dyNorm.substring(to);
                 }
             }
+            {
+                int from = dyNorm.indexOf("    /**\n     * v3.4.17：快手右侧互动列的 resource-id 精确名单。");
+                int to = dyNorm.indexOf("    private static final String[] KS_ACTION_TEXTS");
+                if (from >= 0 && to > from) {
+                    dyNorm = dyNorm.substring(0, from) + dyNorm.substring(to);
+                }
+            }
+            dyNorm = dyNorm.replace(
+                    "            // v3.4.17：精选页容器藏了、按钮本体还在 —— 按 resource-id 把这一列补掉。\n"
+                            + "            // 用幽灵隐藏（alpha=0）而不是 INVISIBLE：关注/点赞点得动，只是不再发光。\n"
+                            + "            if (isKuaishou) {\n"
+                            + "                hideKsRightById(lastRoot);\n"
+                            + "            }\n", "");
+            {
+                int from = dyNorm.indexOf("    /** v3.4.17：快手右侧互动列按 id 补遮");
+                int to = dyNorm.indexOf("    private static void hideKsLabelActions(View root) {");
+                if (from >= 0 && to > from) {
+                    dyNorm = dyNorm.substring(0, from) + dyNorm.substring(to);
+                }
+            }
+            dyNorm = dyNorm.replace(
+                    "    /** v3.4.17：按 id 补遮时的命中数，用于「数量变化才写日志」的去抖。 */\n"
+                            + "    private static int lastKsIdN = 0;\n", "");
             String dyNormHash = sha256(dyNorm);
             String fetchBody = slice(cfg310, "private static long fetchInterval() {", "/** 屏幕是否亮着。");
             int fetchLines = count(fetchBody, ".+");
@@ -3439,8 +3462,8 @@ public class FeatureAuditTest {
             java.util.regex.Matcher nm313 = java.util.regex.Pattern
                     .compile("versionName\\s+\"([^\"]+)\"").matcher(gradle313);
             boolean ver313 = cm313.find() && nm313.find()
-                    && Integer.parseInt(cm313.group(1)) == 158
-                    && "3.4.16".equals(nm313.group(1));
+                    && Integer.parseInt(cm313.group(1)) == 159
+                    && "3.4.17".equals(nm313.group(1));
             check(ver313, "T-55-A5 版本锚点 99 / 3.2", "");
 
             // A6 · 变异实证：把 INFO 类目改坏，A1 守卫必须失效（证明断言非空转）
@@ -5079,6 +5102,27 @@ public class FeatureAuditTest {
             String vs = read(dir.resolve("VideoSlots.kt"));
             check(vs.contains("预约/删除/封面不动"),
                     "T-102-A9 开关文案已同步为「预约/删除/封面不动」", "");
+        }
+
+        // ---------- T-103 v3.4.17 快手精选页按 id 补遮 ----------
+        System.out.println("== T-103 快手右侧 id 补遮 ==");
+        {
+            String dy = read(dir.resolve("DouyinHook.java"));
+            check(dy.contains("KS_RIGHT_IDS") && dy.contains("\"slide_play_right_follow\"")
+                            && dy.contains("\"collect_count\""),
+                    "T-103-A1 关注/点赞/评论/收藏/转发 + 计数文字的 id 名单齐", "");
+            check(dy.contains("private static void hideKsRightById(View root)")
+                            && dy.contains("collectKsRightById(root, hits, 0, w, h)"),
+                    "T-103-A2 补遮入口与收集器都在", "");
+            check(dy.contains("if (isKuaishou) {") && dy.contains("hideKsRightById(lastRoot);"),
+                    "T-103-A3 挂进快手右侧列分支（不再只在 rightList 为空时兜底）", "");
+            check(dy.contains("v.getWidth() < w * 0.40f && v.getHeight() < h * 0.20f")
+                            && dy.contains("l[0] + v.getWidth() / 2 > w * 0.60f"),
+                    "T-103-A4 仍然限域：右侧 40% 带内、高度 <20% 屏高，不吃整页", "");
+            check(dy.contains("hideGhost(v);") && dy.contains("KS-ID x"),
+                    "T-103-A5 走幽灵隐藏（按钮仍可点）+ 数量变化才写日志", "");
+            check(dy.contains("|| !Config.enableRightActions)"),
+                    "T-103-A6 与「右侧按钮列」同一个开关，关掉即恢复", "");
         }
 
         System.out.println();
