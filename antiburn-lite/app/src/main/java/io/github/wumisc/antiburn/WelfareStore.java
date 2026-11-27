@@ -41,6 +41,8 @@ public final class WelfareStore {
     private static final String CACHE = "welfare.json";
     private static final String PREF = "welfare_anchor";
     private static final String KEY_DAY = "anchor_day";
+    /** 首页家寻宝贝卡的数量（slot 0 / 1 / 3），每天整体前进这么多位。 */
+    private static final int FAMILY_CARDS = 3;
     private static final String KEY_SRC = "anchor_src";
     /** v3.4.2：宝贝寻家独立锚点，免得两套数据更新时互相重置轮换。 */
     private static final String KEY_DAY_FIND = "anchor_day_find";
@@ -299,13 +301,16 @@ public final class WelfareStore {
         });
     }
 
-    /** v3.4.2：slot 0/1 走家寻宝贝，slot 2 走宝贝寻家。 */
+    /** v3.4.2：slot 0/1/3 走家寻宝贝（三张卡），slot 2 走宝贝寻家（一张卡）。 */
     public static java.util.List<Kid> itemsFor(Doc d, int slot) {
         if (d == null) {
             return java.util.Collections.emptyList();
         }
-        return slot >= 2 ? d.itemsFindHome : d.items;
+        return slot == SLOT_FIND_HOME ? d.itemsFindHome : d.items;
     }
+
+    /** 寻家固定占第 3 张卡；其余槽位都读家寻宝贝。 */
+    public static final int SLOT_FIND_HOME = 2;
 
     /** 读本机缓存；不存在 / 解析空返回 null。 */
     private static Doc readCache(Context ctx) {
@@ -337,8 +342,9 @@ public final class WelfareStore {
         if (list.isEmpty()) {
             return 0;
         }
-        // v3.4.2：slot>=2 是宝贝寻家。它只有一张卡，每天前进 1 位，锚点单独记。
-        boolean find = slot >= 2;
+        // v3.4.2：slot 2 是宝贝寻家。它只有一张卡，每天前进 1 位，锚点单独记。
+        // v3.4.4：家寻加到三张，仍按「每天前进 3 位」保证同一天三张不重人。
+        boolean find = slot == SLOT_FIND_HOME;
         long today = nowMs / DAY_MS;
         android.content.SharedPreferences sp =
                 ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE);
@@ -356,10 +362,12 @@ public final class WelfareStore {
         if (size == 1) {
             return 0;
         }
-        int perDay = find ? 1 : 2;
+        int perDay = find ? 1 : FAMILY_CARDS;
+        // 家寻三张卡的组内序号：0、1、3 号槽位依次排 0、1、2
+        int offset = find ? 0 : (slot == 3 ? 2 : slot);
         long steps = Math.max(0, (today - anchor) / ROTATE_DAYS);
         int base = (int) ((steps * perDay) % size);
-        return (base + (find ? 0 : Math.max(0, slot))) % size;
+        return (base + Math.max(0, offset)) % size;
     }
 
     /** 兼容旧调用：等价于 slot=0。 */

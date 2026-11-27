@@ -2428,6 +2428,10 @@ private fun HomeTilePage(
         // 不留一张写着「正在加载」的空壳。
         Spacer(Modifier.height(12.dp))
         WelfareCard(slot = 2, onOpen = { onOpen("welfare-2") }, dark = dark)
+        // v3.4.4：再补一张「家寻宝贝」，三张家寻 + 一张寻家正好把首页铺满；
+        // 家寻三张各差一位，同一天不重人。
+        Spacer(Modifier.height(12.dp))
+        WelfareCard(slot = 3, onOpen = { onOpen("welfare-3") }, dark = dark)
     }
 }
 
@@ -3660,6 +3664,7 @@ private fun SubPageHost(
         "welfare" -> "寻人启事"
         "welfare-1" -> "寻人启事"
         "welfare-2" -> "宝贝寻家"
+        "welfare-3" -> "寻人启事"
         "suggest" -> "功能建议"
         PAGE_HOME_ENGINE -> "运行方式"
         PAGE_HOME_INJECT -> "注入状态"
@@ -3712,6 +3717,7 @@ private fun SubPageHost(
                 "welfare" -> WelfarePage(slot = 0, dark = dark, onOpenUrl = onOpenUrl)
                 "welfare-1" -> WelfarePage(slot = 1, dark = dark, onOpenUrl = onOpenUrl)
                 "welfare-2" -> WelfarePage(slot = 2, dark = dark, onOpenUrl = onOpenUrl)
+                "welfare-3" -> WelfarePage(slot = 3, dark = dark, onOpenUrl = onOpenUrl)
                 "suggest" -> SuggestPage(dark, onOpenUrl)
                 PAGE_HOME_ALL -> HomeAllPage(state = state, onStateChange = onStateChange, onOpen = onOpen)
                 PAGE_HOME_ENGINE -> EnginePage(state = state, onStateChange = onStateChange, dark = dark)
