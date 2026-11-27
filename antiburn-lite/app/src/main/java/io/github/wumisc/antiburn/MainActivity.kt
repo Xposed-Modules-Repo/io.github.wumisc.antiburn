@@ -40,6 +40,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -82,6 +83,14 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.paneTitle
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -2345,7 +2354,19 @@ private fun HomeTilePage(
             colors = CardDefaults.cardColors(containerColor = UiPalette.surface(dark)),
         ) {
             Row(
-                Modifier.fillMaxWidth().padding(16.dp),
+                Modifier
+                    .fillMaxWidth()
+                    .semantics(mergeDescendants = true) {
+                        contentDescription = "防烧屏总开关，总闸：关闭后所有隐藏与遮盖都不生效"
+                        stateDescription = if (enabled) "已开启" else "已关闭"
+                        role = Role.Switch
+                    }
+                    .toggleable(
+                        value = enabled,
+                        role = Role.Switch,
+                        onValueChange = onToggle,
+                    )
+                    .padding(16.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(Modifier.weight(1f)) {
@@ -2852,10 +2873,26 @@ private fun OptionRow(
     subtitleWarn: String = "",
 ) {
     val ink = if (enabled) UiPalette.ink(dark) else MaterialTheme.colorScheme.outline
+    // v3.4.4：TalkBack 适配。整行是一个「开关」节点：一次聚焦读全标题、说明与当前状态，
+    // 不再让右侧 Switch 单独成为第二个可聚焦项（否则读两遍、点两下才敢确认）。
+    val stateText = when {
+        !enabled -> "不可用" + (if (disabledLabel.isNotEmpty()) "，" + disabledLabel else "")
+        checked -> "已开启"
+        else -> "已关闭"
+    }
+    val label = if (subtitle.isEmpty()) title else title + "，" + subtitle
     Row(
         Modifier
             .fillMaxWidth()
-            .clickable(enabled = enabled) { onCheckedChange(!checked) }
+            .semantics(mergeDescendants = true) {
+                contentDescription = label
+                stateDescription = stateText
+                role = Role.Switch
+            }
+            .clickable(
+                enabled = enabled,
+                onClickLabel = if (checked) "关闭" + title else "开启" + title,
+            ) { onCheckedChange(!checked) }
             .padding(horizontal = 4.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -2880,7 +2917,13 @@ private fun OptionRow(
         }
         Spacer(Modifier.width(10.dp))
         if (enabled) {
-            Switch(checked = checked, onCheckedChange = onCheckedChange)
+            // 开关本身不再单独发语义：状态由整行的 stateDescription 播报，
+            // 视觉与点击行为保持不变（clearAndSetSemantics 只清语义，不拦手势）。
+            Switch(
+                checked = checked,
+                onCheckedChange = onCheckedChange,
+                modifier = Modifier.clearAndSetSemantics {},
+            )
         } else {
             Text(if (disabledLabel.isNotEmpty()) disabledLabel else "常驻",
                 style = MaterialTheme.typography.labelSmall,
@@ -3160,7 +3203,9 @@ private fun GroupTitle(t: String) {
     val dark = isSystemInDarkTheme()
     Text(t, style = MaterialTheme.typography.titleSmall,
         color = UiPalette.ink(dark), fontWeight = FontWeight.Bold,
-        modifier = Modifier.padding(top = 12.dp, bottom = 6.dp))
+        modifier = Modifier
+            .padding(top = 12.dp, bottom = 6.dp)
+            .semantics { heading() })
 }
 
 // ===== v3.0.11 P6：UI 简洁化三件套（design-ui §2）——纯视觉收纳，不删任何开关 =====
@@ -3211,9 +3256,15 @@ private fun CollapsibleGroup(
     var expanded by remember { mutableStateOf(initiallyExpanded) }
     val dark = isSystemInDarkTheme()
     Column(Modifier.fillMaxWidth().padding(top = 12.dp)) {
+        val badge = if (openCount != null) "，已开 $openCount 项" else ""
         Row(
             Modifier.fillMaxWidth()
                 .heightIn(min = 48.dp) // WCAG 2.2：折叠头点击区域 ≥ 48dp
+                .semantics {
+                    contentDescription = title + badge
+                    stateDescription = if (expanded) "已展开" else "已收起"
+                    role = Role.Button
+                }
                 .clickable(onClickLabel = if (expanded) "收起 $title" else "展开 $title") {
                     expanded = !expanded
                 },
@@ -3227,7 +3278,8 @@ private fun CollapsibleGroup(
             }
             // 箭头用文本」▾/▸」作载体，灰度/色弱下也能辨识折叠态（颜色非唯一载体）
             Text(if (expanded) "▾" else "▸", style = MaterialTheme.typography.titleMedium,
-                color = UiPalette.accent(dark))
+                color = UiPalette.accent(dark),
+                modifier = Modifier.clearAndSetSemantics {})
         }
         if (expanded) {
             Column(Modifier.fillMaxWidth().padding(top = 2.dp)) {
@@ -3340,7 +3392,13 @@ private fun StatusStrip(
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(UiPalette.surface(dark).copy(alpha = 0.6f))
-            .clickable(onClick = onClick)
+            .semantics(mergeDescendants = true) {
+                contentDescription = "运行状态，" + (if (ok) "运行中" else "待处理") +
+                        "，引擎 " + engine + "，已注入 " + injected + "，日志" + logging +
+                        "，点按打开功能设置"
+                role = Role.Button
+            }
+            .clickable(onClickLabel = "打开功能设置", onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -3365,7 +3423,8 @@ private fun StatusStrip(
         Text("功能设置", style = MaterialTheme.typography.bodySmall,
             fontWeight = FontWeight.Bold, color = UiPalette.accent(dark))
         Text("›", style = MaterialTheme.typography.titleMedium,
-            color = UiPalette.accent(dark), modifier = Modifier.padding(start = 2.dp))
+            color = UiPalette.accent(dark),
+            modifier = Modifier.padding(start = 2.dp).clearAndSetSemantics {})
     }
 }
 
@@ -3380,7 +3439,11 @@ private fun ListRow(
     Column(
         Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .semantics(mergeDescendants = true) {
+                contentDescription = if (subtitle.isEmpty()) title else title + "，" + subtitle
+                role = Role.Button
+            }
+            .clickable(onClickLabel = "打开" + title, onClick = onClick)
             .padding(horizontal = 4.dp, vertical = 14.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -3394,7 +3457,8 @@ private fun ListRow(
                 }
             }
             Text(trailing, style = MaterialTheme.typography.titleLarge,
-                color = UiPalette.accent(dark))
+                color = UiPalette.accent(dark),
+                modifier = Modifier.clearAndSetSemantics {})
         }
     }
     Box(Modifier.fillMaxWidth().height(1.dp)
@@ -3617,12 +3681,15 @@ private fun SubPageHost(
         // 顶部返回条
         Row(verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth()) {
-            IconButton(onClick = onBack) {
+            IconButton(onClick = onBack,
+                modifier = Modifier.semantics { contentDescription = "返回" }) {
                 Text("‹", style = MaterialTheme.typography.headlineLarge,
-                    color = UiPalette.accent(dark))
+                    color = UiPalette.accent(dark),
+                    modifier = Modifier.clearAndSetSemantics {})
             }
             Text(title, style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold, color = UiPalette.ink(dark))
+                fontWeight = FontWeight.Bold, color = UiPalette.ink(dark),
+                modifier = Modifier.semantics { heading() })
         }
         Spacer(Modifier.height(6.dp))
         Box(Modifier.fillMaxWidth().height(1.dp)
@@ -3843,8 +3910,22 @@ private fun WelfareCard(slot: Int, onOpen: () -> Unit, dark: Boolean) {
     if (slot >= 2 && doc != null && list.isEmpty()) {
         return
     }
+    // v3.4.4：整张卡一个节点，TalkBack 一次读完「类别 + 谁 + 何时何地 + 点按看详情」，
+    // 照片与占位字不再单独发声（看不见照片的人不需要听「图」）。
+    val a11y = if (kid != null) {
+        "公益寻亲，" + (if (kid.category.isEmpty()) "" else kid.category + "，") +
+                kid.name + "，" + kid.gender + "，" + kid.type + "，" +
+                kid.lostTime + (if (kid.category == WelfareStore.CAT_FIND_HOME) " 失散 · " else " 走失 · ") +
+                kid.lostPlace + "，点按查看详情"
+    } else "公益寻亲，正在加载"
     Card(
-        Modifier.fillMaxWidth().clickable { onOpen() },
+        Modifier
+            .fillMaxWidth()
+            .semantics(mergeDescendants = true) {
+                contentDescription = a11y
+                role = Role.Button
+            }
+            .clickable(onClickLabel = "查看寻亲详情", onClick = onOpen),
         shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = UiPalette.surface(dark)),
     ) {
@@ -3857,10 +3938,12 @@ private fun WelfareCard(slot: Int, onOpen: () -> Unit, dark: Boolean) {
                 val b = bmp
                 if (b != null) {
                     Image(b.asImageBitmap(), contentDescription = null,
-                        modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                        modifier = Modifier.fillMaxSize().clearAndSetSemantics {},
+                        contentScale = ContentScale.Crop)
                 } else {
                     Text("寻", style = MaterialTheme.typography.titleLarge,
-                        color = UiPalette.accent(dark))
+                        color = UiPalette.accent(dark),
+                        modifier = Modifier.clearAndSetSemantics {})
                 }
             }
             Spacer(Modifier.width(12.dp))
@@ -4167,7 +4250,11 @@ private fun FeedbackDialog(dark: Boolean, onDismiss: () -> Unit) {
             shape = RoundedCornerShape(22.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         ) {
-            Column(Modifier.padding(horizontal = 20.dp, vertical = 18.dp)) {
+            Column(
+                Modifier
+                    .padding(horizontal = 20.dp, vertical = 18.dp)
+                    .semantics { paneTitle = "反馈问题" },
+            ) {
                 Text("反馈问题", style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold, color = UiPalette.ink(dark))
                 Spacer(Modifier.height(10.dp))
@@ -4184,6 +4271,7 @@ private fun FeedbackDialog(dark: Boolean, onDismiss: () -> Unit) {
                     modifier = Modifier.fillMaxWidth(),
                     minLines = 4,
                     maxLines = 8,
+                    label = { Text("问题描述") },
                     placeholder = { Text("例如：快手直播间底部按钮没隐藏") },
                 )
                 Spacer(Modifier.height(8.dp))
@@ -4192,7 +4280,8 @@ private fun FeedbackDialog(dark: Boolean, onDismiss: () -> Unit) {
                     onValueChange = { contact = it.take(LogUploader.CONTACT_MAX) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    placeholder = { Text("联系方式（可选，留空也能收到）") },
+                    label = { Text("联系方式（可选）") },
+                    placeholder = { Text("留空也能收到回复") },
                 )
                 hint?.let {
                     Spacer(Modifier.height(8.dp))
@@ -4289,7 +4378,8 @@ private fun CycleDialog(
             Column(
                 Modifier
                     .padding(horizontal = 20.dp, vertical = 18.dp)
-                    .verticalScroll(rememberScrollState()),
+                    .verticalScroll(rememberScrollState())
+                    .semantics { paneTitle = "周期时长" },
             ) {
                 Text("周期时长", style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold, color = UiPalette.ink(dark))
@@ -4331,6 +4421,7 @@ private fun CyclePage(
         value = hide.toFloat(),
         onValueChange = { hide = it.roundToInt() },
         valueRange = 10f..120f,
+        modifier = Modifier.semantics { contentDescription = "隐藏时长，单位秒" },
     )
     Row(verticalAlignment = Alignment.CenterVertically) {
         TextButton(onClick = { hide = (hide - 5).coerceAtLeast(5) }) { Text("-5s") }
@@ -4350,6 +4441,7 @@ private fun CyclePage(
         value = show.toFloat(),
         onValueChange = { show = it.roundToInt() },
         valueRange = 1f..60f,
+        modifier = Modifier.semantics { contentDescription = "显示时长，单位秒" },
     )
     Row(verticalAlignment = Alignment.CenterVertically) {
         TextButton(onClick = { show = (show - 1).coerceAtLeast(1) }) { Text("-1s") }

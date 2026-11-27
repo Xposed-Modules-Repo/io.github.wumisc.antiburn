@@ -27,18 +27,31 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.setProgress
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.lerp as lerpFloat
+import kotlin.math.roundToInt
 import androidx.compose.foundation.shape.RoundedCornerShape
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.blur.blur
 import top.yukonga.miuix.kmp.blur.drawBackdrop
 import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
 
-/** 液态玻璃开关（Kyant0 同款视觉）：胶囊轨道 + 可拖拽/点击的玻璃滑块。 */
+/**
+ * 液态玻璃开关（Kyant0 同款视觉）：胶囊轨道 + 可拖拽/点击的玻璃滑块。
+ *
+ * <p>v3.4.4：给 TalkBack 补 toggleable 语义。此前它只有 pointerInput，屏幕朗读下
+ * 既不能被聚焦、也不能被激活 —— 对看不见的用户等于这个开关不存在。</p>
+ */
 @Composable
 fun LiquidToggle(
     checked: Boolean,
@@ -66,7 +79,14 @@ fun LiquidToggle(
 
     val trackBackdrop = rememberLayerBackdrop()
 
-    Box(modifier, contentAlignment = Alignment.CenterStart) {
+    Box(
+        modifier.toggleable(
+            value = checked,
+            role = Role.Switch,
+            onValueChange = onCheckedChange,
+        ),
+        contentAlignment = Alignment.CenterStart,
+    ) {
         // 轨道：胶囊玻璃底 + 由开关颜色填充
         Box(
             Modifier
@@ -171,7 +191,23 @@ fun LiquidSlider(
 
     val trackBackdrop = rememberLayerBackdrop()
 
-    BoxWithConstraints(modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
+    // v3.4.4：滑条也要能被 TalkBack 调。只给 range 不够 —— 没有 setProgress，
+    // 读屏手势上下滑永远停在同一格，只能靠旁边的 ±5s 按钮，等于半个残废控件。
+    val rounded = value.roundToInt()
+    BoxWithConstraints(
+        modifier.fillMaxWidth().semantics {
+            progressBarRangeInfo = ProgressBarRangeInfo(
+                current = value,
+                range = valueRange,
+            )
+            stateDescription = "$rounded"
+            setProgress { target ->
+                onValueChange(target.coerceIn(valueRange.start, valueRange.endInclusive))
+                true
+            }
+        },
+        contentAlignment = Alignment.CenterStart,
+    ) {
         val trackWidth = constraints.maxWidth.toFloat()
         val thumbTravel = (trackWidth - thumbWidth).coerceAtLeast(0f)
 

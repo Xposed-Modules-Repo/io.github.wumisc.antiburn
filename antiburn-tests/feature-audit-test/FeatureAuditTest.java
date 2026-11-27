@@ -1817,8 +1817,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 145
-                    && "3.4.3".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 146
+                    && "3.4.4".equals(nm.group(1));
             check(ok, "T-42b 版本锚点恰为 99 / 3.2（非区间，锁死发布锚点）", "");
         }
         check(hook297raw.contains("SAFE_RESTORE") && hook297raw.contains("DRAMA_PAYWALL_HIDE"),
@@ -1893,8 +1893,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 145
-                    && "3.4.3".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 146
+                    && "3.4.4".equals(nm.group(1));
             // 与 T-42b 断言同源，是发布前的双重防回退锁，不冒充新增不变量（评审建议改标签）。
             check(ok, "T-43c P3 版本锚点与 T-42b 双重锁定（99/3.2）（发布前防回退，非新增不变量）", "");
         }
@@ -1932,8 +1932,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 145
-                    && "3.4.3".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 146
+                    && "3.4.4".equals(nm.group(1));
             check(ok, "T-44c 版本号恰为 99 / 3.2（发布锚点）", "");
         }
 
@@ -1975,8 +1975,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 145
-                    && "3.4.3".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 146
+                    && "3.4.4".equals(nm.group(1));
             check(ok, "T-45c 版本号恰为 99 / 3.2（发布锚点）", "");
         }
 
@@ -2052,8 +2052,8 @@ public class FeatureAuditTest {
             // ⑤ 版本锚点 + 辅助方法只读性
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
-            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 145
-                    && "3.4.3".equals(nm.group(1));
+            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 146
+                    && "3.4.4".equals(nm.group(1));
             String helper = stripComments(slice(dy304raw, "private static boolean hasChildByClass(View v, String target)",
                     "private static int scoreRight(ViewGroup g)"));
             boolean readonly = helper.contains("MAX_DEPTH") && helper.contains("catch (Throwable")
@@ -2097,8 +2097,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 145
-                    && "3.4.3".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 146
+                    && "3.4.4".equals(nm.group(1));
             check(ok, "T-47c 版本号恰为 99 / 3.2（v3.0.13 发布锚点）", "");
         }
 
@@ -2365,7 +2365,7 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ver = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 145 && "3.4.3".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 146 && "3.4.4".equals(nm.group(1));
             check(ver, "T-48-VER 版本锚点 99/3.2（T-42b~T-47c 六处已同步）", "");
         }
 
@@ -3305,8 +3305,8 @@ public class FeatureAuditTest {
             java.util.regex.Matcher nm313 = java.util.regex.Pattern
                     .compile("versionName\\s+\"([^\"]+)\"").matcher(gradle313);
             boolean ver313 = cm313.find() && nm313.find()
-                    && Integer.parseInt(cm313.group(1)) == 145
-                    && "3.4.3".equals(nm313.group(1));
+                    && Integer.parseInt(cm313.group(1)) == 146
+                    && "3.4.4".equals(nm313.group(1));
             check(ver313, "T-55-A5 版本锚点 99 / 3.2", "");
 
             // A6 · 变异实证：把 INFO 类目改坏，A1 守卫必须失效（证明断言非空转）
@@ -4722,6 +4722,37 @@ public class FeatureAuditTest {
                             && xi93.contains("QUEUED.decrementAndGet();")
                             && xi93.contains("执行器已被退役"),
                     "T-93-D1 SystemUI 注入即记基线；日志写入器退役后不抛异常", "");
+        }
+
+        // ---------- T-94 v3.4.4 TalkBack / 无障碍 ----------
+        System.out.println("== T-81 TalkBack 语义 ==");
+        {
+            String a11y = read(dir.resolve("MainActivity.kt"));
+            String ctl = read(dir.resolve("LiquidControls.kt"));
+            check(a11y.contains("semantics(mergeDescendants = true)") && a11y.contains("stateDescription = stateText"),
+                    "T-94-A1 开关行合成为一个节点，播报标题 + 说明 + 已开启/已关闭", "");
+            check(a11y.contains("Modifier.clearAndSetSemantics {}") && a11y.contains("Switch("),
+                    "T-94-A2 行内 Switch 不再重复发声（避免一个开关读两遍）", "");
+            check(a11y.contains("role = Role.Button, contentDescription") || a11y.contains("role = Role.Button"),
+                    "T-94-A3 可点行 / 卡片声明 Button 角色", "");
+            check(a11y.contains("onClickLabel = \"打开\" + title") && a11y.contains("onClickLabel = \"打开功能设置\""),
+                    "T-94-A4 点击动作有可朗读的动作名（打开 X / 打开功能设置）", "");
+            check(ctl.contains(".toggleable(") && ctl.contains("role = Role.Switch"),
+                    "T-94-A5 液态开关可被读屏聚焦与激活（此前只有 pointerInput）", "");
+            check(ctl.contains("progressBarRangeInfo = ProgressBarRangeInfo(") && ctl.contains("setProgress {"),
+                    "T-94-A6 液态滑条可被读屏调节（range + setProgress 齐备）", "");
+            check(a11y.contains("stateDescription = if (expanded) \"已展开\" else \"已收起\""),
+                    "T-94-A7 折叠组播报已展开 / 已收起与已开数量", "");
+            check(a11y.contains(".semantics { heading() }"),
+                    "T-94-A8 组标题与页面标题标为 heading（读屏可按标题跳转）", "");
+            check(countLiteral(a11y, "paneTitle = ") >= 2,
+                    "T-94-A9 弹窗有 paneTitle（TalkBack 报「对话框」时说出名字）", "");
+            check(a11y.contains("contentDescription = \"返回\""),
+                    "T-94-B1 返回按钮有名字（不再只读一个「‹」符号）", "");
+            check(a11y.contains("contentDescription = a11y") && a11y.contains("公益寻亲，"),
+                    "T-94-B2 公益卡整卡朗读一条完整线索，照片不单独发声", "");
+            check(a11y.contains("label = { Text(\"问题描述\") }") && a11y.contains("label = { Text(\"联系方式（可选）\") }"),
+                    "T-94-B3 反馈弹窗两个输入框有常驻 label（打完字仍能听出是什么框）", "");
         }
 
         System.out.println();
