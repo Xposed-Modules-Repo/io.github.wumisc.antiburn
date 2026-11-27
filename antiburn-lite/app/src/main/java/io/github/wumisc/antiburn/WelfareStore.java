@@ -55,8 +55,8 @@ public final class WelfareStore {
     /** 游标推进用的锁：同一帧四张卡会先后调进来，必须只推进一次。 */
     private static final Object ROTATE_LOCK = new Object();
     private static final long DAY_MS = TimeUnit.DAYS.toMillis(1);
-    /** v3.2.11：每 24 小时换一对（两张卡各换一位）。 */
-    public static final long ROTATE_DAYS = 1;
+    /** v3.4.14：每 48 小时（两天）换一对，两张卡各换一位；联网仍是每天一次，只是换人不那么勤。 */
+    public static final long ROTATE_DAYS = 2;
     /** v3.2.11：联网刷新周期 = 24 小时。 */
     public static final long FETCH_DAYS = 1;
     private static final String KEY_FETCH_AT = "fetch_at";
