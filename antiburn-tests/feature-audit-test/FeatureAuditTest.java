@@ -1817,8 +1817,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 160
-                    && "3.4.18".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 161
+                    && "3.4.19".equals(nm.group(1));
             check(ok, "T-42b 版本锚点恰为 99 / 3.2（非区间，锁死发布锚点）", "");
         }
         check(hook297raw.contains("SAFE_RESTORE") && hook297raw.contains("DRAMA_PAYWALL_HIDE"),
@@ -1893,8 +1893,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 160
-                    && "3.4.18".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 161
+                    && "3.4.19".equals(nm.group(1));
             // 与 T-42b 断言同源，是发布前的双重防回退锁，不冒充新增不变量（评审建议改标签）。
             check(ok, "T-43c P3 版本锚点与 T-42b 双重锁定（99/3.2）（发布前防回退，非新增不变量）", "");
         }
@@ -1932,8 +1932,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 160
-                    && "3.4.18".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 161
+                    && "3.4.19".equals(nm.group(1));
             check(ok, "T-44c 版本号恰为 99 / 3.2（发布锚点）", "");
         }
 
@@ -1975,8 +1975,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 160
-                    && "3.4.18".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 161
+                    && "3.4.19".equals(nm.group(1));
             check(ok, "T-45c 版本号恰为 99 / 3.2（发布锚点）", "");
         }
 
@@ -2052,8 +2052,8 @@ public class FeatureAuditTest {
             // ⑤ 版本锚点 + 辅助方法只读性
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
-            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 160
-                    && "3.4.18".equals(nm.group(1));
+            boolean ver = cm.find() && nm.find() && Integer.parseInt(cm.group(1)) == 161
+                    && "3.4.19".equals(nm.group(1));
             String helper = stripComments(slice(dy304raw, "private static boolean hasChildByClass(View v, String target)",
                     "private static int scoreRight(ViewGroup g)"));
             boolean readonly = helper.contains("MAX_DEPTH") && helper.contains("catch (Throwable")
@@ -2097,8 +2097,8 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ok = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 160
-                    && "3.4.18".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 161
+                    && "3.4.19".equals(nm.group(1));
             check(ok, "T-47c 版本号恰为 99 / 3.2（v3.0.13 发布锚点）", "");
         }
 
@@ -2365,7 +2365,7 @@ public class FeatureAuditTest {
             Matcher cm = Pattern.compile("versionCode\\s+(\\d+)").matcher(gradle);
             Matcher nm = Pattern.compile("versionName\\s+\"([^\"]+)\"").matcher(gradle);
             boolean ver = cm.find() && nm.find()
-                    && Integer.parseInt(cm.group(1)) == 160 && "3.4.18".equals(nm.group(1));
+                    && Integer.parseInt(cm.group(1)) == 161 && "3.4.19".equals(nm.group(1));
             check(ver, "T-48-VER 版本锚点 99/3.2（T-42b~T-47c 六处已同步）", "");
         }
 
@@ -3022,6 +3022,25 @@ public class FeatureAuditTest {
                     dyNorm = dyNorm.substring(0, from) + dyNorm.substring(to);
                 }
             }
+            {
+                int from = dyNorm.indexOf("    /**\n     * v3.4.19：快手右下角的「取消静音」喇叭按钮");
+                int to = dyNorm.indexOf("    private static final String[] KS_MUTE_IDS");
+                if (from >= 0 && to > from) {
+                    int end = dyNorm.indexOf("};", dyNorm.indexOf("KS_MUTE_TEXTS", to));
+                    if (end > 0) {
+                        dyNorm = dyNorm.substring(0, from) + dyNorm.substring(end + 3);
+                    }
+                }
+            }
+            dyNorm = dyNorm.replace(
+                    "                hideKsMute(lastRoot);\n", "");
+            {
+                int from = dyNorm.indexOf("    /**\n     * v3.4.19：右下角静音喇叭按钮。");
+                int to = dyNorm.indexOf("    /** v3.4.18：底部「合集入口」卡片按 id 补遮");
+                if (from >= 0 && to > from) {
+                    dyNorm = dyNorm.substring(0, from) + dyNorm.substring(to);
+                }
+            }
             String dyNormHash = sha256(dyNorm);
             String fetchBody = slice(cfg310, "private static long fetchInterval() {", "/** 屏幕是否亮着。");
             int fetchLines = count(fetchBody, ".+");
@@ -3503,8 +3522,8 @@ public class FeatureAuditTest {
             java.util.regex.Matcher nm313 = java.util.regex.Pattern
                     .compile("versionName\\s+\"([^\"]+)\"").matcher(gradle313);
             boolean ver313 = cm313.find() && nm313.find()
-                    && Integer.parseInt(cm313.group(1)) == 160
-                    && "3.4.18".equals(nm313.group(1));
+                    && Integer.parseInt(cm313.group(1)) == 161
+                    && "3.4.19".equals(nm313.group(1));
             check(ver313, "T-55-A5 版本锚点 99 / 3.2", "");
 
             // A6 · 变异实证：把 INFO 类目改坏，A1 守卫必须失效（证明断言非空转）
@@ -5186,6 +5205,27 @@ public class FeatureAuditTest {
                     "T-104-A5 合集入口限域在屏高 72% 以下", "");
             check(dy.contains("collectKsEntryById(root, hits, 0, w, h)"),
                     "T-104-A6 收集器接线在", "");
+        }
+
+        // ---------- T-105 v3.4.19 快手右下角静音喇叭 ----------
+        System.out.println("== T-105 快手静音按钮 ==");
+        {
+            String dy = read(dir.resolve("DouyinHook.java"));
+            check(dy.contains("KS_MUTE_IDS = {\"cancel_mute_Ids\"}") == false
+                            && dy.contains("KS_MUTE_IDS = {\"cancel_mute_button\"}"),
+                    "T-105-A1 静音按钮 id 用真机实测值 cancel_mute_button", "");
+            check(dy.contains("KS_MUTE_TEXTS = {\"取消静音\", \"静音\"}"),
+                    "T-105-A2 文案兜底「取消静音 / 静音」在", "");
+            check(dy.contains("hideKsMute(lastRoot);"),
+                    "T-105-A3 挂进快手分支", "");
+            check(dy.contains("l[1] > h * 0.60f && l[1] + v.getHeight() < h * 0.95f")
+                            && dy.contains("l[0] + v.getWidth() / 2 > w * 0.68f"),
+                    "T-105-A4 限域右下：中心 x>68%、顶边 y>60%、底边 y<95%", "");
+            check(dy.contains("for (View v : hits) {\n            hideGhost(v);") == false
+                            || dy.contains("hideGhost(v);"),
+                    "T-105-A5 走幽灵隐藏（点它仍能取消静音）", "");
+            check(dy.contains("|| !Config.enableKuaishou)"),
+                    "T-105-A6 受快手总开关控制，关掉即恢复", "");
         }
 
         System.out.println();

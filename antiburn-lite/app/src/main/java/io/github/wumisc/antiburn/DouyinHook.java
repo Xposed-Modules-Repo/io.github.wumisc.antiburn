@@ -2753,6 +2753,7 @@ public final class DouyinHook {
             if (isKuaishou) {
                 hideKsRightById(lastRoot);
                 hideKsEntryById(lastRoot);
+                hideKsMute(lastRoot);
             }
         } else {
             for (View v : rightList) {
@@ -4153,6 +4154,12 @@ public final class DouyinHook {
      */
     private static final String[] KS_ENTRY_IDS = {"general_entry_unTruncated_title",
             "general_entry_arrow", "slide_play_merchant_follow_tip"};
+    /**
+     * v3.4.19：快手右下角的「取消静音」喇叭按钮（真机 NDUMP 实测 id=cancel_mute_button，
+     * 内嵌文字「取消静音」）。它是常驻的小圆钮，压在视频右下角，属于典型烧屏面。
+     */
+    private static final String[] KS_MUTE_IDS = {"cancel_mute_button"};
+    private static final String[] KS_MUTE_TEXTS = {"取消静音", "静音"};
     private static final String[] KS_ACTION_TEXTS = {"点赞", "赞", "评论", "分享", "收藏", "喜欢"};
     /** 红果推荐栏里必然出现的标签词。 */
     private static final String[] DRAMA_RECO_TEXTS = {"推荐", "猜你喜欢", "热播", "为你推荐",
@@ -4251,6 +4258,78 @@ public final class DouyinHook {
         if (hits.size() != lastKsIdN) {
             lastKsIdN = hits.size();
             Log.i(TAG, "KS-ID x" + hits.size());
+        }
+    }
+
+    /**
+     * v3.4.19：右下角静音喇叭按钮。
+     *
+     * <p>判据：id 命中 cancel_mute_button，或子树里有「取消静音 / 静音」文案；
+     * 且落在右侧 30% 带、屏高 60%~95% 之间、宽小于 15% 屏宽的圆形小钮。
+     * 走幽灵隐藏，点它照样能取消静音，只是不再发光。</p>
+     */
+    private static void hideKsMute(View root) {
+        if (root == null || forceShow || !root.isAttachedToWindow() || !Config.enableKuaishou) {
+            return;
+        }
+        int w = screenW(root);
+        int h = screenH(root);
+        if (w <= 0 || h <= 0) {
+            return;
+        }
+        java.util.List<View> hits = new ArrayList<>();
+        collectKsMute(root, hits, 0, w, h);
+        for (View v : hits) {
+            hideGhost(v);
+        }
+    }
+
+    private static void collectKsMute(View v, java.util.List<View> out, int depth, int w, int h) {
+        if (v == null || depth > MAX_DEPTH || out.size() >= 4) {
+            return;
+        }
+        if (isOwnOverlay(v)) {
+            return;
+        }
+        boolean hit = false;
+        try {
+            boolean idHit = false;
+            String n = resName(v);
+            for (String k : KS_MUTE_IDS) {
+                if (k.equals(n)) {
+                    idHit = true;
+                    break;
+                }
+            }
+            boolean textHit = v instanceof ViewGroup && targetTextAll((ViewGroup) v, KS_MUTE_TEXTS, 1);
+            if (!idHit && !textHit && v instanceof TextView) {
+                String t = normText(((TextView) v).getText()) + normText(v.getContentDescription());
+                for (String k : KS_MUTE_TEXTS) {
+                    if (t.contains(k)) {
+                        textHit = true;
+                        break;
+                    }
+                }
+            }
+            if ((idHit || textHit) && v.getWidth() > 0 && v.getHeight() > 0
+                    && v.getWidth() < w * 0.30f && v.getHeight() < h * 0.12f
+                    && !containsVideoSurface(v, 0)) {
+                int[] l = loc(v);
+                if (l != null && l[0] + v.getWidth() / 2 > w * 0.68f
+                        && l[1] > h * 0.60f && l[1] + v.getHeight() < h * 0.95f) {
+                    out.add(v);
+                    hit = true;
+                }
+            }
+        } catch (Throwable ignored) {
+            hit = false;
+        }
+        if (hit || !(v instanceof ViewGroup)) {
+            return;
+        }
+        ViewGroup g = (ViewGroup) v;
+        for (int i = 0; i < g.getChildCount(); i++) {
+            collectKsMute(g.getChildAt(i), out, depth + 1, w, h);
         }
     }
 
