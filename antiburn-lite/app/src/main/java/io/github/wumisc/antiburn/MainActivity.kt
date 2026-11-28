@@ -3534,6 +3534,16 @@ private val THANKS = listOf(
 /** 项目仓库地址（GitHub）——关于页「项目地址」点击跳转。 */
 private const val PROJECT_URL = "https://github.com/Xposed-Modules-Repo/io.github.wumisc.antiburn"
 
+/**
+ * v3.4.20：更新入口（两个渠道）。
+ *
+ * <p>GitHub 走 Release 最新页；123 云盘走作者自己的分享目录，提码固定 9266。
+ * 两条都给，是为了让「能上 GitHub」和「上不去 GitHub」的人都能拿到包。</p>
+ */
+private const val UPDATE_GITHUB_URL = "https://github.com/wumisc/antiburn/releases/latest"
+private const val UPDATE_123_URL = "https://1838528700.share.123pan.cn/123pan/UafYTd-VRnfv?pwd=9266#"
+private const val UPDATE_123_CODE = "9266"
+
 /** 功能建议：GitHub 新建 Issue 页。按钮会追加标题与正文模板参数。 */
 private const val PROJECT_ISSUES_URL =
     "https://github.com/Xposed-Modules-Repo/io.github.wumisc.antiburn/issues/new"
@@ -3660,6 +3670,11 @@ private fun AboutPage(onOpen: (String) -> Unit, onOpenUrl: (String) -> Unit) {
         // v2.7：项目地址单独一行，点击直接跳 GitHub；不进二级菜单，减少一层跳转
         ListRow("项目地址", "github.com/Xposed-Modules-Repo/…", { onOpenUrl(PROJECT_URL) }, dark,
             trailing = "↗")
+        // v3.4.20：更新渠道给两条，GitHub 打不开的走 123 云盘
+        ListRow("获取更新 · GitHub", "正式版 APK 与源码 · 打开 Releases 最新页",
+            { onOpenUrl(UPDATE_GITHUB_URL) }, dark, trailing = "↗")
+        ListRow("获取更新 · 123 云盘", "分享目录 · 提取码 " + UPDATE_123_CODE,
+            { onOpenUrl(UPDATE_123_URL) }, dark, trailing = "↗")
 
         // v2.6.5：原文案把运行方式写死成单一环境，免 root 用户在关于页会以为
         // 自己根本用不了这个软件。改成把两种运行方式都讲清楚，并且不夸大能力。

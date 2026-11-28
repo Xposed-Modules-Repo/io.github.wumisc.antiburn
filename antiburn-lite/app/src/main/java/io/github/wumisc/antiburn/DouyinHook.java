@@ -163,6 +163,12 @@ public final class DouyinHook {
     private static final String[] KS_RECRUIT_KEYS = {"月薪", "经验不限", "学历不限", "性别不限", "18-55"};
     private static final String[] DY_LIVE_KEYS = {"人气榜", "本场点赞", "点赞榜", "直播广场", "关注主播"};
     private static final String[] DY_FOLLOW_KEYS = {"关注", "已关注"};
+    /**
+     * v3.4.20：抖音刷视频页顶部的频道标签行（推荐 / 关注 / 精选 / 同城 / 朋友…）。
+     * 反馈「顶部推荐栏只是偶尔隐藏」—— 它和 topBar 不是同一个容器，topBar 偶尔只收到
+     * 搜索栏那一层，标签行就露出来了。这里按「顶部横条 + ≥2 个短标签」单独补一条。
+     */
+    private static final String[] DY_TOP_TAB_KEYS = {"推荐", "关注", "精选", "同城", "朋友", "直播", "探索"};
     // v3.0.11 P0a：全屏浏览入口是可点击功能控件，不作提示隐藏；由 isClickableControl 兜底。
     private static final String[] KS_FEED_KEYS = {"含AI生成内容", "内容由AI生成"};
     private static final String[] DRAMA_KEYS = {"弹幕", "静音", "全屏观看", "系列剧", "已上线",
@@ -2769,6 +2775,10 @@ public final class DouyinHook {
             if (isDrama) {
                 hideDramaRecoBar(lastRoot);
             }
+            // v3.4.20：抖音顶部频道标签行（推荐 / 关注 / 精选 / 同城）单独补遮
+            if (isVideoApp && !isDrama) {
+                hideDyTopTabs(lastRoot);
+            }
         } else if (topBar != null) {
             showDeep(topBar);
         }
@@ -4268,6 +4278,92 @@ public final class DouyinHook {
      * 且落在右侧 30% 带、屏高 60%~95% 之间、宽小于 15% 屏宽的圆形小钮。
      * 走幽灵隐藏，点它照样能取消静音，只是不再发光。</p>
      */
+    /**
+     * v3.4.20：抖音顶部频道标签行。
+     *
+     * <p>判据：贴在屏幕顶部（底边 &lt; 16% 屏高）、通栏 ≥45% 宽、矮 &lt; 10% 高，
+     * 子树里至少两个不同的短标签（≤4 字）。只认这一行，不吃视频标题与作者信息。
+     * 走幽灵隐藏，点「关注 / 精选」照样能切。</p>
+     */
+    private static void hideDyTopTabs(View root) {
+        if (root == null || forceShow || !root.isAttachedToWindow()) {
+            return;
+        }
+        int w = screenW(root);
+        int h = screenH(root);
+        if (w <= 0 || h <= 0) {
+            return;
+        }
+        java.util.List<View> hits = new ArrayList<>();
+        collectDyTopTabs(root, hits, 0, w, h);
+        for (View v : hits) {
+            hideGhost(v);
+        }
+    }
+
+    private static void collectDyTopTabs(View v, java.util.List<View> out, int depth, int w, int h) {
+        if (v == null || depth > MAX_DEPTH || out.size() >= 3) {
+            return;
+        }
+        if (isOwnOverlay(v)) {
+            return;
+        }
+        boolean hit = false;
+        try {
+            if (v instanceof ViewGroup && v.getWidth() >= w * 0.45f
+                    && v.getHeight() > 0 && v.getHeight() < h * 0.10f
+                    && !containsVideoSurface(v, 0)) {
+                int[] l = loc(v);
+                if (l != null && l[1] >= 0 && l[1] + v.getHeight() < h * 0.16f
+                        && countShortTabLabels(v, 0) >= 2) {
+                    out.add(v);
+                    hit = true;
+                }
+            }
+        } catch (Throwable ignored) {
+            hit = false;
+        }
+        if (hit || !(v instanceof ViewGroup)) {
+            return;
+        }
+        ViewGroup g = (ViewGroup) v;
+        for (int i = 0; i < g.getChildCount(); i++) {
+            collectDyTopTabs(g.getChildAt(i), out, depth + 1, w, h);
+        }
+    }
+
+    /** 数子树里命中的「不同」短标签个数（≤4 字才算标签，长文案说明不是这一行）。 */
+    private static int countShortTabLabels(View v, int depth) {
+        if (v == null || depth > 5) {
+            return 0;
+        }
+        java.util.Set<String> hit = new java.util.HashSet<>();
+        collectShortTabLabels(v, hit, depth);
+        return hit.size();
+    }
+
+    private static void collectShortTabLabels(View v, java.util.Set<String> hit, int depth) {
+        if (v == null || depth > 5 || hit.size() >= DY_TOP_TAB_KEYS.length) {
+            return;
+        }
+        if (v instanceof TextView) {
+            String t = normText(((TextView) v).getText());
+            if (t.length() > 0 && t.length() <= 4) {
+                for (String k : DY_TOP_TAB_KEYS) {
+                    if (t.contains(k)) {
+                        hit.add(k);
+                    }
+                }
+            }
+        }
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) {
+                collectShortTabLabels(g.getChildAt(i), hit, depth + 1);
+            }
+        }
+    }
+
     private static void hideKsMute(View root) {
         if (root == null || forceShow || !root.isAttachedToWindow() || !Config.enableKuaishou) {
             return;
