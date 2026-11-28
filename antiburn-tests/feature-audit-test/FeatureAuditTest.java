@@ -5284,6 +5284,36 @@ public class FeatureAuditTest {
                     "T-107-A5 123 那行把提取码显示出来，用户不用再翻聊天", "");
         }
 
+        // ---------- T-108 v3.4.21 自动更新检测 ----------
+        System.out.println("== T-108 自动更新检测 ==");
+        {
+            String uc = read(dir.resolve("UpdateChecker.java"));
+            String act2 = read(dir.resolve("MainActivity.kt"));
+            check(uc.contains("https://api.github.com/repos/wumisc/antiburn/releases/latest"),
+                    "T-108-A1 匿名只读 GitHub Releases latest 接口", "");
+            check(uc.contains("conn.setRequestProperty(\"User-Agent\""),
+                    "T-108-A2 带 User-Agent（GitHub 匿名请求必需）", "");
+            check(uc.contains("remote.versionCode > BuildConfig.VERSION_CODE"),
+                    "T-108-A3 只认 versionCode 更高，同版本不弹", "");
+            check(uc.contains("CHECK_GAP_MS") && uc.contains("24L * 60 * 60 * 1000"),
+                    "T-108-A4 自动检查按 24h 节流，不每次开 App 都请求", "");
+            check(uc.contains("static void snooze(Context c, int versionCode)")
+                            && uc.contains("KEY_SKIP"),
+                    "T-108-A5 「以后再说」记住版本号，同版本不再弹", "");
+            check(uc.contains("throw t") == false && uc.contains("catch (Throwable t)"),
+                    "T-108-A6 网络异常收敛成 error 文案，不抛给界面", "");
+            check(act2.contains("UpdateChecker.check(context, false)"),
+                    "T-108-B1 启动时静默检查一次（force=false）", "");
+            check(act2.contains("if (r?.info != null) updateInfo = r.info"),
+                    "T-108-B2 只有真有新版才置弹窗状态", "");
+            check(act2.contains("UpdateDialog(") && act2.contains("onCloud") && act2.contains("onLater"),
+                    "T-108-B3 弹窗两个渠道 + 以后再说都在", "");
+            check(act2.contains("UpdateChecker.check(context, true)"),
+                    "T-108-B4 关于页手动检查走 force=true（无视节流）", "");
+            check(act2.contains("ListRow(\"检查更新\""),
+                    "T-108-B5 关于页有手动检查更新入口", "");
+        }
+
         System.out.println();
         System.out.println("结果：" + pass + " 通过 / " + fail + " 失败");
         if (fail > 0) {

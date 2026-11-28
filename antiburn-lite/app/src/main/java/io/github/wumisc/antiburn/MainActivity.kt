@@ -874,6 +874,8 @@ private fun BurnInProtectApp() {
     var restarting by remember { mutableStateOf(false) }
     // v3.2.38：上传日志同意弹窗。首次同意后记住；未同意绝不发起上传。
     var showUploadConsent by remember { mutableStateOf(false) }
+    // v3.4.21：启动时静默查一次正式版更新，只有远端更新才弹；网络失败不提示。
+    var updateInfo by remember { mutableStateOf<UpdateChecker.Info?>(null) }
     // 尚未落盘的最新状态；Activity onStop 时用它补一次
     var pendingSave by remember { mutableStateOf<AbState?>(null) }
     // v2.7.4：配置还没加载完时用户点过的改动，按「增量」记录。
@@ -896,6 +898,15 @@ private fun BurnInProtectApp() {
         } catch (t: Throwable) {
             Hints.show(context, "无法打开链接，请检查是否安装了浏览器")
         }
+    }
+
+    // v3.4.21：启动后静默查一次（24h 节流，挪到协程里，网络慢也不挡界面）。
+    // 只有远端版本号更高才设 updateInfo，由上面的更新弹窗接管；失败 / 已是最新一律无感。
+    LaunchedEffect(Unit) {
+        val r = withContext(Dispatchers.IO) {
+            runCatching { UpdateChecker.check(context, false) }.getOrNull()
+        }
+        if (r?.info != null) updateInfo = r.info
     }
 
     fun clock(): String =
@@ -1238,6 +1249,26 @@ private fun BurnInProtectApp() {
                     onDeny = {
                         LogUploader.setConsent(context, false)
                         showUploadConsent = false
+                    },
+                )
+            }
+
+            // v3.4.21：发现正式版有更新才弹，两个渠道都给（GitHub 打不开可走 123 云盘）
+            updateInfo?.let { info ->
+                UpdateDialog(
+                    info = info,
+                    dark = dark,
+                    onGithub = {
+                        openUrl(UPDATE_GITHUB_URL)
+                        updateInfo = null
+                    },
+                    onCloud = {
+                        openUrl(UPDATE_123_URL)
+                        updateInfo = null
+                    },
+                    onLater = {
+                        UpdateChecker.snooze(context, info.versionCode)
+                        updateInfo = null
                     },
                 )
             }
@@ -3631,6 +3662,8 @@ private val LINKS = listOf(
 @Composable
 private fun AboutPage(onOpen: (String) -> Unit, onOpenUrl: (String) -> Unit) {
     val dark = isSystemInDarkTheme()
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     // v3.0.12 P3：两个可见性开关及其 remember 状态已迁入 HomeTilePage，此处仅保留关于信息。
     Column(
         Modifier
@@ -3670,6 +3703,21 @@ private fun AboutPage(onOpen: (String) -> Unit, onOpenUrl: (String) -> Unit) {
         // v2.7：项目地址单独一行，点击直接跳 GitHub；不进二级菜单，减少一层跳转
         ListRow("项目地址", "github.com/Xposed-Modules-Repo/…", { onOpenUrl(PROJECT_URL) }, dark,
             trailing = "↗")
+        // v3.4.21：手动检查更新（忽略 24h 节流）。结果只用 toast 说人话，不弹多余框。
+        ListRow("检查更新", "当前 v" + BuildConfig.VERSION_NAME + " · 比对 GitHub 最新正式版", {
+            scope.launch {
+                val r = withContext(Dispatchers.IO) { UpdateChecker.check(context, true) }
+                Hints.show(
+                    context,
+                    when {
+                        r == null -> "检查失败，请稍后再试"
+                        r.error != null -> r.error
+                        r.info != null -> "发现新版本 v" + r.info.versionName + "，请从下方渠道下载"
+                        else -> "已是最新版本 v" + BuildConfig.VERSION_NAME
+                    },
+                )
+            }
+        }, dark, trailing = "›")
         // v3.4.20：更新渠道给两条，GitHub 打不开的走 123 云盘
         ListRow("获取更新 · GitHub", "正式版 APK 与源码 · 打开 Releases 最新页",
             { onOpenUrl(UPDATE_GITHUB_URL) }, dark, trailing = "↗")
@@ -4304,6 +4352,67 @@ private fun ScopeDialog(
                     Spacer(Modifier.weight(1f))
                     TextButton(onClick = onOpenLsposed) { Text("打开 LSPosed") }
                     TextButton(onClick = onDismiss) { Text("关闭") }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * v3.4.21：发现正式版更新的提示框。
+ *
+ * <p>只做一件事：告诉用户「有新版、去哪下」。两个渠道并列（GitHub 常被网络环境挡住，
+ * 123 云盘作兜底，提取码直接写在按钮说明里），第三条是「以后再说」，记住该版本不再弹。</p>
+ */
+@Composable
+private fun UpdateDialog(
+    info: UpdateChecker.Info,
+    dark: Boolean,
+    onGithub: () -> Unit,
+    onCloud: () -> Unit,
+    onLater: () -> Unit,
+) {
+    Dialog(onDismissRequest = onLater) {
+        Card(
+            Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(22.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        ) {
+            Column(
+                Modifier
+                    .padding(horizontal = 20.dp, vertical = 18.dp)
+                    .semantics { paneTitle = "发现新版本" },
+            ) {
+                Text("发现新版本 v" + info.versionName, style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold, color = UiPalette.ink(dark))
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "当前 v" + BuildConfig.VERSION_NAME + " · 最新 " + info.tag,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "覆盖安装即可，配置与名单都保留；安装后不需要重装 LSPosed 作用域。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(14.dp))
+                Button(
+                    onClick = onGithub,
+                    Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp),
+                ) { Text("去 GitHub 下载") }
+                Spacer(Modifier.height(8.dp))
+                FilledTonalButton(
+                    onClick = onCloud,
+                    Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp),
+                ) { Text("去 123 云盘下载（提取码 " + UPDATE_123_CODE + "）") }
+                Spacer(Modifier.height(6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = onLater) { Text("以后再说") }
                 }
             }
         }
